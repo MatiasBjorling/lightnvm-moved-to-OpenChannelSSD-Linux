@@ -43,7 +43,7 @@ obj-$(CONFIG_DM_ZERO)		+= dm-zero.o
 obj-$(CONFIG_DM_RAID)	+= dm-raid.o
 obj-$(CONFIG_DM_THIN_PROVISIONING)	+= dm-thin-pool.o
 obj-$(CONFIG_DM_VERITY)		+= dm-verity.o
-obj-$(CONFIG_DM_OPENSSD)		+= dm-openssd.o
+obj-$(CONFIG_DM_OPENSSD)		+= dm-openssd.o 
 
 
 ifeq ($(CONFIG_DM_UEVENT),y)

@@ -428,8 +428,7 @@ config DM_SWITCH
 
 config DM_OPENSSD
 	tristate "OpenSSD translation layer support (EXPERIMENTAL)"
-	depends on BLK_DEV_DM && EXPERIMENTAL
-	select DM_BUFIO
+	depends on BLK_DEV_DM
 	---help---
 		A target that implement the Flash Translation Layer above a bare
 		FTL on the OpenSSD device. The device mapper is used together with 

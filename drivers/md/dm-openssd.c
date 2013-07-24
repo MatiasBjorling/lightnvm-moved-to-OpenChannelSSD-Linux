@@ -396,10 +396,6 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		goto bad;
 	}
 
-    // These do what? ( From dm-linear )
-	ti->num_flush_requests = 1;
-	ti->num_discard_requests = 1;
-
 	os->ti = ti;
 	ti->private = os;
 

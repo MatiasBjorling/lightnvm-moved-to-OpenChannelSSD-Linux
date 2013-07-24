@@ -8,11 +8,15 @@
  * - Implement translation mapping from logical to physical flash pages
  * - Implement garbage collection
  * - Implement fetching of bad pages from flash
- *
+ * 
+ * Hints
+ * - configurable sector size
+ * - handle case of in-page bv_offset (currently hidden assumption of offset=0, and bv_len spans entire page)
  */
 
 #include "dm-openssd.h"
 #include "dm-openssd-pool.h"
+#include "dm-openssd-hint.h"
 
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
@@ -22,6 +26,10 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+
+/* Note: I assume hardcoded 512 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
+#define SECTOR_SIZE (512) 
+#define DM_MSG_PREFIX "openssd hint mapper"
 
 struct dm_openssd_dev_conf {
 	unsigned short int block_size; /* the number of flash pages per block */
@@ -90,7 +98,7 @@ static unsigned short int nextpage_pool_id;
 
 static struct dm_openssd_pool_blocks * dm_openssd_get_next_page(struct dm_openssd *os)
 {
-
+    return NULL;
 }
 
 static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
@@ -126,6 +134,231 @@ static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
 	return 0;
 }
 
+fclass file_classify(struct bio_vec* bvec){  
+    fclass fc = FC_UNKNOWN;
+    char *sec_in_mem;
+    char byte[4];
+
+    if(!bvec || !bvec->bv_page){
+       DMINFO("can't kmap empty bvec->bv_page. kmap failed");
+       return fc;
+    }
+
+//    hint_log("bvec->bv_offset=%u len=%u",bvec->bv_offset,bvec->bv_len);
+    byte[0] = 0x66;
+    byte[1] = 0x74;
+    byte[2] = 0x79;
+    byte[3] = 0x70;
+//    hint_log("bvec->bv_offset=%u len=%u",bvec->bv_offset,bvec->bv_len);
+//    return fc;
+
+    sec_in_mem = kmap_atomic((bvec->bv_page) + bvec->bv_offset);  
+
+    if(!sec_in_mem){
+       DMERR("bvec->bv_page kmap failed");
+       return fc;
+    }
+    if(!memcmp(sec_in_mem+4, byte,4)){
+       //hint_log("VIDEO classified");
+       DMINFO("VIDEO classified");
+       fc = FC_VIDEO_SLOW;
+    }
+
+    kunmap_atomic(sec_in_mem);
+    return fc;
+}
+
+static int openssd_send_hint(struct dm_target *ti, hint_data_t *hint_data){
+    // TODO: call special ioctl on target?
+    // for now just free
+    kfree(hint_data);
+    DMINFO("send nothing free hint_data and simply return");
+
+    return 0;
+}
+
+/**
+ * automatically extract hint from a bio, and send to target.
+ * iterate all pages, look into inode. There are several cases:
+ * 1) swap - stop and send hint on entire bio (assuming swap LBAs are not mixed with regular LBAs in one bio)
+ * 2) read - iterate all pages and send hint_data composed of multiple hints, one for each inode number and
+ *           relevant range of LBAs covered by a page
+ * 3) write - check if a page is the first sector of a file, classify it and set in hint. rest same as read
+ */
+static void openssd_bio_hints(struct dm_target *ti, struct bio *bio)
+{
+    hint_data_t *hint_data = NULL;
+    uint32_t lba = 0, bio_len = 0, hint_idx;
+    uint32_t sectors_count = 0;
+    struct page *bv_page = NULL;
+    struct address_space *mapping;
+    struct inode *host;
+    unsigned long prev_ino = -1, first_sector = -1;
+    unsigned ino = -1;
+    struct bio_vec *bvec;
+    fclass fc = FC_EMPTY;
+    int i, ret;
+    bool is_write = 0;
+
+    /* can classify only writes*/
+    switch(bio_rw(bio)) {
+        case READ:
+        case READA:
+            /* read/readahead*/
+            break;
+        case WRITE:
+            is_write = 1;
+            break;
+        default:
+            /* ? */
+            return;
+    }
+
+    // get lba and sector count
+    lba = bio->bi_sector;
+    sectors_count = bio->bi_size / SECTOR_SIZE;
+
+    //hint_log("cmd=0x%x, lba=%d, sectors_count=%d", sc->cmnd[0], lba, sectors_count);
+
+    /* allocate hint_data */
+    hint_data = kmalloc(sizeof(hint_data_t), GFP_ATOMIC);
+    if (hint_data == NULL) {
+        DMERR("hint_data_t kmalloc failed");  
+        return;
+    }
+  
+    memset(hint_data, 0, sizeof(hint_data_t));
+    CAST_TO_PAYLOAD(hint_data)->lba = lba;
+    CAST_TO_PAYLOAD(hint_data)->sectors_count = sectors_count;
+    CAST_TO_PAYLOAD(hint_data)->is_write = is_write;
+    ino = -1;            
+    DMINFO("%s lba=%d sectors_count=%d", is_write?"WRITE":"READ", lba, sectors_count);
+#if 0
+  hint_log("free hint_data dont look in bvec. simply return");
+  kfree(hint_data);
+  return;
+#endif
+
+  bio_for_each_segment(bvec, bio, i) {
+    bv_page = bvec[0].bv_page;
+//        continue;
+    if (bv_page && !PageSlab(bv_page)) {
+      // swap hint
+      if(PageSwapCache(bv_page)){
+        DMINFO("swap bio");
+        // TODO - not tested
+        CAST_TO_PAYLOAD(hint_data)->is_swap = 1;
+
+        // for compatibility add one hint
+        INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count, 
+                     0, lba, sectors_count, fc);
+        CAST_TO_PAYLOAD(hint_data)->count++;
+
+        break;
+      }
+      
+      mapping = bv_page->mapping;
+//        continue;
+      if (mapping && ((unsigned long)mapping & PAGE_MAPPING_ANON) == 0) {
+        host = mapping->host;
+        if (!host){
+          DMCRIT("page without mapping->host. shouldn't happen\n");
+          bio_len+= bvec[0].bv_len;
+          continue; // no host
+        }
+
+        prev_ino = ino;
+        ino = host->i_ino;
+
+        if(!host->i_sb || !host->i_sb->s_type || !host->i_sb->s_type->name){
+           DMINFO("not related to file system");
+           bio_len+= bvec[0].bv_len;
+           continue;
+        }
+        
+        if(!ino){
+           DMINFO("not inode related");
+           bio_len+= bvec[0].bv_len;
+           continue;
+        }
+        //if(bvec[0].bv_offset) 
+        //    DMINFO("bv_page->index %d offset %d len %d", bv_page->index, bvec[0].bv_offset, bvec[0].bv_len);
+
+        /* classify if we can.
+         * can only classify writes to file's first sector */
+        fc = FC_EMPTY;
+        if (is_write && bv_page->index == 0 && bvec[0].bv_offset ==0){
+            // should be first sector in file. classify
+       	    first_sector = lba + (bio_len / SECTOR_SIZE);
+            fc = file_classify(&bvec[0]); 
+        }
+
+        /* change previous hint, unless this is a new inode
+           and then simply increment count in existing hint */
+        if(prev_ino == ino){
+          hint_idx = CAST_TO_PAYLOAD(hint_data)->count-1;
+          if(INO_HINT_FROM_DATA(hint_data, hint_idx).ino != ino){
+            DMERR("updating hint of wrong ino (ino=%u expected=%lu)", ino,
+                     INO_HINT_FROM_DATA(hint_data, hint_idx).ino);            
+            bio_len+= bvec[0].bv_len;
+            continue;
+          }
+ 
+          INO_HINT_FROM_DATA(hint_data, hint_idx).count += bvec[0].bv_len / SECTOR_SIZE;
+          DMINFO("increase count for hint %u. new count=%u", 
+                   hint_idx, INO_HINT_FROM_DATA(hint_data, hint_idx).count);
+          bio_len+= bvec[0].bv_len;
+          continue;
+        }
+
+        if(HINT_DATA_MAX_INOS == CAST_TO_PAYLOAD(hint_data)->count){
+          DMERR("too many inos in hint");
+          bio_len+= bvec[0].bv_len;
+          continue;
+        }
+
+        DMINFO("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u", 
+                 is_write?"WRITE":"READ", ino, lba + (bio_len / SECTOR_SIZE), 
+                 (fc==FC_VIDEO_SLOW)?"VIDEO":(fc==FC_EMPTY)?"EMPTY":"UNKNOWN", 
+                 bvec[0].bv_len / SECTOR_SIZE, CAST_TO_PAYLOAD(hint_data)->count+1);
+
+        // add new hint to hint_data. lba count=bvec[0].bv_len / SECTOR_SIZE, will add more later on
+        INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count, 
+                     ino, lba + (bio_len / SECTOR_SIZE), bvec[0].bv_len / SECTOR_SIZE, fc);
+        CAST_TO_PAYLOAD(hint_data)->count++;
+      }
+    }
+    
+    // increment len
+    bio_len+= bvec[0].bv_len;
+  }
+#if 0
+  // TESTING
+  // dont send hints yet. just print whatever we got, and free
+  hint_log("send nothing free hint_data and simply return.");
+  kfree(hint_data);
+  hint_log("return");
+  return;
+#endif
+
+  // hint empty - return.
+  // Note: not error, maybe we're not doing file-related/swap I/O
+  if(CAST_TO_PAYLOAD(hint_data)->count==0){
+    //hint_log("request with no file data");
+    kfree(hint_data);
+    return;
+  }
+  
+  /* non-empty hint_data, send to device */
+  //hint_log("hint count=%u. send to hint device", CAST_TO_PAYLOAD(hint_data)->count);
+  ret = openssd_send_hint(ti, hint_data);
+  
+  if (ret != 0) {
+    DMINFO("openssd_send_hint error %d", ret);
+    return;
+  }
+}
+
 /*----------------------------------------------------------------
  * OpenSSD target methods
  *
@@ -157,7 +390,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		return -ENOMEM;
 	}
 
-	map = vmalloc(sizeof(*map)*512*512*16); /* Remove constant with number of logical to
+	map = vmalloc(sizeof(*map)/* *512 */ * 512*16); /* Remove constant with number of logical to
 									  physical address mappings that should be stored. */
 	if (map == NULL) {
 		ti->error = "dm-openssd: Cannot allocate openssd mapping context";
@@ -179,7 +412,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	/* Initialize pools. */
 	dm_openssd_pool_init(os, ti);
-
+    DMINFO("dm-openssd successful load");
 
 	return 0;
 
@@ -197,18 +430,31 @@ static void openssd_dtr(struct dm_target *ti)
 
 	vfree(os->trans_map);
 	kfree(os);
+
+    DMINFO("dm-openssd successful unload");
 }
 
 static int openssd_map(struct dm_target *ti, struct bio *bio,
 		    union map_info *map_context)
 {
+    struct dm_openssd *os;
 
-	printk("Accessing: %lu size: %u\n", bio->bi_sector, bio->bi_size);
-	bio->bi_sector = 1234;
-	printk("Accessing2: %lu size: %u\n", bio->bi_sector, bio->bi_size);
+	DMINFO("Accessing: %lu size: %u", bio->bi_sector, bio->bi_size);
+//	bio->bi_sector = 1234;
+//	DMINFO("Accessing2: %lu size: %u", bio->bi_sector, bio->bi_size);
+
+    /* do hint */
+    openssd_bio_hints(ti, bio);
+    os = (struct dm_openssd *) ti->private;
+    bio->bi_bdev = os->dev->bdev;
+
+    generic_make_request(bio);
+    return DM_MAPIO_SUBMITTED;
+//    return DM_MAPIO_REMAPPED;
 
 	switch(bio_rw(bio)) {
 	case READ:
+//        return DM_MAPIO_REMAPPED;
 		zero_fill_bio(bio);
 		break;
 	case READA:

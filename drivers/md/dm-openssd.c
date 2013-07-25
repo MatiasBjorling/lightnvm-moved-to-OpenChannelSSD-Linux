@@ -30,10 +30,12 @@
 /* Note: I assume hardcoded 4096 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
 #define SECTOR_SIZE (4096) 
 #define DM_MSG_PREFIX "openssd hint mapper"
+#define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
+						  a pool is serial (NAND flash / PCM / etc.) */
 
 struct dm_openssd_dev_conf {
-	unsigned short int block_size; /* the number of flash pages per block */
-	unsigned short int page_size;  /* the flash page size in bytes */
+	unsigned short int flash_block_size; /* the number of flash pages per block */
+	unsigned short int flash_page_size;  /* the flash page size in bytes */
 	unsigned int num_blocks;	   /* the number of blocks addressable by the mapped SSD. */
 };
 
@@ -43,21 +45,33 @@ struct dm_openssd_map {
 };
 
 /* Pool descriptions */
-struct dm_openssd_pool_blocks {
+struct dm_openssd_pool_block {
 	unsigned int block_id;
-	unsigned short int next_write;
+
+	unsigned next_page; /* points to the next writable page within the block */
 
 	struct list_head list;
 };
 
 struct dm_openssd_pool {
-	unsigned int start_block; /* References a physical start block */
-	unsigned int end_block;   /* References a physical end block */
+	unsigned long phy_addr_start; /* References the physical start block */
+	unsigned int phy_addr_end;   /* References the physical end block */
 
 	/* Derived value from end_block - start_block. */
 	unsigned int size;
 
-	struct dm_openssd_pool_blocks free;
+	struct list_head used_list;
+	struct list_head free_list;
+};
+
+/*
+ * dm_openssd_ap. ap is an append point. A pool can have 1..X append points attached.
+ * An append point has a current block, that it writes to, and when its full, it requests
+ * a new block, of which it continues its writes.
+ */
+struct dm_openssd_ap {
+	struct dm_openssd_pool *pool;
+	struct dm_openssd_pool_block *cur;
 };
 
 
@@ -67,42 +81,71 @@ struct dm_openssd {
 
 	struct dm_target *ti;
 
+	// Simple translation map of logical addresses to physical addresses. The 
+	// logical addresses is known by the host system, while the physical
+	// addresses are used when writing to the disk block device.
 	struct dm_openssd_map *trans_map;
+
 	struct dm_openssd_dev_conf dev_conf;
 
+	/* Usually instantiated to the number of available parallel channels
+	 * within the hardware device. i.e. a controller with 4 flash channels,
+	 * would have 4 pools.
+	 *
+	 * We assume that the device exposes its channels as a linear address
+	 * space. A pool therefore have a phy_addr_start and phy_addr_end that
+	 * denotes the start and end. This abstraction is used to let the openssd
+	 * (or any other device) expose its read/write/erase interface and be 
+	 * administrated by the host system.
+	 */
 	struct dm_openssd_pool *pools;
+
+	/* Append points */
+	struct dm_openssd_ap *aps;
 };
+
+static struct dm_openssd_pool_block *dm_openssd_pool_get_block(struct dm_openssd_pool *pool)
+{
+	return NULL;
+}
+
+static void dm_openssd_pool_put_block(struct dm_openssd_pool_block *block)
+{
+}
+
+static void ap_init(struct dm_openssd_ap *ap, struct dm_openssd_pool *pool)
+{
+	ap->cur = dm_openssd_pool_get_block(pool);
+}
 
 static void dm_openssd_pool_set_limits(struct dm_openssd_pool *pool, unsigned int start_block, unsigned int end_block)
 {
 	int i;
-	struct dm_openssd_pool_blocks * blocks;
+	struct dm_openssd_pool_block *blocks;
 
-	INIT_LIST_HEAD(&pool->free.list);
+	INIT_LIST_HEAD(&pool->free_list);
+	INIT_LIST_HEAD(&pool->used_list);
 
-	pool->start_block = start_block;
-	pool->end_block = end_block;
+
+	pool->phy_addr_start = start_block;
+	pool->phy_addr_end = end_block;
 
 	pool->size = end_block - start_block;
 
-	blocks = kmalloc(sizeof(struct dm_openssd_pool_blocks) * pool->size, GFP_KERNEL);
+	blocks = kmalloc(sizeof(struct dm_openssd_pool_block) * pool->size, GFP_KERNEL);
 
-	for (i=0;i<pool->size;i++)
+	for (i = 0; i < pool->size; i++)
 	{
 		blocks[i].block_id = start_block + i;
-		list_add(&(blocks[i].list), &(pool->free.list));
+		list_add(&(blocks[i].list), &pool->free_list);
 	}
 }
 
 static unsigned short int nextpage_pool_id;
 
-static struct dm_openssd_pool_blocks * dm_openssd_get_next_page(struct dm_openssd *os)
-{
-	return NULL;
-}
-
 static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
 {
+	int i;
 	/*
 	 * For now we hardcode the configuration for the OpenSSD unit that we own. In
 	 * the future this should be made configurable.
@@ -114,24 +157,29 @@ static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
 	 * either the drive firmware or recordings of bad blocks.
 	 *
 	 */
-	const unsigned int CHIP_COUNT= 8;
+	const unsigned int CHIP_COUNT = 8;
+	const unsigned int CHIP_PAGE_COUNT = 100;
 
 	os->pools = kmalloc(sizeof(struct dm_openssd_pool) * CHIP_COUNT, GFP_KERNEL);
-	if (os->pools == NULL) {
-		ti->error = "dm-openssd: Cannot allocate openssd pools";
-		return -ENOMEM;
+	if (!os->pools)
+		goto err_pool;
+
+	for (i = 0; i < CHIP_COUNT; i++)
+	{
+		dm_openssd_pool_set_limits(&os->pools[i], (i*CHIP_PAGE_COUNT)+1, ((i+1) * CHIP_PAGE_COUNT));
 	}
 
-	dm_openssd_pool_set_limits(&os->pools[0],   1, 100);
-	dm_openssd_pool_set_limits(&os->pools[1], 101, 200);
-	dm_openssd_pool_set_limits(&os->pools[2], 201, 300);
-	dm_openssd_pool_set_limits(&os->pools[3], 301, 400);
-	dm_openssd_pool_set_limits(&os->pools[4], 401, 500);
-	dm_openssd_pool_set_limits(&os->pools[5], 501, 600);
-	dm_openssd_pool_set_limits(&os->pools[6], 601, 700);
-	dm_openssd_pool_set_limits(&os->pools[7], 701, 800);
+	os->aps = kmalloc(sizeof(struct dm_openssd_ap) * CHIP_COUNT * APS_PER_POOL, GFP_KERNEL);
+	if (!os->aps)
+		goto err_ap;
 
 	return 0;
+
+err_ap:
+	kfree(os->pools);
+err_pool:
+	ti->error = "dm-openssd: Cannot allocate openssd pools";
+	return -ENOMEM;
 }
 
 fclass file_classify(struct bio_vec* bvec) {

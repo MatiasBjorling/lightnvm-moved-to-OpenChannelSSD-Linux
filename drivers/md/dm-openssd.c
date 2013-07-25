@@ -27,8 +27,8 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 
-/* Note: I assume hardcoded 512 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
-#define SECTOR_SIZE (512) 
+/* Note: I assume hardcoded 4096 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
+#define SECTOR_SIZE (4096) 
 #define DM_MSG_PREFIX "openssd hint mapper"
 
 struct dm_openssd_dev_conf {

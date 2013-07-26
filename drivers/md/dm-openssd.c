@@ -47,19 +47,19 @@
 #define POOL_COUNT 8
 #define POOL_BLOCK_COUNT 128
 
-struct dm_openssd_dev_conf {
+struct openssd_dev_conf {
 	unsigned short int flash_block_size; /* the number of flash pages per block */
 	unsigned short int flash_page_size;  /* the flash page size in bytes */
 	unsigned int num_blocks;	   /* the number of blocks addressable by the mapped SSD. */
 };
 
-struct dm_openssd_map {
+struct openssd_map {
 	long logical;
 	long physical;
 };
 
 /* Pool descriptions */
-struct dm_openssd_pool_block {
+struct openssd_pool_block {
 	unsigned int block_id;
 
 	unsigned next_page; /* points to the next writable page within the block */
@@ -67,13 +67,13 @@ struct dm_openssd_pool_block {
 	struct list_head list;
 };
 
-struct dm_openssd_pool {
+struct openssd_pool {
 	unsigned long phy_addr_start;	/* References the physical start block */
 	unsigned int phy_addr_end;		/* References the physical end block */
 
 	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
 
-	struct dm_openssd_pool_block *blocks;
+	struct openssd_pool_block *blocks;
 
 	/* Pool block lists */
 	struct list_head used_list;
@@ -81,27 +81,27 @@ struct dm_openssd_pool {
 };
 
 /*
- * dm_openssd_ap. ap is an append point. A pool can have 1..X append points attached.
+ * openssd_ap. ap is an append point. A pool can have 1..X append points attached.
  * An append point has a current block, that it writes to, and when its full, it requests
  * a new block, of which it continues its writes.
  */
-struct dm_openssd_ap {
-	struct dm_openssd_pool *pool;
-	struct dm_openssd_pool_block *cur;
+struct openssd_ap {
+	struct openssd_pool *pool;
+	struct openssd_pool_block *cur;
 };
 
 
 /* Main structure */
-struct dm_openssd {
+struct openssd {
 	struct dm_dev *dev;
 	struct dm_target *ti;
 
 	// Simple translation map of logical addresses to physical addresses. The 
 	// logical addresses is known by the host system, while the physical
 	// addresses are used when writing to the disk block device.
-	struct dm_openssd_map *trans_map;
+	struct openssd_map *trans_map;
 
-	struct dm_openssd_dev_conf dev_conf;
+	struct openssd_dev_conf dev_conf;
 
 	/* Usually instantiated to the number of available parallel channels
 	 * within the hardware device. i.e. a controller with 4 flash channels,
@@ -113,36 +113,36 @@ struct dm_openssd {
 	 * (or any other device) expose its read/write/erase interface and be 
 	 * administrated by the host system.
 	 */
-	struct dm_openssd_pool *pools;
+	struct openssd_pool *pools;
 
 	/* Append points */
-	struct dm_openssd_ap *aps;
+	struct openssd_ap *aps;
 
 	int nr_pools;
 	int nr_aps;
 	int nr_aps_per_pool;
 };
 
-static struct dm_openssd_pool_block *dm_openssd_pool_get_block(struct dm_openssd_pool *pool)
+static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool)
 {
 	return NULL;
 }
 
-static void dm_openssd_pool_put_block(struct dm_openssd_pool_block *block)
+static void openssd_pool_put_block(struct openssd_pool_block *block)
 {
 }
 
-static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
+static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 {
-	struct dm_openssd_pool *pool;
-	struct dm_openssd_pool_block *block;
-	struct dm_openssd_ap *ap;
+	struct openssd_pool *pool;
+	struct openssd_pool_block *block;
+	struct openssd_ap *ap;
 	int i, j;
 
 	os->nr_aps_per_pool = APS_PER_POOL;
 
 	os->nr_pools = POOL_COUNT;
-	os->pools = kzalloc(sizeof(struct dm_openssd_pool) * os->nr_pools, GFP_KERNEL);
+	os->pools = kzalloc(sizeof(struct openssd_pool) * os->nr_pools, GFP_KERNEL);
 	if (!os->pools)
 		goto err_pool;
 
@@ -154,7 +154,7 @@ static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
 		pool->phy_addr_end = (i + 1) * POOL_BLOCK_COUNT - 1;
 
 		pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
-		pool->blocks = kzalloc(sizeof(struct dm_openssd_pool_block) * pool->nr_blocks, GFP_KERNEL);
+		pool->blocks = kzalloc(sizeof(struct openssd_pool_block) * pool->nr_blocks, GFP_KERNEL);
 		if (!pool->blocks)
 			goto err_blocks;
 
@@ -165,7 +165,7 @@ static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
 	}
 
 	os->nr_aps = os->nr_aps_per_pool * os->nr_pools;;
-	os->aps = kmalloc(sizeof(struct dm_openssd_ap) * os->nr_pools * os->nr_aps, GFP_KERNEL);
+	os->aps = kmalloc(sizeof(struct openssd_ap) * os->nr_pools * os->nr_aps, GFP_KERNEL);
 	if (!os->aps)
 		goto err_blocks;
 
@@ -174,7 +174,7 @@ static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
 			ap = &os->aps[(i * os->nr_aps_per_pool) + j];
 
 			ap->pool = pool;
-			ap->cur = dm_openssd_pool_get_block(pool);
+			ap->cur = openssd_pool_get_block(pool);
 		}
 	}
 
@@ -426,11 +426,9 @@ static void openssd_bio_hints(struct dm_target *ti, struct bio *bio)
  */
 static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 {
-	struct dm_openssd *os;
-	struct dm_openssd_map *map;
+	struct openssd *os;
 
 	// Which device it should map onto?
-
 	if (argc != 1) {
 		ti->error = "Only argument for block device allowed.";
 		return -EINVAL;
@@ -442,7 +440,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		return -ENOMEM;
 	}
 
-	os->trans_map = vmalloc(sizeof(*map)/* *512 */ * 512*16); /* Remove constant with number of logical to
+	os->trans_map = vmalloc(sizeof(struct openssd_map)/* *512 */ * 512*16); /* Remove constant with number of logical to
 									  physical address mappings that should be stored. */
 	if (os->trans_map == NULL) {
 		ti->error = "dm-openssd: Cannot allocate openssd mapping context";
@@ -459,21 +457,21 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	ti->private = os;
 
 	/* Initialize pools. */
-	dm_openssd_pool_init(os, ti);
+	openssd_pool_init(os, ti);
 	DMINFO("dm-openssd successful load");
 
 	return 0;
 
 bad:
-	vfree(map);
+	vfree(os->trans_map);
 	kfree(os);
 	return -EINVAL;
 }
 
 static void openssd_dtr(struct dm_target *ti)
 {
-	struct dm_openssd *os = (struct dm_openssd *) ti->private;
-	struct dm_openssd_pool *pool;
+	struct openssd *os = (struct openssd *) ti->private;
+	struct openssd_pool *pool;
 	int i;
 
 	dm_put_device(ti, os->dev);
@@ -494,20 +492,20 @@ static void openssd_dtr(struct dm_target *ti)
 static int openssd_map(struct dm_target *ti, struct bio *bio,
 		    union map_info *map_context)
 {
-	struct dm_openssd *os;
+	struct openssd *os;
 	DMINFO("Accessing: %lu size: %u", bio->bi_sector, bio->bi_size);
 
 	/* do hint */
 	openssd_bio_hints(ti, bio);
 
 	/* accepted bio, don't make new request */
-	os = (struct dm_openssd *) ti->private;
+	os = (struct openssd *) ti->private;
 	bio->bi_bdev = os->dev->bdev;
 	generic_make_request(bio);
 	return DM_MAPIO_SUBMITTED;
 }
 
-static int openssd_user_hint_cmd(struct dm_openssd *os, hint_data_t __user *uhint)
+static int openssd_user_hint_cmd(struct openssd *os, hint_data_t __user *uhint)
 {
 	hint_data_t* hint_data;
 	DMINFO("send user hint");
@@ -529,10 +527,10 @@ static int openssd_user_hint_cmd(struct dm_openssd *os, hint_data_t __user *uhin
 static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
 			             unsigned long arg)
 {
-	struct dm_openssd *os;
+	struct openssd *os;
 	struct dm_dev *dev;
 
-	os = (struct dm_openssd *) ti->private;
+	os = (struct openssd *) ti->private;
 	dev = os->dev;
 
     DMDEBUG("got ioctl %x\n", cmd);

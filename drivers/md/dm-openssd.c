@@ -33,6 +33,20 @@
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
 						  a pool is serial (NAND flash / PCM / etc.) */
 
+/*
+	 * For now we hardcode the configuration for the OpenSSD unit that we own. In
+	 * the future this should be made configurable.
+	 *
+	 * Configuration:
+	 *
+	 * Physical address space is divided into 8 chips. I.e. we create 8 pools for the
+	 * addressing. We also omit the first block of each chip as they contain
+	 * either the drive firmware or recordings of bad blocks.
+	 *
+	 */
+#define POOL_COUNT 8
+#define POOL_BLOCK_COUNT 128
+
 struct dm_openssd_dev_conf {
 	unsigned short int flash_block_size; /* the number of flash pages per block */
 	unsigned short int flash_page_size;  /* the flash page size in bytes */
@@ -54,12 +68,14 @@ struct dm_openssd_pool_block {
 };
 
 struct dm_openssd_pool {
-	unsigned long phy_addr_start; /* References the physical start block */
-	unsigned int phy_addr_end;   /* References the physical end block */
+	unsigned long phy_addr_start;	/* References the physical start block */
+	unsigned int phy_addr_end;		/* References the physical end block */
 
-	/* Derived value from end_block - start_block. */
-	unsigned int size;
+	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
 
+	struct dm_openssd_pool_block *blocks;
+
+	/* Pool block lists */
 	struct list_head used_list;
 	struct list_head free_list;
 };
@@ -78,7 +94,6 @@ struct dm_openssd_ap {
 /* Main structure */
 struct dm_openssd {
 	struct dm_dev *dev;
-
 	struct dm_target *ti;
 
 	// Simple translation map of logical addresses to physical addresses. The 
@@ -102,6 +117,10 @@ struct dm_openssd {
 
 	/* Append points */
 	struct dm_openssd_ap *aps;
+
+	int nr_pools;
+	int nr_aps;
+	int nr_aps_per_pool;
 };
 
 static struct dm_openssd_pool_block *dm_openssd_pool_get_block(struct dm_openssd_pool *pool)
@@ -113,72 +132,63 @@ static void dm_openssd_pool_put_block(struct dm_openssd_pool_block *block)
 {
 }
 
-static void ap_init(struct dm_openssd_ap *ap, struct dm_openssd_pool *pool)
-{
-	ap->cur = dm_openssd_pool_get_block(pool);
-}
-
-static void dm_openssd_pool_set_limits(struct dm_openssd_pool *pool, unsigned int start_block, unsigned int end_block)
-{
-	int i;
-	struct dm_openssd_pool_block *blocks;
-
-	INIT_LIST_HEAD(&pool->free_list);
-	INIT_LIST_HEAD(&pool->used_list);
-
-
-	pool->phy_addr_start = start_block;
-	pool->phy_addr_end = end_block;
-
-	pool->size = end_block - start_block;
-
-	blocks = kmalloc(sizeof(struct dm_openssd_pool_block) * pool->size, GFP_KERNEL);
-
-	for (i = 0; i < pool->size; i++)
-	{
-		blocks[i].block_id = start_block + i;
-		list_add(&(blocks[i].list), &pool->free_list);
-	}
-}
-
-static unsigned short int nextpage_pool_id;
-
 static int dm_openssd_pool_init(struct dm_openssd *os, struct dm_target *ti)
 {
-	int i;
-	/*
-	 * For now we hardcode the configuration for the OpenSSD unit that we own. In
-	 * the future this should be made configurable.
-	 *
-	 * Configuration:
-	 *
-	 * Physical address space is divided into 8 chips. I.e. we create 8 pools for the
-	 * addressing. We also omit the first block of each chip as they contain
-	 * either the drive firmware or recordings of bad blocks.
-	 *
-	 */
-	const unsigned int CHIP_COUNT = 8;
-	const unsigned int CHIP_PAGE_COUNT = 100;
+	struct dm_openssd_pool *pool;
+	struct dm_openssd_pool_block *block;
+	struct dm_openssd_ap *ap;
+	int i, j;
 
-	os->pools = kmalloc(sizeof(struct dm_openssd_pool) * CHIP_COUNT, GFP_KERNEL);
+	os->nr_aps_per_pool = APS_PER_POOL;
+
+	os->nr_pools = POOL_COUNT;
+	os->pools = kzalloc(sizeof(struct dm_openssd_pool) * os->nr_pools, GFP_KERNEL);
 	if (!os->pools)
 		goto err_pool;
 
-	for (i = 0; i < CHIP_COUNT; i++)
-	{
-		dm_openssd_pool_set_limits(&os->pools[i], (i*CHIP_PAGE_COUNT)+1, ((i+1) * CHIP_PAGE_COUNT));
+	ssd_for_each_pool(os, pool, i) {
+		INIT_LIST_HEAD(&pool->free_list);
+		INIT_LIST_HEAD(&pool->used_list);
+
+		pool->phy_addr_start = i * POOL_BLOCK_COUNT;
+		pool->phy_addr_end = (i + 1) * POOL_BLOCK_COUNT - 1;
+
+		pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
+		pool->blocks = kzalloc(sizeof(struct dm_openssd_pool_block) * pool->nr_blocks, GFP_KERNEL);
+		if (!pool->blocks)
+			goto err_blocks;
+
+		pool_for_each_block(pool, block, j) {
+			block->block_id = pool->phy_addr_start + j;
+			list_add(&(block->list), &pool->free_list);
+		}
 	}
 
-	os->aps = kmalloc(sizeof(struct dm_openssd_ap) * CHIP_COUNT * APS_PER_POOL, GFP_KERNEL);
+	os->nr_aps = os->nr_aps_per_pool * os->nr_pools;;
+	os->aps = kmalloc(sizeof(struct dm_openssd_ap) * os->nr_pools * os->nr_aps, GFP_KERNEL);
 	if (!os->aps)
-		goto err_ap;
+		goto err_blocks;
+
+	ssd_for_each_pool(os, pool, i) {
+		for (j = 0; j < os->nr_aps_per_pool; j++) {
+			ap = &os->aps[(i * os->nr_aps_per_pool) + j];
+
+			ap->pool = pool;
+			ap->cur = dm_openssd_pool_get_block(pool);
+		}
+	}
 
 	return 0;
 
-err_ap:
+err_blocks:
+	ssd_for_each_pool(os, pool, i) {
+		if (!pool->blocks)
+			break;
+		kfree(pool->blocks);
+	}
 	kfree(os->pools);
 err_pool:
-	ti->error = "dm-openssd: Cannot allocate openssd pools";
+	ti->error = "dm-openssd: Cannot allocate openssd data structures";
 	return -ENOMEM;
 }
 
@@ -432,9 +442,9 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		return -ENOMEM;
 	}
 
-	map = vmalloc(sizeof(*map)/* *512 */ * 512*16); /* Remove constant with number of logical to
+	os->trans_map = vmalloc(sizeof(*map)/* *512 */ * 512*16); /* Remove constant with number of logical to
 									  physical address mappings that should be stored. */
-	if (map == NULL) {
+	if (os->trans_map == NULL) {
 		ti->error = "dm-openssd: Cannot allocate openssd mapping context";
 		kfree(os);
 		return -ENOMEM;
@@ -450,7 +460,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	/* Initialize pools. */
 	dm_openssd_pool_init(os, ti);
-    DMINFO("dm-openssd successful load");
+	DMINFO("dm-openssd successful load");
 
 	return 0;
 
@@ -463,10 +473,19 @@ bad:
 static void openssd_dtr(struct dm_target *ti)
 {
 	struct dm_openssd *os = (struct dm_openssd *) ti->private;
+	struct dm_openssd_pool *pool;
+	int i;
 
 	dm_put_device(ti, os->dev);
 
+	ssd_for_each_pool(os, pool, i)
+		kfree(pool->blocks);
+
+	kfree(os->pools);
+	kfree(os->aps);
+
 	vfree(os->trans_map);
+
 	kfree(os);
 
 	DMINFO("dm-openssd successful unload");

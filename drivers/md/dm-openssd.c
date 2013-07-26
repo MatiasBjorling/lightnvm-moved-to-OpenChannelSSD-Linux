@@ -60,6 +60,8 @@ struct openssd_map {
 
 /* Pool descriptions */
 struct openssd_pool_block {
+	struct openssd_pool *parent;
+
 	unsigned int block_id;
 
 	unsigned next_page; /* points to the next writable page within the block */
@@ -68,17 +70,20 @@ struct openssd_pool_block {
 };
 
 struct openssd_pool {
+	/* Pool block lists */
+	struct {
+		spinlock_t lock;
+		struct list_head used_list;
+		struct list_head free_list;
+	} ____cacheline_aligned_in_smp;
 	unsigned long phy_addr_start;	/* References the physical start block */
 	unsigned int phy_addr_end;		/* References the physical end block */
 
 	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
 
 	struct openssd_pool_block *blocks;
-
-	/* Pool block lists */
-	struct list_head used_list;
-	struct list_head free_list;
 };
+
 
 /*
  * openssd_ap. ap is an append point. A pool can have 1..X append points attached.
@@ -123,13 +128,40 @@ struct openssd {
 	int nr_aps_per_pool;
 };
 
+/* use pool_[get/put]_block to administer the blocks in use for each pool.
+ * Whenever a block is in used by an append poing, we store it within the used_list.
+ * We then move itback when its free to be used by another append point.
+ *
+ * The newly acclaimed block is always added to the back of user_list. As we assume
+ * that the start of used list is the oldest block, and therefore higher probability
+ * of invalidated pages.
+ */
 static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool)
 {
-	return NULL;
+	struct openssd_pool_block *block;
+
+	spin_lock(&pool->lock);
+	if (!list_empty(&pool->free_list))
+		return NULL;
+
+	block = list_first_entry(&pool->free_list, struct openssd_pool_block, list);
+	list_move_tail(&block->list, &pool->used_list);
+
+	spin_unlock(&pool->lock);
+	return block;
 }
 
+/* We assume that all valid pages have already been moved when added back to the
+ * free list. We add it last to allow round-robin use of all pages. Thereby provide
+ * simple (naive) wear-leveling.
+ */
 static void openssd_pool_put_block(struct openssd_pool_block *block)
 {
+	struct openssd_pool *pool = block->parent;
+
+	spin_lock(&pool->lock);
+	list_move_tail(&block->list, &pool->free_list);
+	spin_unlock(&pool->lock);
 }
 
 static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
@@ -147,6 +179,8 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 		goto err_pool;
 
 	ssd_for_each_pool(os, pool, i) {
+		spin_lock_init(&pool->lock);
+
 		INIT_LIST_HEAD(&pool->free_list);
 		INIT_LIST_HEAD(&pool->used_list);
 
@@ -159,6 +193,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			goto err_blocks;
 
 		pool_for_each_block(pool, block, j) {
+			block->parent = pool;
 			block->block_id = pool->phy_addr_start + j;
 			list_add(&(block->list), &pool->free_list);
 		}

@@ -26,6 +26,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/atomic.h>
 
 /* Note: I assume hardcoded 4096 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
 #define SECTOR_SIZE (4096) 
@@ -46,6 +47,7 @@
 	 */
 #define POOL_COUNT 8
 #define POOL_BLOCK_COUNT 128
+#define BLOCK_PAGE_COUNT 64
 
 struct openssd_dev_conf {
 	unsigned short int flash_block_size; /* the number of flash pages per block */
@@ -53,18 +55,14 @@ struct openssd_dev_conf {
 	unsigned int num_blocks;	   /* the number of blocks addressable by the mapped SSD. */
 };
 
-struct openssd_map {
-	long logical;
-	long physical;
-};
-
 /* Pool descriptions */
 struct openssd_pool_block {
-	struct openssd_pool *parent;
+	struct {
+		atomic_t next_page; /* points to the next writable page within the block */
+		struct openssd_pool *parent;
+		unsigned int id;
+	} ____cacheline_aligned_in_smp;
 
-	unsigned int block_id;
-
-	unsigned next_page; /* points to the next writable page within the block */
 
 	struct list_head list;
 };
@@ -91,10 +89,15 @@ struct openssd_pool {
  * a new block, of which it continues its writes.
  */
 struct openssd_ap {
+	spinlock_t lock;
 	struct openssd_pool *pool;
 	struct openssd_pool_block *cur;
 };
 
+struct openssd;
+
+typedef sector_t (map_ltop_fn)(struct openssd *, sector_t);
+typedef sector_t (lookup_ltop_fn)(struct openssd *, sector_t);
 
 /* Main structure */
 struct openssd {
@@ -104,7 +107,7 @@ struct openssd {
 	// Simple translation map of logical addresses to physical addresses. The 
 	// logical addresses is known by the host system, while the physical
 	// addresses are used when writing to the disk block device.
-	struct openssd_map *trans_map;
+	sector_t *trans_map;
 
 	struct openssd_dev_conf dev_conf;
 
@@ -126,6 +129,13 @@ struct openssd {
 	int nr_pools;
 	int nr_aps;
 	int nr_aps_per_pool;
+
+	map_ltop_fn *map_ltop;
+	lookup_ltop_fn *lookup_ltop;
+	/* Write strategy variables. Move these into each for structure for each 
+	 * strategy */
+	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
+							   to the next write append point */
 };
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
@@ -141,7 +151,7 @@ static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *po
 	struct openssd_pool_block *block;
 
 	spin_lock(&pool->lock);
-	if (!list_empty(&pool->free_list))
+	if (list_empty(&pool->free_list))
 		return NULL;
 
 	block = list_first_entry(&pool->free_list, struct openssd_pool_block, list);
@@ -160,8 +170,61 @@ static void openssd_pool_put_block(struct openssd_pool_block *block)
 	struct openssd_pool *pool = block->parent;
 
 	spin_lock(&pool->lock);
+
+	atomic_set(&block->next_page, -1);
+
 	list_move_tail(&block->list, &pool->free_list);
 	spin_unlock(&pool->lock);
+}
+
+static int openssd_get_page_id(struct openssd_pool_block *block)
+{
+	int page_id = atomic_inc_return(&block->next_page);
+
+	if (page_id >= BLOCK_PAGE_COUNT)
+		return -1;
+
+	return page_id;
+}
+
+static void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block)
+{
+	spin_lock(&ap->lock);
+	ap->cur = block;
+	spin_unlock(&ap->lock);
+}
+
+/* Simple round-robin Logical to physical address translation.
+ *
+ * Retrieve the mapping using the active append point. Then update the ap for the
+ * next write to the disk.
+ */
+static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr)
+{
+	int ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
+	struct openssd_ap *ap = &os->aps[ap_id];
+	struct openssd_pool_block *block = ap->cur;
+	int page_id;
+	sector_t physical_addr;
+
+	BUG_ON(!os);
+	BUG_ON(!block);
+
+	page_id = openssd_get_page_id(block);
+	while (page_id < 0) {
+		block = openssd_pool_get_block(block->parent);
+		if (!block)
+			return NULL;
+
+		openssd_set_ap_cur(ap, block);
+		page_id = openssd_get_page_id(block);
+	}
+
+	physical_addr = (block->id * POOL_BLOCK_COUNT) + page_id;
+
+	os->trans_map[logical_addr] = physical_addr;
+
+	return physical_addr;
 }
 
 static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
@@ -172,6 +235,10 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 	int i, j;
 
 	os->nr_aps_per_pool = APS_PER_POOL;
+
+	// Simple round-robin strategy
+	atomic_set(&os->next_write_ap, -1);
+	os->map_ltop = openssd_map_ltop_rr;
 
 	os->nr_pools = POOL_COUNT;
 	os->pools = kzalloc(sizeof(struct openssd_pool) * os->nr_pools, GFP_KERNEL);
@@ -194,8 +261,9 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 
 		pool_for_each_block(pool, block, j) {
 			block->parent = pool;
-			block->block_id = pool->phy_addr_start + j;
-			list_add(&(block->list), &pool->free_list);
+			atomic_set(&block->next_page, -1);
+			block->id = (i * POOL_BLOCK_COUNT) + j;
+			list_add_tail(&(block->list), &pool->free_list);
 		}
 	}
 
@@ -208,8 +276,9 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 		for (j = 0; j < os->nr_aps_per_pool; j++) {
 			ap = &os->aps[(i * os->nr_aps_per_pool) + j];
 
+			spin_lock_init(&ap->lock);
 			ap->pool = pool;
-			ap->cur = openssd_pool_get_block(pool);
+			ap->cur = openssd_pool_get_block(pool); // No need to lock ap->cur.
 		}
 	}
 
@@ -475,7 +544,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		return -ENOMEM;
 	}
 
-	os->trans_map = vmalloc(sizeof(struct openssd_map)/* *512 */ * 512*16); /* Remove constant with number of logical to
+	os->trans_map = vmalloc(sizeof(sector_t) * POOL_COUNT * POOL_BLOCK_COUNT * BLOCK_PAGE_COUNT); /* Remove constant with number of logical to
 									  physical address mappings that should be stored. */
 	if (os->trans_map == NULL) {
 		ti->error = "dm-openssd: Cannot allocate openssd mapping context";
@@ -527,14 +596,18 @@ static void openssd_dtr(struct dm_target *ti)
 static int openssd_map(struct dm_target *ti, struct bio *bio,
 		    union map_info *map_context)
 {
-	struct openssd *os;
-	DMINFO("Accessing: %lu size: %u", bio->bi_sector, bio->bi_size);
+	struct openssd *os = ti->private;
+	sector_t logical_addr, physical_addr;
+
+	logical_addr = bio->bi_sector;
+	physical_addr = os->map_ltop(os, logical_addr);
+
+	DMINFO("Logical: %lu Physical: %lu Size: %u", logical_addr, physical_addr, bio->bi_size);
 
 	/* do hint */
 	openssd_bio_hints(ti, bio);
 
 	/* accepted bio, don't make new request */
-	os = (struct openssd *) ti->private;
 	bio->bi_bdev = os->dev->bdev;
 	generic_make_request(bio);
 	return DM_MAPIO_SUBMITTED;

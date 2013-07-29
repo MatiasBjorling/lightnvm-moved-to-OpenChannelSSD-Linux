@@ -27,12 +27,19 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/atomic.h>
+#include <linux/delay.h>
+#include <linux/time.h>
 
 /* Note: I assume hardcoded 4096 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
 #define SECTOR_SIZE (4096) 
 #define DM_MSG_PREFIX "openssd hint mapper"
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
 						  a pool is serial (NAND flash / PCM / etc.) */
+
+/* Sleep timings before simulating device specific storage (in us)*/
+#define TIMING_READ 25
+#define TIMING_WRITE 500
+#define TIMING_ERASE 1500
 
 /*
 	 * For now we hardcode the configuration for the OpenSSD unit that we own. In
@@ -92,11 +99,16 @@ struct openssd_ap {
 	spinlock_t lock;
 	struct openssd_pool *pool;
 	struct openssd_pool_block *cur;
+
+	/* Timings used for end_io waiting */
+	unsigned long t_read;
+	unsigned long t_write;
+	unsigned long t_erase;
 };
 
 struct openssd;
 
-typedef sector_t (map_ltop_fn)(struct openssd *, sector_t);
+typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct openssd_ap **);
 typedef sector_t (lookup_ltop_fn)(struct openssd *, sector_t);
 
 /* Main structure */
@@ -137,6 +149,18 @@ struct openssd {
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
 							   to the next write append point */
 };
+
+struct per_bio_data {
+	struct openssd_ap *ap;
+	struct timeval start_tv;
+};
+
+static struct per_bio_data *get_per_bio_data(struct bio *bio) 
+{
+	struct per_bio_data *pb = dm_per_bio_data(bio, sizeof(struct per_bio_data));
+	BUG_ON(!pb);
+	return pb;
+}
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
  * Whenever a block is in used by an append poing, we store it within the used_list.
@@ -199,24 +223,23 @@ static void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block 
  * Retrieve the mapping using the active append point. Then update the ap for the
  * next write to the disk.
  */
-static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr)
+static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_ap **ret_active_ap)
 {
 	int ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
-	struct openssd_ap *ap = &os->aps[ap_id];
-	struct openssd_pool_block *block = ap->cur;
+	struct openssd_pool_block *block;
 	int page_id;
 	sector_t physical_addr;
 
-	BUG_ON(!os);
-	BUG_ON(!block);
+	*ret_active_ap = &os->aps[ap_id];
+	block = (*ret_active_ap)->cur;
 
 	page_id = openssd_get_page_id(block);
 	while (page_id < 0) {
 		block = openssd_pool_get_block(block->parent);
 		if (!block)
-			return NULL;
+			return -1;
 
-		openssd_set_ap_cur(ap, block);
+		openssd_set_ap_cur(*ret_active_ap, block);
 		page_id = openssd_get_page_id(block);
 	}
 
@@ -279,6 +302,10 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			spin_lock_init(&ap->lock);
 			ap->pool = pool;
 			ap->cur = openssd_pool_get_block(pool); // No need to lock ap->cur.
+
+			ap->t_read = TIMING_READ;
+			ap->t_write = TIMING_WRITE;
+			ap->t_erase = TIMING_ERASE;
 		}
 	}
 
@@ -560,6 +587,8 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	os->ti = ti;
 	ti->private = os;
 
+	ti->per_bio_data_size = sizeof(struct per_bio_data);
+
 	/* Initialize pools. */
 	openssd_pool_init(os, ti);
 	DMINFO("dm-openssd successful load");
@@ -593,19 +622,26 @@ static void openssd_dtr(struct dm_target *ti)
 	DMINFO("dm-openssd successful unload");
 }
 
-static int openssd_map(struct dm_target *ti, struct bio *bio,
-		    union map_info *map_context)
+static int openssd_map(struct dm_target *ti, struct bio *bio)
 {
 	struct openssd *os = ti->private;
+	struct openssd_ap *active_ap = NULL;
+	struct per_bio_data *pb;
 	sector_t logical_addr, physical_addr;
 
 	logical_addr = bio->bi_sector;
-	physical_addr = os->map_ltop(os, logical_addr);
+	physical_addr = os->map_ltop(os, logical_addr, &active_ap);
 
-	DMINFO("Logical: %lu Physical: %lu Size: %u", logical_addr, physical_addr, bio->bi_size);
+	pb = get_per_bio_data(bio);
+	pb->ap = active_ap;
+
+	DMINFO("Logical: %lu Physical: %lu Size: %u %u", logical_addr, physical_addr, bio->bi_size, active_ap->cur->id);
 
 	/* do hint */
 	openssd_bio_hints(ti, bio);
+
+	/* setup timings - remember overhead. */
+	do_gettimeofday(&pb->start_tv);
 
 	/* accepted bio, don't make new request */
 	bio->bi_bdev = os->dev->bdev;
@@ -654,10 +690,31 @@ static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
 	}
 }
 
+
 static int openssd_endio(struct dm_target *ti,
-		      struct bio *bio, int err,
-		      union map_info *map_context)
+		      struct bio *bio, int err)
 {
+	struct per_bio_data *pb = get_per_bio_data(bio);
+	struct openssd_ap *ap = pb->ap;
+	struct timeval end_tv;
+	unsigned long diff, dev_wait, total_wait = 0;
+
+	if (bio_data_dir(bio) == WRITE)
+		dev_wait = ap->t_write;
+	else
+		dev_wait = ap->t_read;
+
+	if (dev_wait) {
+		do_gettimeofday(&end_tv);
+		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
+		if (dev_wait > diff)
+			total_wait = dev_wait - diff;
+
+		if (total_wait > 50) {
+			udelay(total_wait);
+		}
+	}
+
 	return 0;
 }
 
@@ -689,7 +746,7 @@ static struct target_type openssd_target = {
 	.dtr = openssd_dtr,
 	.map = openssd_map,
 	.ioctl = openssd_ioctl,
-	//.end_io = openssd_endio,
+	.end_io = openssd_endio,
 	//.postsuspend = openssd_postsuspend,
 	//.status = openssd_status,
 	//.iterate_devices = openssd_iterate_devices,

@@ -647,9 +647,15 @@ static void openssd_dtr(struct dm_target *ti)
 {
 	struct openssd *os = (struct openssd *) ti->private;
 	struct openssd_pool *pool;
+	struct openssd_ap *ap;
 	int i;
 
 	dm_put_device(ti, os->dev);
+
+	ssd_for_each_ap(os, ap, i) {
+		while (bio_list_peek(&ap->waiting_bios))
+			flush_scheduled_work();
+	}
 
 	ssd_for_each_pool(os, pool, i)
 		kfree(pool->blocks);

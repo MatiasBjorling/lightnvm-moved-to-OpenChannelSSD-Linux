@@ -113,6 +113,9 @@ struct openssd_ap {
 	struct work_struct waiting_ws;
 	spinlock_t waiting_lock;
 	struct bio_list waiting_bios;
+
+	unsigned long io_delayed;
+	unsigned long io_accesses[2];
 };
 
 struct openssd;
@@ -697,12 +700,16 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 	bio->bi_bdev = os->dev->bdev;
 	if (os->serialize_ap_access && atomic_read(&active_ap->is_active)) {
 		spin_lock(&active_ap->waiting_lock);
+		active_ap->io_delayed++;
 		bio_list_add(&active_ap->waiting_bios, bio);
 		spin_unlock(&active_ap->waiting_lock);
 	} else {
 		atomic_inc(&active_ap->is_active);
 		generic_make_request(bio);
 	}
+
+	// We allow counting to be semi-accurate as theres no locking for accounting.
+	active_ap->io_accesses[bio_data_dir(bio)]++;
 
 	return DM_MAPIO_SUBMITTED;
 }
@@ -783,14 +790,29 @@ static int openssd_endio(struct dm_target *ti,
 	return 0;
 }
 
-static void openssd_postsuspend(struct dm_target *ti)
+static void openssd_status(struct dm_target *ti, status_type_t type,
+			 unsigned status_flags, char *result, unsigned maxlen) 
 {
+	struct openssd *os = ti->private;
+	struct openssd_ap *ap;
+	int i, sz = 0;
+
+	switch(type) {
+	case STATUSTYPE_INFO:
+		DMEMIT("Use table information");
+		break;
+	case STATUSTYPE_TABLE:
+		ssd_for_each_ap(os, ap, i) {
+			DMEMIT("Reads: %lu Writes: %lu Delayed: %lu",
+					ap->io_accesses[0], ap->io_accesses[1],
+					ap->io_delayed);
+		}
+		break;
+	}
 }
 
-static int openssd_status(struct dm_target *ti, status_type_t type,
-		       char *result, unsigned maxlen)
+static void openssd_postsuspend(struct dm_target *ti)
 {
-	return 0;
 }
 
 static int openssd_iterate_devices(struct dm_target *ti,
@@ -812,6 +834,7 @@ static struct target_type openssd_target = {
 	.map = openssd_map,
 	.ioctl = openssd_ioctl,
 	.end_io = openssd_endio,
+	.status = openssd_status,
 	//.postsuspend = openssd_postsuspend,
 	//.status = openssd_status,
 	//.iterate_devices = openssd_iterate_devices,

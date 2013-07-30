@@ -29,12 +29,14 @@
 #include <linux/atomic.h>
 #include <linux/delay.h>
 #include <linux/time.h>
+#include <linux/workqueue.h>
 
 /* Note: I assume hardcoded 4096 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
 #define SECTOR_SIZE (4096) 
 #define DM_MSG_PREFIX "openssd hint mapper"
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
 						  a pool is serial (NAND flash / PCM / etc.) */
+#define SERIALIZE_AP_ACCESS 1 /* If enabled, we delay bios on each ap to run serialized. */
 
 /* Sleep timings before simulating device specific storage (in us)*/
 #define TIMING_READ 25
@@ -97,6 +99,7 @@ struct openssd_pool {
  */
 struct openssd_ap {
 	spinlock_t lock;
+	struct openssd *parent;
 	struct openssd_pool *pool;
 	struct openssd_pool_block *cur;
 
@@ -104,6 +107,12 @@ struct openssd_ap {
 	unsigned long t_read;
 	unsigned long t_write;
 	unsigned long t_erase;
+
+	/* Postpone issuing I/O if append point is active */
+	atomic_t is_active;
+	struct work_struct waiting_ws;
+	spinlock_t waiting_lock;
+	struct bio_list waiting_bios;
 };
 
 struct openssd;
@@ -148,6 +157,13 @@ struct openssd {
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
 							   to the next write append point */
+
+	bool serialize_ap_access;		/* Control accesses to append points in the host.
+							 * Enable this for devices that doesn't have an
+							 * internal queue that only lets one command run
+							 * at a time within an append point 
+							*/
+	struct workqueue_struct *kbiod_wq;
 };
 
 struct per_bio_data {
@@ -160,6 +176,18 @@ static struct per_bio_data *get_per_bio_data(struct bio *bio)
 	struct per_bio_data *pb = dm_per_bio_data(bio, sizeof(struct per_bio_data));
 	BUG_ON(!pb);
 	return pb;
+}
+
+static void openssd_delayed_bio_submit(struct work_struct *work)
+{
+	struct openssd_ap *ap = container_of(work, struct openssd_ap, waiting_ws);
+	struct bio *bio;
+
+	spin_lock(&ap->waiting_lock);
+	bio = bio_list_pop(&ap->waiting_bios);
+	spin_unlock(&ap->waiting_lock);
+
+	generic_make_request(bio);
 }
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
@@ -259,6 +287,8 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 
 	os->nr_aps_per_pool = APS_PER_POOL;
 
+	os->serialize_ap_access = SERIALIZE_AP_ACCESS;
+
 	// Simple round-robin strategy
 	atomic_set(&os->next_write_ap, -1);
 	os->map_ltop = openssd_map_ltop_rr;
@@ -300,6 +330,12 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			ap = &os->aps[(i * os->nr_aps_per_pool) + j];
 
 			spin_lock_init(&ap->lock);
+			spin_lock_init(&ap->waiting_lock);
+			bio_list_init(&ap->waiting_bios);
+			INIT_WORK(&ap->waiting_ws, openssd_delayed_bio_submit);
+			atomic_set(&ap->is_active, 0);
+
+			ap->parent = os;
 			ap->pool = pool;
 			ap->cur = openssd_pool_get_block(pool); // No need to lock ap->cur.
 
@@ -307,6 +343,12 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			ap->t_write = TIMING_WRITE;
 			ap->t_erase = TIMING_ERASE;
 		}
+	}
+
+	os->kbiod_wq = alloc_workqueue("kopenssdd", WQ_MEM_RECLAIM, 0);
+	if (!os->kbiod_wq) {
+		DMERR("Couldn't start kopenssdd");
+		goto err_blocks;
 	}
 
 	return 0;
@@ -617,6 +659,8 @@ static void openssd_dtr(struct dm_target *ti)
 
 	vfree(os->trans_map);
 
+	destroy_workqueue(os->kbiod_wq);
+
 	kfree(os);
 
 	DMINFO("dm-openssd successful unload");
@@ -645,7 +689,15 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 
 	/* accepted bio, don't make new request */
 	bio->bi_bdev = os->dev->bdev;
-	generic_make_request(bio);
+	if (os->serialize_ap_access && atomic_read(&active_ap->is_active)) {
+		spin_lock(&active_ap->waiting_lock);
+		bio_list_add(&active_ap->waiting_bios, bio);
+		spin_unlock(&active_ap->waiting_lock);
+	} else {
+		atomic_inc(&active_ap->is_active);
+		generic_make_request(bio);
+	}
+
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -696,6 +748,7 @@ static int openssd_endio(struct dm_target *ti,
 {
 	struct per_bio_data *pb = get_per_bio_data(bio);
 	struct openssd_ap *ap = pb->ap;
+	struct openssd *os = ap->parent;
 	struct timeval end_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
 
@@ -714,6 +767,12 @@ static int openssd_endio(struct dm_target *ti,
 			udelay(total_wait);
 		}
 	}
+
+	/* Remember that the IO is first officially finished from here */
+	if (bio_list_peek(&ap->waiting_bios))
+		queue_work(os->kbiod_wq, &ap->waiting_ws);
+	else
+		atomic_set(&ap->is_active, 0);
 
 	return 0;
 }

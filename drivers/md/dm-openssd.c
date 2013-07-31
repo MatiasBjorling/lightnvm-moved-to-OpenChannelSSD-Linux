@@ -31,8 +31,6 @@
 #include <linux/time.h>
 #include <linux/workqueue.h>
 
-/* Note: I assume hardcoded 4096 sector size. seems reasonable, but in the future we'd like this to be configurable on init */
-#define SECTOR_SIZE (4096) 
 #define DM_MSG_PREFIX "openssd hint mapper"
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
 						  a pool is serial (NAND flash / PCM / etc.) */
@@ -54,9 +52,16 @@
 	 * either the drive firmware or recordings of bad blocks.
 	 *
 	 */
+#define DEBUG 1
+#ifdef DEBUG
 #define POOL_COUNT 8
 #define POOL_BLOCK_COUNT 128
 #define BLOCK_PAGE_COUNT 64
+#else
+#define POOL_COUNT 8
+#define POOL_BLOCK_COUNT 4
+#define BLOCK_PAGE_COUNT 64
+#endif
 
 struct openssd_dev_conf {
 	unsigned short int flash_block_size; /* the number of flash pages per block */
@@ -127,6 +132,7 @@ typedef sector_t (lookup_ltop_fn)(struct openssd *, sector_t);
 struct openssd {
 	struct dm_dev *dev;
 	struct dm_target *ti;
+	uint32_t sector_size;
 
 	// Simple translation map of logical addresses to physical addresses. The 
 	// logical addresses is known by the host system, while the physical
@@ -403,6 +409,8 @@ static int openssd_send_hint(struct dm_target *ti, hint_data_t *hint_data)
 {
 	// TODO: call special ioctl on target?
 	// for now just print and free
+	DMINFO("first %s hint fc=%d", CAST_TO_PAYLOAD(hint_data)->is_write?"WRITE":"READ",
+				      INO_HINT_FROM_DATA(hint_data, 0).fc);
 	DMINFO("send nothing free hint_data and simply return");
 	kfree(hint_data);    
 
@@ -431,6 +439,7 @@ static void openssd_bio_hints(struct dm_target *ti, struct bio *bio)
 	fclass fc = FC_EMPTY;
 	int i, ret;
 	bool is_write = 0;
+	uint32_t sector_size = ((struct openssd *) ti->private)->sector_size;
 
     /* can classify only writes*/
 	switch(bio_rw(bio)) {
@@ -448,7 +457,7 @@ static void openssd_bio_hints(struct dm_target *ti, struct bio *bio)
 
 	// get lba and sector count
 	lba = bio->bi_sector;
-	sectors_count = bio->bi_size / SECTOR_SIZE;
+	sectors_count = bio->bi_size / sector_size;
 
 	/* allocate hint_data */
 	hint_data = kmalloc(sizeof(hint_data_t), GFP_ATOMIC);
@@ -518,7 +527,7 @@ static void openssd_bio_hints(struct dm_target *ti, struct bio *bio)
 			fc = FC_EMPTY;
 			if (is_write && bv_page->index == 0 && bvec[0].bv_offset ==0) {
 				// should be first sector in file. classify
-				first_sector = lba + (bio_len / SECTOR_SIZE);
+				first_sector = lba + (bio_len / sector_size);
 				fc = file_classify(&bvec[0]); 
 			}
 
@@ -533,7 +542,7 @@ static void openssd_bio_hints(struct dm_target *ti, struct bio *bio)
 					continue;
 				}
 
-					INO_HINT_FROM_DATA(hint_data, hint_idx).count += bvec[0].bv_len / SECTOR_SIZE;
+					INO_HINT_FROM_DATA(hint_data, hint_idx).count += bvec[0].bv_len / sector_size;
 					DMINFO("increase count for hint %u. new count=%u", 
 					hint_idx, INO_HINT_FROM_DATA(hint_data, hint_idx).count);
 					bio_len+= bvec[0].bv_len;
@@ -547,13 +556,13 @@ static void openssd_bio_hints(struct dm_target *ti, struct bio *bio)
 				}
 
 				DMINFO("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u", 
-					is_write?"WRITE":"READ", ino, lba + (bio_len / SECTOR_SIZE), 
+					is_write?"WRITE":"READ", ino, lba + (bio_len / sector_size), 
 					 (fc==FC_VIDEO_SLOW)?"VIDEO":(fc==FC_EMPTY)?"EMPTY":"UNKNOWN", 
-					 bvec[0].bv_len / SECTOR_SIZE, CAST_TO_PAYLOAD(hint_data)->count+1);
+					 bvec[0].bv_len / sector_size, CAST_TO_PAYLOAD(hint_data)->count+1);
 
-				// add new hint to hint_data. lba count=bvec[0].bv_len / SECTOR_SIZE, will add more later on
+				// add new hint to hint_data. lba count=bvec[0].bv_len / sector_size, will add more later on
 				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count, 
-					ino, lba + (bio_len / SECTOR_SIZE), bvec[0].bv_len / SECTOR_SIZE, fc);
+					ino, lba + (bio_len / sector_size), bvec[0].bv_len / sector_size, fc);
 				CAST_TO_PAYLOAD(hint_data)->count++;
 			}
 		}
@@ -628,6 +637,13 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		ti->error = "dm-openssd: Device lookup failed";
 		goto bad;
 	}
+
+	os->sector_size = bdev_physical_block_size(os->dev->bdev);
+	if(os->sector_size <=0 || os->sector_size % 512 != 0){
+		ti->error = "dm-openssd: Got bad sector size";
+		goto bad;
+	}
+	DMINFO("os->sector_size=%d", os->sector_size);
 
 	os->ti = ti;
 	ti->private = os;
@@ -733,28 +749,38 @@ static int openssd_user_hint_cmd(struct openssd *os, hint_data_t __user *uhint)
 	// send hint to device
 	return openssd_send_hint(os->ti, hint_data);
 }
+
+static int openssd_kernel_hint_cmd(struct openssd *os, hint_data_t *khint)
+{
+
+    // send hint to device
+    // TODO: do we need to free khint here? or is it freed by block layer?
+    return openssd_send_hint(os->ti, khint);
+}
+
 static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
 			             unsigned long arg)
 {
-	struct openssd *os;
-	struct dm_dev *dev;
+    struct openssd *os;
+    struct dm_dev *dev;
 
-	os = (struct openssd *) ti->private;
-	dev = os->dev;
+    os = (struct openssd *) ti->private;
+    dev = os->dev;
 
     DMDEBUG("got ioctl %x\n", cmd);
 	switch (cmd) {
 	    case OPENSSD_IOCTL_ID:
-		    return 12345678; // TODO: what do we do here?
+		    return 12345678; // TODO: anything else?
 	    case OPENSSD_IOCTL_SUBMIT_HINT:
 		    return openssd_user_hint_cmd(os, (hint_data_t __user *)arg);
+	    case OPENSSD_IOCTL_KERNEL_HINT:
+		    return openssd_kernel_hint_cmd(os, (hint_data_t*)arg);
 	    default:
-			// general ioctl to device
-			printk("generic ioctl. forward to device\n");
+            // general ioctl to device
+            printk("generic ioctl. forward to device\n");
 	        return __blkdev_driver_ioctl(dev->bdev, dev->mode, cmd, arg);
 	}
 }
-
 
 static int openssd_endio(struct dm_target *ti,
 		      struct bio *bio, int err)

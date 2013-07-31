@@ -440,4 +440,15 @@ config DM_OPENSSD
 		
 		If unsire, say N.
 
+config OPENSSD_INTERCEPTOR
+	tristate "An fadvise() system call interceptor for OpenSSD hinting"
+	---help---
+		An interceptor for fadvise hint advices to openssd target.
+		Used together with a dm-openssd device
+		
+		To compile this code as a module, choose M here: the module will
+		be called interceptor.
+		
+		If unsire, say N.
+
 endif # MD

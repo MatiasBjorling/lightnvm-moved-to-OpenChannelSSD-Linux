@@ -674,7 +674,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	os->sector_size = bdev_physical_block_size(os->dev->bdev);
 	if(os->sector_size <=0 || os->sector_size % 512 != 0){
 		ti->error = "dm-openssd: Got bad sector size";
-		goto bad;
+		goto err_dev_lookup;
 	}
 	DMINFO("os->sector_size=%d", os->sector_size);
 

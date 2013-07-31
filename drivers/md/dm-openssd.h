@@ -14,6 +14,7 @@
 
 #define OPENSSD_IOCTL_ID          _IO(OPENSSD_IOC_MAGIC, 0x40)
 #define OPENSSD_IOCTL_SUBMIT_HINT _IOW(OPENSSD_IOC_MAGIC, 0x41, hint_data_t)
+#define OPENSSD_IOCTL_KERNEL_HINT _IOW(OPENSSD_IOC_MAGIC, 0x42, hint_data_t)
 
 #define ssd_for_each_pool(openssd, pool, i)									\
 		for ((i) = 0, pool = &(openssd)->pools[0];							\

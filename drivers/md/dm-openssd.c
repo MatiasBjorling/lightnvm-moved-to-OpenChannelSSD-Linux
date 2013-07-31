@@ -134,10 +134,12 @@ struct openssd {
 	struct dm_target *ti;
 	uint32_t sector_size;
 
-	// Simple translation map of logical addresses to physical addresses. The 
-	// logical addresses is known by the host system, while the physical
-	// addresses are used when writing to the disk block device.
+	/* Simple translation map of logical addresses to physical addresses. The 
+	 * logical addresses is known by the host system, while the physical
+	 * addresses are used when writing to the disk block device. */
 	sector_t *trans_map;
+	/* also store a reverse map for garbage collection */
+	sector_t *rev_trans_map;
 
 	struct openssd_dev_conf dev_conf;
 
@@ -159,6 +161,8 @@ struct openssd {
 	int nr_pools;
 	int nr_aps;
 	int nr_aps_per_pool;
+
+	unsigned long nr_pages;
 
 	map_ltop_fn *map_ltop;
 	lookup_ltop_fn *lookup_ltop;
@@ -197,6 +201,17 @@ static void openssd_delayed_bio_submit(struct work_struct *work)
 	spin_unlock(&ap->waiting_lock);
 
 	generic_make_request(bio);
+}
+
+
+static void openssd_update_mapping(struct openssd *os, unsigned long logical_addr, 
+								   unsigned physical_addr)
+{
+	BUG_ON(logical_addr >= os->nr_pages);
+	BUG_ON(physical_addr >= os->nr_pages);
+
+	os->trans_map[logical_addr] = physical_addr;
+	os->rev_trans_map[physical_addr] = logical_addr;
 }
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
@@ -282,7 +297,7 @@ static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, s
 
 	physical_addr = (block->id * POOL_BLOCK_COUNT) + page_id;
 
-	os->trans_map[logical_addr] = physical_addr;
+	openssd_update_mapping(os, logical_addr, physical_addr);
 
 	return physical_addr;
 }
@@ -615,28 +630,27 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	// Which device it should map onto?
 	if (argc != 1) {
-		ti->error = "Only argument for block device allowed.";
+		ti->error = "The target takes a single block device path as argument.";
 		return -EINVAL;
 	}
 
 	os = kmalloc(sizeof(*os), GFP_KERNEL);
 	if (os == NULL) {
-		ti->error = "dm-openssd: Cannot allocate openssd context";
 		return -ENOMEM;
 	}
 
-	os->trans_map = vmalloc(sizeof(sector_t) * POOL_COUNT * POOL_BLOCK_COUNT * BLOCK_PAGE_COUNT); /* Remove constant with number of logical to
-									  physical address mappings that should be stored. */
-	if (os->trans_map == NULL) {
-		ti->error = "dm-openssd: Cannot allocate openssd mapping context";
-		kfree(os);
-		return -ENOMEM;
-	}
+	os->nr_pages = POOL_COUNT * POOL_BLOCK_COUNT * BLOCK_PAGE_COUNT;
 
-	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &os->dev)) {
-		ti->error = "dm-openssd: Device lookup failed";
-		goto bad;
-	}
+	os->trans_map = vmalloc(sizeof(sector_t) * os->nr_pages);
+	if (!os->trans_map)
+		goto err_trans_map;
+
+	os->rev_trans_map = vmalloc(sizeof(sector_t) * os->nr_pages);
+	if (!os->rev_trans_map)
+		goto err_rev_trans_map;
+
+	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &os->dev))
+		goto err_dev_lookup;
 
 	os->sector_size = bdev_physical_block_size(os->dev->bdev);
 	if(os->sector_size <=0 || os->sector_size % 512 != 0){
@@ -656,10 +670,14 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	return 0;
 
-bad:
+err_dev_lookup:
+	vfree(os->rev_trans_map);
+err_rev_trans_map:
 	vfree(os->trans_map);
+err_trans_map:
 	kfree(os);
-	return -EINVAL;
+	ti->error = "dm-openssd: Cannot allocate openssd mapping context";
+	return -ENOMEM;
 }
 
 static void openssd_dtr(struct dm_target *ti)
@@ -683,6 +701,7 @@ static void openssd_dtr(struct dm_target *ti)
 	kfree(os->aps);
 
 	vfree(os->trans_map);
+	vfree(os->rev_trans_map);
 
 	destroy_workqueue(os->kbiod_wq);
 

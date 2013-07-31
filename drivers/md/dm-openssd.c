@@ -23,6 +23,7 @@
 #include <linux/dm-kcopyd.h>
 #include <linux/blkdev.h>
 #include <linux/list.h>
+#include <linux/list_sort.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -44,7 +45,8 @@
 
 /* Run GC every X seconds */
 #define GC_TIME 10
-
+/* Run only GC is less than 1/X blocks are free */
+#define GC_LIMIT_INVERSE 10
 /*
 	 * For now we hardcode the configuration for the OpenSSD unit that we own. In
 	 * the future this should be made configurable.
@@ -81,8 +83,15 @@ struct openssd_pool_block {
 		unsigned int id;
 	} ____cacheline_aligned_in_smp;
 
+	unsigned int nr_invalid_pages;
 
 	struct list_head list;
+	struct list_head prio;
+};
+
+struct openssd_addr {
+	sector_t addr;
+	struct openssd_pool_block *block;
 };
 
 struct openssd_pool {
@@ -91,15 +100,16 @@ struct openssd_pool {
 		spinlock_t lock;
 		struct list_head used_list;
 		struct list_head free_list;
+		struct list_head prio_list;
 	} ____cacheline_aligned_in_smp;
 	unsigned long phy_addr_start;	/* References the physical start block */
 	unsigned int phy_addr_end;		/* References the physical end block */
 
 	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
+	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
 	struct openssd_pool_block *blocks;
 };
-
 
 /*
  * openssd_ap. ap is an append point. A pool can have 1..X append points attached.
@@ -141,7 +151,7 @@ struct openssd {
 	/* Simple translation map of logical addresses to physical addresses. The 
 	 * logical addresses is known by the host system, while the physical
 	 * addresses are used when writing to the disk block device. */
-	sector_t *trans_map;
+	struct openssd_addr *trans_map;
 	/* also store a reverse map for garbage collection */
 	sector_t *rev_trans_map;
 
@@ -209,28 +219,26 @@ static void openssd_delayed_bio_submit(struct work_struct *work)
 	generic_make_request(bio);
 }
 
-static int openssd_kthread(void *data)
+static void openssd_update_mapping(struct openssd *os,  sector_t l_addr,
+						   sector_t p_addr, struct openssd_pool_block *p_block)
 {
-	struct openssd *os = (struct openssd *)data;
-	BUG_ON(!os);
+	struct openssd_addr *l;
 
-	while (!kthread_should_stop()) {
+	BUG_ON(l_addr >= os->nr_pages);
+	BUG_ON(p_addr >= os->nr_pages);
 
-		schedule_timeout_uninterruptible(GC_TIME * HZ); 
+	l = &os->trans_map[l_addr];
+	if (l->block) {
+		printk("%u\n", l->block->nr_invalid_pages);
+		BUG_ON(l->block->nr_invalid_pages == BLOCK_PAGE_COUNT);
+		l->block->nr_invalid_pages++;
 	}
 
-	return 0;;
-}
+	l->addr = p_addr;
+	l->block = p_block;
 
-
-static void openssd_update_mapping(struct openssd *os, unsigned long logical_addr, 
-								   unsigned physical_addr)
-{
-	BUG_ON(logical_addr >= os->nr_pages);
-	BUG_ON(physical_addr >= os->nr_pages);
-
-	os->trans_map[logical_addr] = physical_addr;
-	os->rev_trans_map[physical_addr] = logical_addr;
+	/* Physical -> Logical address */
+	os->rev_trans_map[p_addr] = l_addr;
 }
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
@@ -251,6 +259,8 @@ static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *po
 
 	block = list_first_entry(&pool->free_list, struct openssd_pool_block, list);
 	list_move_tail(&block->list, &pool->used_list);
+
+	pool->nr_free_blocks--;
 
 	spin_unlock(&pool->lock);
 	return block;
@@ -289,6 +299,60 @@ static void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block 
 	spin_unlock(&ap->lock);
 }
 
+/* the block with highest number of invalid pages, will be in the beginning of the list */
+static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_head *lh_b)
+{
+	struct openssd_pool_block *a = list_entry(lh_a, struct openssd_pool_block, prio);
+	struct openssd_pool_block *b = list_entry(lh_b, struct openssd_pool_block, prio);
+
+	if (a->nr_invalid_pages == b->nr_invalid_pages)
+		return 0;
+
+	return a->nr_invalid_pages < b->nr_invalid_pages;
+}
+
+static void openssd_prio_sort_blocks(struct openssd *os)
+{
+	struct openssd_pool *pool;
+	unsigned int nr_blocks_need;
+	int i;
+
+	ssd_for_each_pool(os, pool, i) {
+		struct openssd_pool_block *pb;
+		nr_blocks_need = pool->nr_blocks;
+		do_div(nr_blocks_need, GC_LIMIT_INVERSE);
+		//printk("Calculated nr_blocks_need %u has %u\n", nr_blocks_need, pool->nr_free_blocks);
+
+		if (nr_blocks_need < pool->nr_free_blocks)
+			continue;
+
+		pb = list_first_entry(&pool->prio_list, struct openssd_pool_block, prio);
+		//printk("I do my sort. This is the current head: %u with invalid %u\n", pb->id, pb->nr_invalid_pages);
+		list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
+	}
+}
+
+static void openssd_gc_collect(struct openssd *os)
+{
+
+}
+
+static int openssd_kthread(void *data)
+{
+	struct openssd *os = (struct openssd *)data;
+	BUG_ON(!os);
+
+	while (!kthread_should_stop()) {
+		openssd_prio_sort_blocks(os);
+
+		openssd_gc_collect(os);
+
+		schedule_timeout_uninterruptible(GC_TIME * HZ); 
+	}
+
+	return 0;
+}
+
 /* Simple round-robin Logical to physical address translation.
  *
  * Retrieve the mapping using the active append point. Then update the ap for the
@@ -314,9 +378,9 @@ static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, s
 		page_id = openssd_get_page_id(block);
 	}
 
-	physical_addr = (block->id * POOL_BLOCK_COUNT) + page_id;
+	physical_addr = (block->id * BLOCK_PAGE_COUNT) + page_id;
 
-	openssd_update_mapping(os, logical_addr, physical_addr);
+	openssd_update_mapping(os, logical_addr, physical_addr, block);
 
 	return physical_addr;
 }
@@ -346,11 +410,12 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 
 		INIT_LIST_HEAD(&pool->free_list);
 		INIT_LIST_HEAD(&pool->used_list);
+		INIT_LIST_HEAD(&pool->prio_list);
 
 		pool->phy_addr_start = i * POOL_BLOCK_COUNT;
 		pool->phy_addr_end = (i + 1) * POOL_BLOCK_COUNT - 1;
 
-		pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
+		pool->nr_free_blocks = pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
 		pool->blocks = kzalloc(sizeof(struct openssd_pool_block) * pool->nr_blocks, GFP_KERNEL);
 		if (!pool->blocks)
 			goto err_blocks;
@@ -360,6 +425,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			atomic_set(&block->next_page, -1);
 			block->id = (i * POOL_BLOCK_COUNT) + j;
 			list_add_tail(&(block->list), &pool->free_list);
+			list_add_tail(&block->prio, &pool->prio_list);
 		}
 	}
 
@@ -659,8 +725,9 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	os->nr_pages = POOL_COUNT * POOL_BLOCK_COUNT * BLOCK_PAGE_COUNT;
+	trans_mem = sizeof(struct openssd_addr) * os->nr_pages;
 
-	os->trans_map = vmalloc(sizeof(sector_t) * os->nr_pages);
+	os->trans_map = vmalloc(sizeof(struct openssd_addr) * os->nr_pages);
 	if (!os->trans_map)
 		goto err_trans_map;
 
@@ -691,7 +758,8 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	if (!os->kt_openssd)
 		goto err_dev_lookup;
 
-	DMINFO("dm-openssd successful load");
+	DMINFO("allocated %lu physical pages (%lu KB)", os->nr_pages, os->nr_pages * os->sector_size / 1024);
+	DMINFO("successful loaded");
 
 	return 0;
 

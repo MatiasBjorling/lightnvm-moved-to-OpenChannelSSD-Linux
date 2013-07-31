@@ -30,6 +30,7 @@
 #include <linux/delay.h>
 #include <linux/time.h>
 #include <linux/workqueue.h>
+#include <linux/kthread.h>
 
 #define DM_MSG_PREFIX "openssd hint mapper"
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
@@ -40,6 +41,9 @@
 #define TIMING_READ 25
 #define TIMING_WRITE 500
 #define TIMING_ERASE 1500
+
+/* Run GC every X seconds */
+#define GC_TIME 10
 
 /*
 	 * For now we hardcode the configuration for the OpenSSD unit that we own. In
@@ -177,6 +181,8 @@ struct openssd {
 							 * at a time within an append point 
 							*/
 	struct workqueue_struct *kbiod_wq;
+
+	struct task_struct *kt_openssd; /* handles gc and any other async work */
 };
 
 struct per_bio_data {
@@ -201,6 +207,19 @@ static void openssd_delayed_bio_submit(struct work_struct *work)
 	spin_unlock(&ap->waiting_lock);
 
 	generic_make_request(bio);
+}
+
+static int openssd_kthread(void *data)
+{
+	struct openssd *os = (struct openssd *)data;
+	BUG_ON(!os);
+
+	while (!kthread_should_stop()) {
+
+		schedule_timeout_uninterruptible(GC_TIME * HZ); 
+	}
+
+	return 0;;
 }
 
 
@@ -369,9 +388,9 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 		}
 	}
 
-	os->kbiod_wq = alloc_workqueue("kopenssdd", WQ_MEM_RECLAIM, 0);
+	os->kbiod_wq = alloc_workqueue("kopenssd-work", WQ_MEM_RECLAIM, 0);
 	if (!os->kbiod_wq) {
-		DMERR("Couldn't start kopenssdd");
+		DMERR("Couldn't start kopenssd-worker");
 		goto err_blocks;
 	}
 
@@ -666,6 +685,12 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	/* Initialize pools. */
 	openssd_pool_init(os, ti);
+
+	// FIXME: Clean up pool init on failure.
+	os->kt_openssd = kthread_run(openssd_kthread, os, "kopenssd");
+	if (!os->kt_openssd)
+		goto err_dev_lookup;
+
 	DMINFO("dm-openssd successful load");
 
 	return 0;
@@ -693,6 +718,8 @@ static void openssd_dtr(struct dm_target *ti)
 		while (bio_list_peek(&ap->waiting_bios))
 			flush_scheduled_work();
 	}
+
+	kthread_stop(os->kt_openssd);
 
 	ssd_for_each_pool(os, pool, i)
 		kfree(pool->blocks);

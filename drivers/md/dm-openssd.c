@@ -61,7 +61,7 @@
 #define DEBUG 1
 #ifdef DEBUG
 #define POOL_COUNT 8
-#define POOL_BLOCK_COUNT 128
+#define POOL_BLOCK_COUNT 32
 #define BLOCK_PAGE_COUNT 64
 #else
 #define POOL_COUNT 8

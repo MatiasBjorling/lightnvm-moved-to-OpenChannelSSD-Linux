@@ -47,6 +47,7 @@
 #define GC_TIME 10
 /* Run only GC is less than 1/X blocks are free */
 #define GC_LIMIT_INVERSE 2
+
 /*
 	 * For now we hardcode the configuration for the OpenSSD unit that we own. In
 	 * the future this should be made configurable.
@@ -57,6 +58,7 @@
 	 * addressing. We also omit the first block of each chip as they contain
 	 * either the drive firmware or recordings of bad blocks.
 	 *
+	 * BLOCK_PAGE_COUNT must be a power of two.
 	 */
 #define DEBUG 1
 #ifdef DEBUG
@@ -180,8 +182,10 @@ struct openssd {
 
 	unsigned int next_collect_pool;
 
+	/* FTL interface */
 	map_ltop_fn *map_ltop;
 	lookup_ltop_fn *lookup_ltop;
+
 	/* Write strategy variables. Move these into each for structure for each 
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point

@@ -9,7 +9,6 @@
 
 #include <linux/types.h>
 
-#define MAX_CDB_SIZE 16
 #define HINT_DATA_MAX_INOS  (8)
 #define HINT_DATA_SIZE (HINT_DATA_MAX_INOS*128) /* > 16 * 128 files at most */
 #define GET_HINT_FROM_PAYLOAD(PAYLOAD, IDX) (((ino_hint_t*)((PAYLOAD)->data))[IDX])
@@ -48,5 +47,23 @@ typedef struct hint_data_s {
   uint32_t hint_payload_size;
   char hint_payload[HINT_PAYLOAD_SIZE];
 } hint_data_t;
+
+#ifdef __KERNEL__
+typedef struct hint_info_s{
+    	ino_hint_t hint; // if NULL, none
+	char is_write;
+	char is_swap;
+    	uint32_t processed; // how many related LBAs were indeed processed
+    	struct list_head list_member;
+}hint_info_t;
+#endif
+
+// r/w matches, and LBA is in lba range of hint
+#define is_hint_relevant(LBA, HINT_INFO, IS_WRITE) \
+	((HINT_INFO)->is_write == (IS_WRITE) && \
+	 (LBA) >= (HINT_INFO)->hint.start_lba && \
+	 (LBA) <  ((HINT_INFO)->hint.start_lba+(HINT_INFO)->hint.count) )
+//#define is_write_hint_relevant(LBA, HINT_INFO)  is_hint_relevant(LBA, HINT_INFO, 1)
+//#define is_read_hint_relevant(LBA, HINT_INFO)   is_hint_relevant(LBA, HINT_INFO, 0)
 
 #endif /* DM_OPENSSD_HINT_H_ */

@@ -1249,6 +1249,9 @@ static int openssd_handle_write(struct dm_target *ti, struct bio *bio)
 		}
 	}
 
+	/* do hint */
+	openssd_bio_hints(ti, bio);
+
 	bio_endio(bio, 0);
 
 	return 0;
@@ -1267,15 +1270,10 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 		openssd_handle_write(ti, bio);
 	else {
 		openssd_handle_read(ti, bio);
-//		generic_make_request(bio);
 	}
 
 //	pb = get_per_bio_data(bio);
 //	pb->ap = active_ap;
-
-
-	/* do hint */
-//	openssd_bio_hints(ti, bio);
 
 	/* setup timings - remember overhead. */
 //	do_gettimeofday(&pb->start_tv);

@@ -173,7 +173,7 @@ enum deploy_hint_flags {
 };
 
 /* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS (HINT_NONE) /*HINT_SWAP | HINT_IOCTL)*/
+#define DEPLOYED_HINTS /*(HINT_NONE)*/ (HINT_SWAP | HINT_IOCTL)
 
 /* Main structure */
 struct openssd {
@@ -990,6 +990,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 
 	openssd_update_mapping(os, logical_addr, physical_addr, block);
 
+	(*ret_victim_block) = block;
 	//DMINFO("write lba %ld to fast page %ld", logical_addr, physical_addr);
 	return physical_addr;
 }
@@ -1098,6 +1099,12 @@ static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap)
 
 	submit_bio(rw, bio);
 }
+static void openssd_fill_bio_and_end(struct bio *bio)
+{
+	printk("no data\n");
+	zero_fill_bio(bio);
+	bio_endio(bio, 0);
+}
 
 static int openssd_handle_read(struct openssd *os, struct bio *bio)
 {
@@ -1120,6 +1127,11 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 			log_addr = exec_bio->bi_sector / NR_PHY_IN_LOG;
 			phys = os->lookup_ltop(os, log_addr);
 
+			if (!phys->block) {
+				openssd_fill_bio_and_end(bio);
+				return 0;
+			}
+
 			exec_bio->bi_sector = phys->addr;
 
 //			printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
@@ -1128,6 +1140,12 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 	} else {
 		log_addr = bio->bi_sector / NR_PHY_IN_LOG;
 		phys = os->lookup_ltop(os, log_addr);
+
+		if (!phys->block) {
+			openssd_fill_bio_and_end(bio);
+			return 0;
+		}
+
 
 //		printk("bio addr: %lu bi_sectors: %u\n", bio->bi_sector, bio_sectors(bio));
 

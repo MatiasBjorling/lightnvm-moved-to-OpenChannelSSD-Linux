@@ -62,7 +62,7 @@
 	 * BLOCK_PAGE_COUNT must be a power of two.
 	 */
 #define DEBUG 1
-#ifdef DEBUG
+
 #define DEVICE_PAGE_SIZE 512	/* The minimum page size we communicate with to the physical disk */
 #define EXPOSED_PAGE_SIZE 4096	/* The page size that we expose to the operating system */
 #define FLASH_PAGE_SIZE 8196	/* The size of the physical flash page */
@@ -70,15 +70,6 @@
 #define POOL_COUNT 8
 #define POOL_BLOCK_COUNT 32
 #define BLOCK_PAGE_COUNT 64
-#else
-#define DEVICE_PAGE_SIZE 512
-#define EXPOSED_PAGE_SIZE 4096
-#define FLASH_PAGE_SIZE 8196
-
-#define POOL_COUNT 8
-#define POOL_BLOCK_COUNT 4
-#define BLOCK_PAGE_COUNT 64
-#endif
 
 /*---------------------
  * Swap hints. TODO: all this should move to configuration files, etc.
@@ -174,6 +165,15 @@ struct openssd;
 typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct openssd_pool_block **);
 typedef struct openssd_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 
+enum deploy_hint_flags {
+	HINT_NONE	= 0 << 0, /* No hints applied */
+	HINT_SWAP	= 1 << 0, /* Swap aware hints. Detected from partition offset */
+	HINT_IOCTL	= 1 << 1, /* IOCTL aware hints. Applications may submit direct hints */
+};
+
+/* Configuration of hints that are deployed within the openssd instance */
+#define DEPLOYED_HINTS (HINT_SWAP | HINT_IOCTL)
+
 /* Main structure */
 struct openssd {
 	struct dm_dev *dev;
@@ -230,6 +230,7 @@ struct openssd {
 	struct task_struct *kt_openssd; /* handles gc and any other async work */
 
 	/* Hint related*/
+	unsigned int hint_flags;
 	char fast_page_block_map[BLOCK_PAGE_COUNT];
 	spinlock_t hintlock;
 	struct list_head hintlist;
@@ -246,6 +247,34 @@ static struct per_bio_data *get_per_bio_data(struct bio *bio)
 	struct per_bio_data *pb = dm_per_bio_data(bio, sizeof(struct per_bio_data));
 	BUG_ON(!pb);
 	return pb;
+}
+
+/* the block with highest number of invalid pages, will be in the beginning of the list */
+static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_head *lh_b)
+{
+	struct openssd_pool_block *a = list_entry(lh_a, struct openssd_pool_block, prio);
+	struct openssd_pool_block *b = list_entry(lh_b, struct openssd_pool_block, prio);
+
+	if (a->nr_invalid_pages == b->nr_invalid_pages)
+		return 0;
+
+	return a->nr_invalid_pages < b->nr_invalid_pages;
+}
+
+static inline sector_t block_to_addr(struct openssd_pool_block *block)
+{
+	return (block->id * BLOCK_PAGE_COUNT);
+}
+
+static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
+{
+	unsigned int ap_idx, div, mod;
+
+	div = block->id / POOL_BLOCK_COUNT;
+	mod = block->id % POOL_BLOCK_COUNT;
+	ap_idx = div + (mod / (POOL_BLOCK_COUNT / APS_PER_POOL));
+
+	return &os->aps[ap_idx];
 }
 
 static void openssd_delayed_bio_submit(struct work_struct *work)
@@ -357,24 +386,6 @@ static void openssd_pool_put_block(struct openssd_pool_block *block)
 	spin_unlock(&pool->lock);
 }
 
-static inline sector_t block_to_addr(struct openssd_pool_block *block)
-{
-	return (block->id * BLOCK_PAGE_COUNT);
-}
-
-static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
-{
-	unsigned int ap_idx, div, mod;
-
-	div = block->id / POOL_BLOCK_COUNT;
-	mod = block->id % POOL_BLOCK_COUNT;
-	ap_idx = div + (mod / (POOL_BLOCK_COUNT / APS_PER_POOL));
-
-	printk("I give you ap with index: %u\n", ap_idx);
-
-	return &os->aps[ap_idx];
-}
-
 static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 {
 	sector_t addr;
@@ -409,19 +420,7 @@ static void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block 
 	spin_unlock(&ap->lock);
 }
 
-/* the block with highest number of invalid pages, will be in the beginning of the list */
-static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_head *lh_b)
-{
-	struct openssd_pool_block *a = list_entry(lh_a, struct openssd_pool_block, prio);
-	struct openssd_pool_block *b = list_entry(lh_b, struct openssd_pool_block, prio);
-
-	if (a->nr_invalid_pages == b->nr_invalid_pages)
-		return 0;
-
-	return a->nr_invalid_pages < b->nr_invalid_pages;
-}
-
-static void erase_block(struct openssd_pool_block *block)
+static void openssd_erase_block(struct openssd_pool_block *block)
 {
 	/* Send erase command to device. */
 }
@@ -467,7 +466,7 @@ static void openssd_gc_collect(struct openssd *os)
 				list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
 				block = list_first_entry(&pool->prio_list, struct openssd_pool_block, prio);
 
-				erase_block(block);
+				openssd_erase_block(block);
 				openssd_pool_put_block(block);
 
 				break;
@@ -498,7 +497,8 @@ static int openssd_kthread(void *data)
 }
 
 // iterate hints list, and check if lba of current req is covered by some hint
-hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool is_write){
+hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool is_write)
+{
 	hint_info_t *hint_info;
 	struct list_head *node;
 
@@ -554,6 +554,310 @@ fast_done:
 	return page_id;
 }
 
+fclass file_classify(struct bio_vec* bvec) 
+{
+	fclass fc = FC_UNKNOWN;
+	char *sec_in_mem;
+	char byte[4];
+
+	if(!bvec || !bvec->bv_page){
+		DMINFO("can't kmap empty bvec->bv_page. kmap failed");
+		return fc;
+	}
+
+	byte[0] = 0x66;
+	byte[1] = 0x74;
+	byte[2] = 0x79;
+	byte[3] = 0x70;
+
+	sec_in_mem = kmap_atomic((bvec->bv_page) + bvec->bv_offset);
+
+	if(!sec_in_mem) {
+		DMERR("bvec->bv_page kmap failed");
+		return fc;
+	}
+
+	if(!memcmp(sec_in_mem+4, byte,4)) {
+		//hint_log("VIDEO classified");
+		DMINFO("VIDEO classified");
+		fc = FC_VIDEO_SLOW;
+	}
+
+	kunmap_atomic(sec_in_mem);
+	return fc;
+}
+
+// no real sending for now, in prototype just put it directly in FTL's hints list
+static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
+{
+	int i;
+	hint_info_t* hint_info;
+
+	DMINFO("first %s hint count=%d lba=%d fc=%d", 
+			CAST_TO_PAYLOAD(hint_data)->is_write ? "WRITE" : "READ",
+			CAST_TO_PAYLOAD(hint_data)->count,
+			INO_HINT_FROM_DATA(hint_data, 0).start_lba,
+			INO_HINT_FROM_DATA(hint_data, 0).fc);
+
+	if(!os->hint_flags)
+		goto send_done;
+
+	// insert to hints list
+	for(i = 0; i < CAST_TO_PAYLOAD(hint_data)->count; i++){
+		hint_info = kmalloc(sizeof(hint_info_t), GFP_KERNEL);
+		if (!hint_info) {
+			DMERR("can't allocate hint info");
+			return -ENOMEM;
+		}
+		memcpy(&hint_info->hint, &INO_HINT_FROM_DATA(hint_data, i), sizeof(ino_hint_t));
+		hint_info->processed = 0;
+		hint_info->is_write  = CAST_TO_PAYLOAD(hint_data)->is_write;
+		hint_info->is_swap   = CAST_TO_PAYLOAD(hint_data)->is_swap;
+
+		DMINFO("about to add hint_info to list. %s %s", 
+				(CAST_TO_PAYLOAD(hint_data)->is_swap) ? "SWAP" : "REGULAR", 
+				(CAST_TO_PAYLOAD(hint_data)->is_write) ? "WRITE" : "READ");
+
+		spin_lock(&os->hintlock);
+		list_add_tail(&hint_info->list_member, &os->hintlist);
+		spin_unlock(&os->hintlock);
+	}
+
+send_done:
+	return 0;
+}
+
+/**
+ * automatically extract hint from a bio, and send to target.
+ * iterate all pages, look into inode. There are several cases:
+ * 1) swap - stop and send hint on entire bio (assuming swap LBAs are not mixed with regular LBAs in one bio)
+ * 2) read - iterate all pages and send hint_data composed of multiple hints, one for each inode number and
+ *           relevant range of LBAs covered by a page
+ * 3) write - check if a page is the first sector of a file, classify it and set in hint. rest same as read
+ */
+static void openssd_bio_hints(struct openssd *os, struct bio *bio)
+{
+	hint_data_t *hint_data;
+	fclass fc = FC_EMPTY;
+	unsigned ino = -1;
+	struct page *bv_page;
+	struct address_space *mapping;
+	struct inode *host;
+	struct bio_vec *bvec;
+	uint32_t sector_size = os->sector_size;
+	uint32_t sectors_count = 0;
+	uint32_t lba = 0, bio_len = 0, hint_idx;
+	unsigned long prev_ino = -1, first_sector = -1;
+	int i, ret;
+	bool is_write = 0;
+
+	/* can classify only writes*/
+	switch(bio_rw(bio)) {
+		case READ:
+		case READA:
+			/* read/readahead*/
+			break;
+		case WRITE:
+			is_write = 1;
+			break;
+	}
+
+	// get lba and sector count
+	lba = bio->bi_sector;
+	sectors_count = bio->bi_size / sector_size;
+
+	/* allocate hint_data */
+	hint_data = kzalloc(sizeof(hint_data_t), GFP_NOIO);
+	if (!hint_data) {
+		DMERR("hint_data_t kmalloc failed");
+		return;
+	}
+
+	CAST_TO_PAYLOAD(hint_data)->lba = lba;
+	CAST_TO_PAYLOAD(hint_data)->sectors_count = sectors_count;
+	CAST_TO_PAYLOAD(hint_data)->is_write = is_write;
+	ino = -1;            
+	DMINFO("%s lba=%d sectors_count=%d", 
+			is_write ? "WRITE" : "READ", 
+			lba, sectors_count);
+#if 0
+	hint_log("free hint_data dont look in bvec. simply return");
+	kfree(hint_data);
+	return;
+#endif
+
+	bio_for_each_segment(bvec, bio, i) {
+		bv_page = bvec[0].bv_page;
+
+		if (bv_page && !PageSlab(bv_page)) {
+			// swap hint
+			if(PageSwapCache(bv_page)) {
+				DMINFO("swap bio");
+				// TODO - not tested
+				CAST_TO_PAYLOAD(hint_data)->is_swap = 1;
+
+				// for compatibility add one hint
+				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count,
+								0, lba, sectors_count, fc);
+				CAST_TO_PAYLOAD(hint_data)->count++;
+				break;
+			}
+
+		mapping = bv_page->mapping;
+
+		if (mapping && ((unsigned long)mapping & PAGE_MAPPING_ANON) == 0) {
+			host = mapping->host;
+			if (!host) {
+				DMCRIT("page without mapping->host. shouldn't happen");
+				bio_len += bvec[0].bv_len;
+				continue; // no host
+			}
+
+			prev_ino = ino;
+			ino = host->i_ino;
+
+			if(!host->i_sb || !host->i_sb->s_type || !host->i_sb->s_type->name){
+				DMINFO("not related to file system");
+				bio_len += bvec[0].bv_len;
+				continue;
+			}
+
+			if(!ino) {
+				DMINFO("not inode related");
+				bio_len += bvec[0].bv_len;
+				continue;
+			}
+			//if(bvec[0].bv_offset) 
+			//   DMINFO("bv_page->index %d offset %d len %d", bv_page->index, bvec[0].bv_offset, bvec[0].bv_len);
+
+			/* classify if we can.
+			 * can only classify writes to file's first sector */
+			fc = FC_EMPTY;
+			if (is_write && bv_page->index == 0 && bvec[0].bv_offset ==0) {
+				// should be first sector in file. classify
+				first_sector = lba + (bio_len / sector_size);
+				fc = file_classify(&bvec[0]); 
+			}
+
+			/* change previous hint, unless this is a new inode
+			   and then simply increment count in existing hint */
+			if(prev_ino == ino) {
+				hint_idx = CAST_TO_PAYLOAD(hint_data)->count - 1;
+				if(INO_HINT_FROM_DATA(hint_data, hint_idx).ino != ino) {
+					DMERR("updating hint of wrong ino (ino=%u expected=%lu)", ino,
+						INO_HINT_FROM_DATA(hint_data, hint_idx).ino);            
+					bio_len += bvec[0].bv_len;
+					continue;
+				}
+
+					INO_HINT_FROM_DATA(hint_data, hint_idx).count += bvec[0].bv_len / sector_size;
+					DMINFO("increase count for hint %u. new count=%u", 
+					hint_idx, INO_HINT_FROM_DATA(hint_data, hint_idx).count);
+					bio_len+= bvec[0].bv_len;
+					continue;
+				}
+
+				if(HINT_DATA_MAX_INOS == CAST_TO_PAYLOAD(hint_data)->count){
+					DMERR("too many inos in hint");
+					bio_len+= bvec[0].bv_len;
+					continue;
+				}
+
+				DMINFO("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u",
+					is_write ? "WRITE":"READ",
+					ino, 
+					lba + (bio_len / sector_size),
+					(fc == FC_VIDEO_SLOW) ? "VIDEO" : (fc == FC_EMPTY) ? "EMPTY" : "UNKNOWN",
+					bvec[0].bv_len / sector_size, 
+					CAST_TO_PAYLOAD(hint_data)->count+1);
+
+				// add new hint to hint_data. lba count=bvec[0].bv_len / sector_size, will add more later on
+				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count, 
+					ino, lba + (bio_len / sector_size), bvec[0].bv_len / sector_size, fc);
+				CAST_TO_PAYLOAD(hint_data)->count++;
+			}
+		}
+
+		// increment len
+		bio_len += bvec[0].bv_len;
+	}
+#if 0
+	// TESTING
+	// dont send hints yet. just print whatever we got, and free
+	hint_log("send nothing free hint_data and simply return.");
+	kfree(hint_data);
+	hint_log("return");
+	return;
+#endif
+	// hint empty - return.
+	// Note: not error, maybe we're not doing file-related/swap I/O
+	if(CAST_TO_PAYLOAD(hint_data)->count == 0) {
+		//hint_log("request with no file data");
+		goto done;
+	}
+
+	/* non-empty hint_data, send to device */
+	//hint_log("hint count=%u. send to hint device", CAST_TO_PAYLOAD(hint_data)->count);
+	ret = openssd_send_hint(os, hint_data);
+
+	if (ret != 0)
+		DMINFO("openssd_send_hint error %d", ret);
+
+done:
+	kfree(hint_data);
+}
+
+void openssd_ctr_swap_hint(struct openssd *os){
+	int i;
+
+	for(i=0;i<BLOCK_PAGE_COUNT;i++) os->fast_page_block_map[i] = 0;
+
+	// first four are fast
+	for(i=0;i<4;i++){
+		os->fast_page_block_map[i] = 1;
+	}
+
+	// in between, its slow-slow-fast-fast-slow-slow...
+	for(i=6;i<BLOCK_PAGE_COUNT-4;){
+		os->fast_page_block_map[i] = os->fast_page_block_map[i+1] = 1;
+		i+=4;
+	}
+}
+
+static int openssd_user_hint_cmd(struct openssd *os, hint_data_t __user *uhint)
+{
+	hint_data_t* hint_data;
+	DMINFO("send user hint");
+
+	/* allocate hint_data */
+	hint_data = kmalloc(sizeof(hint_data_t), GFP_KERNEL);
+	if (hint_data == NULL) {
+		DMERR("hint_data_t kmalloc failed");  
+		return -ENOMEM;
+	}
+
+    // copy hint data from user space
+	if (copy_from_user(hint_data, uhint, sizeof(hint_data_t)))
+		return -EFAULT;
+
+	// send hint to device
+	return openssd_send_hint(os, hint_data);
+}
+
+static int openssd_kernel_hint_cmd(struct openssd *os, hint_data_t *khint)
+{
+    // send hint to device
+    // TODO: do we need to free khint here? or is it freed by block layer?
+    return openssd_send_hint(os, khint);
+}
+
+static struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
+{
+	// TODO: during GC or w-r-w we may get a translation for an old page.
+	//       do we care enough to enforce some serializibilty in LBA accesses?
+	return &os->trans_map[logical_addr];
+}
+
 /* Simple round-robin Logical to physical address translation.
  *
  * Retrieve the mapping using the active append point. Then update the ap for the
@@ -563,9 +867,9 @@ fast_done:
  */
 static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block)
 {
-	int ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
 	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
+	int ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
 	int page_id;
 	sector_t physical_addr;
 
@@ -612,11 +916,11 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block);
 
 
-	// iterate all ap's and find fast page
-	/* TODO 1) should loop over append points (when we have more than 1 AP/pool)
-		2) is it really safe iterating pools like this? do we need to lock anything else?
-		3) add test for active_ap->is_active? or do we not care?
-	*/
+	/* iterate all ap's and find fast page
+	 * TODO 1) should loop over append points (when we have more than 1 AP/pool)
+	 *      2) is it really safe iterating pools like this? do we need to lock anything else?
+	 *      3) add test for active_ap->is_active? or do we not care?
+	 */
 	//DMINFO("find fast page for hinted swap write");
 	while (page_id < 0 && i < POOL_COUNT) {
 		ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
@@ -655,12 +959,250 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 	return physical_addr;
 }
 
-static struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
+static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap)
 {
-	// TODO: during GC or w-r-w we may get a translation for an old page.
-	//       do we care enough to enforce some serializibilty in LBA accesses?
-	return &os->trans_map[logical_addr];
+
+	submit_bio(rw, bio);
 }
+
+static void openssd_end_read_bio(struct bio *bio, int error)
+{
+}
+
+static int openssd_handle_read(struct openssd *os, struct bio *bio)
+{
+	struct bio *exec_bio, *split_bio;
+	struct bio_pair *bp;
+	struct bio_vec *bv;
+	struct openssd_addr *phys;
+	sector_t log_addr;
+	int i;
+
+	if (bio_sectors(bio) > NR_PHY_IN_LOG) {
+//		printk("split\n");
+		split_bio = bio;
+		bio_for_each_segment(bv, bio, i) {
+			bp = bio_split(split_bio, NR_PHY_IN_LOG);
+
+			exec_bio = &bp->bio1;
+			split_bio = &bp->bio2;
+
+			log_addr = exec_bio->bi_sector / NR_PHY_IN_LOG;
+			phys = os->lookup_ltop(os, log_addr);
+
+			exec_bio->bi_sector = phys->addr;
+
+//			printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
+			openssd_submit_bio(READ, exec_bio, block_to_ap(os, phys->block));
+		}
+	} else {
+		log_addr = bio->bi_sector / NR_PHY_IN_LOG;
+		phys = os->lookup_ltop(os, log_addr);
+
+//		printk("bio addr: %lu bi_sectors: %u\n", bio->bi_sector, bio_sectors(bio));
+
+		openssd_submit_bio(READ, bio, block_to_ap(os, phys->block));
+	}
+
+	return 0;
+}
+
+static void openssd_end_write_bio(struct bio *bio, int error)
+{
+	/* FIXME: Implement error handling of writes */
+}
+
+static int openssd_handle_write(struct openssd *os, struct bio *bio)
+{
+	struct openssd_pool_block *victim_block = NULL;
+	struct bio_vec *bv;
+	struct bio *issue_bio;
+	sector_t logical_addr, physical_addr;
+	int i, bv_i, size;
+
+	bio_for_each_segment(bv, bio, i) {
+		unsigned int idx;
+
+		if (bv->bv_len != PAGE_SIZE && bv->bv_offset != 0) {
+			printk("Doesn't yet support IO sizes other than system page size. (bv_len %u bv_offset %u)", bv->bv_len, bv->bv_offset);
+			return -ENOSPC;
+		}
+
+		logical_addr = (bio->bi_sector / (EXPOSED_PAGE_SIZE / 512)) + i;
+		physical_addr = os->map_ltop(os, logical_addr, &victim_block);
+
+		//DMINFO("Logical: %lu Physical: %lu OS Sector addr: %u Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
+		if (physical_addr == -1) {
+			DMERR("No more physical addresses");
+			return -ENOSPC;
+		}
+
+		idx = physical_addr % (FLASH_PAGE_SIZE * BLOCK_PAGE_COUNT / PAGE_SIZE);
+		victim_block->data[idx] = bv->bv_page;
+		size = atomic_inc_return(&victim_block->data_size);
+
+		//FIXME: Assumes 4K mapping
+		/* Writes whenever a flash page is full */
+		if (size % (FLASH_PAGE_SIZE / PAGE_SIZE) == 0) {
+			//FIXME: can fail
+			issue_bio = bio_alloc(GFP_NOIO, 2);
+			issue_bio->bi_bdev = bio->bi_bdev;
+			issue_bio->bi_sector = ((physical_addr - 1) * 8);
+			issue_bio->bi_end_io = openssd_end_write_bio;
+
+			for (bv_i = 0; bv_i < (FLASH_PAGE_SIZE / PAGE_SIZE); bv_i++) {
+				unsigned int idx_to_write = size - (FLASH_PAGE_SIZE / PAGE_SIZE) + bv_i;
+				bio_add_page(issue_bio, victim_block->data[idx_to_write], PAGE_SIZE, 0);
+			}
+			openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block));
+		}
+	}
+
+	/* do hint */
+	openssd_bio_hints(os, bio);
+
+	bio_endio(bio, 0);
+
+	return 0;
+}
+
+static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
+			             unsigned long arg)
+{
+    struct openssd *os;
+    struct dm_dev *dev;
+
+    os = (struct openssd *) ti->private;
+    dev = os->dev;
+
+    DMDEBUG("got ioctl %x\n", cmd);
+	switch (cmd) {
+	    case OPENSSD_IOCTL_ID:
+		    return 12345678; // TODO: anything else?
+	    case OPENSSD_IOCTL_SUBMIT_HINT:
+		    return openssd_user_hint_cmd(os, (hint_data_t __user *)arg);
+	    case OPENSSD_IOCTL_KERNEL_HINT:
+		    return openssd_kernel_hint_cmd(os, (hint_data_t*)arg);
+	    default:
+            // general ioctl to device
+            printk("generic ioctl. forward to device\n");
+	        return __blkdev_driver_ioctl(dev->bdev, dev->mode, cmd, arg);
+	}
+}
+
+static int openssd_endio(struct dm_target *ti,
+		      struct bio *bio, int err)
+{
+	struct per_bio_data *pb;
+	struct openssd_ap *ap;
+	struct openssd *os;
+	struct timeval end_tv;
+	unsigned long diff, dev_wait, total_wait = 0;
+
+	if (err) {
+		bio_endio(bio, err);
+		return err;
+	}
+
+	//pb = get_per_bio_data(bio);
+	if (pb->physical_addr == LTOP_EMPTY)
+		goto endio_done;
+
+	//ap = pb->ap;
+	//os = ap->parent;
+	
+	if (bio_data_dir(bio) == WRITE)
+		dev_wait = ap->t_write;
+	else
+		dev_wait = ap->t_read;
+
+	if (os->hint_flags & HINT_SWAP && bio_data_dir(bio) == WRITE) {
+		// TODO: consider dev_wait to be part of per_bio_data?
+		if(os->fast_page_block_map[os->trans_map[bio->bi_sector].addr % BLOCK_PAGE_COUNT])
+			dev_wait = TIMING_WRITE_FAST;
+		else
+			dev_wait = TIMING_WRITE_SLOW;
+	}
+/*
+	if (dev_wait) {
+		do_gettimeofday(&end_tv);
+		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
+		if (dev_wait > diff)
+			total_wait = dev_wait - diff;
+
+		if (total_wait > 50) {
+			udelay(total_wait);
+		}
+	}
+
+	// Remember that the IO is first officially finished from here 
+	if (bio_list_peek(&ap->waiting_bios))
+		queue_work(os->kbiod_wq, &ap->waiting_ws);
+	else
+		atomic_set(&ap->is_active, 0);
+*/
+endio_done:
+	return 0;
+}
+
+static int openssd_map(struct dm_target *ti, struct bio *bio)
+{
+	struct openssd *os = ti->private;
+//	struct openssd_ap *active_ap = NULL;
+//	struct per_bio_data *pb;
+
+	/* accepted bio, don't make new request */
+	bio->bi_bdev = os->dev->bdev;
+
+	if (bio_data_dir(bio) == WRITE)
+		openssd_handle_write(os, bio);
+	else {
+		openssd_handle_read(os, bio);
+	}
+
+//	pb = get_per_bio_data(bio);
+//	pb->ap = active_ap;
+
+	/* setup timings - remember overhead. */
+//	do_gettimeofday(&pb->start_tv);
+
+//	if (os->serialize_ap_access && atomic_read(&active_ap->is_active)) {
+//		spin_lock(&active_ap->waiting_lock);
+//		active_ap->io_delayed++;
+//		bio_list_add(&active_ap->waiting_bios, bio);
+//		spin_unlock(&active_ap->waiting_lock);
+//	} else {
+//		atomic_inc(&active_ap->is_active);
+//		generic_make_request(bio);
+//	}
+
+	// We allow counting to be semi-accurate as theres no locking for accounting.
+//	active_ap->io_accesses[bio_data_dir(bio)]++;
+
+	return DM_MAPIO_SUBMITTED;
+}
+
+static void openssd_status(struct dm_target *ti, status_type_t type,
+			 unsigned status_flags, char *result, unsigned maxlen) 
+{
+	struct openssd *os = ti->private;
+	struct openssd_ap *ap;
+	int i, sz = 0;
+
+	switch(type) {
+	case STATUSTYPE_INFO:
+		DMEMIT("Use table information");
+		break;
+	case STATUSTYPE_TABLE:
+		ssd_for_each_ap(os, ap, i) {
+			DMEMIT("Reads: %lu Writes: %lu Delayed: %lu",
+					ap->io_accesses[0], ap->io_accesses[1],
+					ap->io_delayed);
+		}
+		break;
+	}
+}
+
 static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 {
 	struct openssd_pool *pool;
@@ -670,16 +1212,16 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 
 	os->nr_aps_per_pool = APS_PER_POOL;
 	os->serialize_ap_access = SERIALIZE_AP_ACCESS;
+	os->hint_flags = DEPLOYED_HINTS;
 
 	// Simple round-robin strategy
 	atomic_set(&os->next_write_ap, -1);
-	os->map_ltop = openssd_map_ltop_rr;
 	os->lookup_ltop = openssd_lookup_ltop;
 
-	// hint related initialization
-#ifdef SWAP_HINT
-	os->map_ltop = openssd_map_swap_hint_ltop_rr; // swap hints
-#endif
+	if (os->hint_flags) 
+		os->map_ltop = openssd_map_swap_hint_ltop_rr;
+	else
+		os->map_ltop = openssd_map_ltop_rr;
 
 	spin_lock_init(&os->hintlock);
 	INIT_LIST_HEAD(&os->hintlist);
@@ -761,281 +1303,6 @@ err_pool:
 	return -ENOMEM;
 }
 
-fclass file_classify(struct bio_vec* bvec) {
-	fclass fc = FC_UNKNOWN;
-	char *sec_in_mem;
-	char byte[4];
-
-	if(!bvec || !bvec->bv_page){
-		DMINFO("can't kmap empty bvec->bv_page. kmap failed");
-		return fc;
-	}
-
-	byte[0] = 0x66;
-	byte[1] = 0x74;
-	byte[2] = 0x79;
-	byte[3] = 0x70;
-
-	sec_in_mem = kmap_atomic((bvec->bv_page) + bvec->bv_offset);
-
-	if(!sec_in_mem) {
-		DMERR("bvec->bv_page kmap failed");
-		return fc;
-	}
-	if(!memcmp(sec_in_mem+4, byte,4)) {
-		//hint_log("VIDEO classified");
-		DMINFO("VIDEO classified");
-		fc = FC_VIDEO_SLOW;
-	}
-
-	kunmap_atomic(sec_in_mem);
-	return fc;
-}
-
-// no real sending for now, in prototype just put it directly in FTL's hints list
-static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
-{
-	int i;
-	hint_info_t* hint_info;
-
-	DMINFO("first %s hint count=%d lba=%d fc=%d", CAST_TO_PAYLOAD(hint_data)->is_write?"WRITE":"READ",
-					CAST_TO_PAYLOAD(hint_data)->count,
-					INO_HINT_FROM_DATA(hint_data, 0).start_lba,
-					INO_HINT_FROM_DATA(hint_data, 0).fc);
-
-	if(os->map_ltop == openssd_map_ltop_rr){
-		goto send_done;
-	}
-
-	// insert to hints list
-	for(i=0;i<CAST_TO_PAYLOAD(hint_data)->count;i++){
-		hint_info = kmalloc(sizeof(hint_info_t), GFP_KERNEL);
-		if (hint_info == NULL) {
-			DMERR("can't allocate hint info");
-			kfree(hint_data);
-			return -ENOMEM;
-		}
-		memcpy(&hint_info->hint, &INO_HINT_FROM_DATA(hint_data, i), sizeof(ino_hint_t));
-		hint_info->processed = 0;
-		hint_info->is_write  = CAST_TO_PAYLOAD(hint_data)->is_write;
-		hint_info->is_swap   = CAST_TO_PAYLOAD(hint_data)->is_swap;
-
-		DMINFO("about to add hint_info to list. %s %s", (CAST_TO_PAYLOAD(hint_data)->is_swap)?"SWAP":"REGULAR", (CAST_TO_PAYLOAD(hint_data)->is_write)?"WRITE":"READ");
-
-		spin_lock(&os->hintlock);
-		list_add_tail(&hint_info->list_member, &os->hintlist);
-		spin_unlock(&os->hintlock);
-	}
-
-send_done:
-	kfree(hint_data);    
-	return 0;
-}
-
-/**
- * automatically extract hint from a bio, and send to target.
- * iterate all pages, look into inode. There are several cases:
- * 1) swap - stop and send hint on entire bio (assuming swap LBAs are not mixed with regular LBAs in one bio)
- * 2) read - iterate all pages and send hint_data composed of multiple hints, one for each inode number and
- *           relevant range of LBAs covered by a page
- * 3) write - check if a page is the first sector of a file, classify it and set in hint. rest same as read
- */
-static void openssd_bio_hints(struct openssd *os, struct bio *bio)
-{
-	hint_data_t *hint_data = NULL;
-	uint32_t lba = 0, bio_len = 0, hint_idx;
-	uint32_t sectors_count = 0;
-	struct page *bv_page = NULL;
-	struct address_space *mapping;
-	struct inode *host;
-	unsigned long prev_ino = -1, first_sector = -1;
-	unsigned ino = -1;
-	struct bio_vec *bvec;
-	fclass fc = FC_EMPTY;
-	int i, ret;
-	bool is_write = 0;
-	uint32_t sector_size = os->sector_size;
-
-    /* can classify only writes*/
-	switch(bio_rw(bio)) {
-		case READ:
-		case READA:
-			/* read/readahead*/
-			break;
-		case WRITE:
-			is_write = 1;
-			break;
-		default:
-			/* ? */
-			return;
-	}
-
-	// get lba and sector count
-	lba = bio->bi_sector;
-	sectors_count = bio->bi_size / sector_size;
-
-	/* allocate hint_data */
-	hint_data = kmalloc(sizeof(hint_data_t), GFP_ATOMIC);
-	if (hint_data == NULL) {
-		DMERR("hint_data_t kmalloc failed");  
-		return;
-	}
-
-	memset(hint_data, 0, sizeof(hint_data_t));
-	CAST_TO_PAYLOAD(hint_data)->lba = lba;
-	CAST_TO_PAYLOAD(hint_data)->sectors_count = sectors_count;
-	CAST_TO_PAYLOAD(hint_data)->is_write = is_write;
-	ino = -1;            
-	DMINFO("%s lba=%d sectors_count=%d", is_write?"WRITE":"READ", lba, sectors_count);
-#if 0
-	hint_log("free hint_data dont look in bvec. simply return");
-	kfree(hint_data);
-	return;
-#endif
-
-	bio_for_each_segment(bvec, bio, i) {
-		bv_page = bvec[0].bv_page;
-
-		if (bv_page && !PageSlab(bv_page)) {
-			// swap hint
-			if(PageSwapCache(bv_page)) {
-				DMINFO("swap bio");
-				// TODO - not tested
-				CAST_TO_PAYLOAD(hint_data)->is_swap = 1;
-
-				// for compatibility add one hint
-				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count,
-								0, lba, sectors_count, fc);
-				CAST_TO_PAYLOAD(hint_data)->count++;
-              break;
-		}
-
-			mapping = bv_page->mapping;
-//				continue;
-		if (mapping && ((unsigned long)mapping & PAGE_MAPPING_ANON) == 0) {
-			host = mapping->host;
-			if (!host) {
-				DMCRIT("page without mapping->host. shouldn't happen\n");
-				bio_len+= bvec[0].bv_len;
-				continue; // no host
-			}
-
-			prev_ino = ino;
-			ino = host->i_ino;
-
-			if(!host->i_sb || !host->i_sb->s_type || !host->i_sb->s_type->name){
-				DMINFO("not related to file system");
-				bio_len+= bvec[0].bv_len;
-				continue;
-			}
-
-			if(!ino) {
-				DMINFO("not inode related");
-				bio_len+= bvec[0].bv_len;
-				continue;
-			}
-			//if(bvec[0].bv_offset) 
-			//   DMINFO("bv_page->index %d offset %d len %d", bv_page->index, bvec[0].bv_offset, bvec[0].bv_len);
-
-			/* classify if we can.
-			 * can only classify writes to file's first sector */
-			fc = FC_EMPTY;
-			if (is_write && bv_page->index == 0 && bvec[0].bv_offset ==0) {
-				// should be first sector in file. classify
-				first_sector = lba + (bio_len / sector_size);
-				fc = file_classify(&bvec[0]); 
-			}
-
-			/* change previous hint, unless this is a new inode
-			   and then simply increment count in existing hint */
-			if(prev_ino == ino) {
-				hint_idx = CAST_TO_PAYLOAD(hint_data)->count-1;
-				if(INO_HINT_FROM_DATA(hint_data, hint_idx).ino != ino) {
-					DMERR("updating hint of wrong ino (ino=%u expected=%lu)", ino,
-						INO_HINT_FROM_DATA(hint_data, hint_idx).ino);            
-					bio_len+= bvec[0].bv_len;
-					continue;
-				}
-
-					INO_HINT_FROM_DATA(hint_data, hint_idx).count += bvec[0].bv_len / sector_size;
-					DMINFO("increase count for hint %u. new count=%u", 
-					hint_idx, INO_HINT_FROM_DATA(hint_data, hint_idx).count);
-					bio_len+= bvec[0].bv_len;
-					continue;
-				}
-
-				if(HINT_DATA_MAX_INOS == CAST_TO_PAYLOAD(hint_data)->count){
-					DMERR("too many inos in hint");
-					bio_len+= bvec[0].bv_len;
-					continue;
-				}
-
-				DMINFO("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u", 
-					is_write?"WRITE":"READ", ino, lba + (bio_len / sector_size), 
-					 (fc==FC_VIDEO_SLOW)?"VIDEO":(fc==FC_EMPTY)?"EMPTY":"UNKNOWN", 
-					 bvec[0].bv_len / sector_size, CAST_TO_PAYLOAD(hint_data)->count+1);
-
-				// add new hint to hint_data. lba count=bvec[0].bv_len / sector_size, will add more later on
-				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count, 
-					ino, lba + (bio_len / sector_size), bvec[0].bv_len / sector_size, fc);
-				CAST_TO_PAYLOAD(hint_data)->count++;
-			}
-		}
-
-		// increment len
-		bio_len+= bvec[0].bv_len;
-	}
-#if 0
-	// TESTING
-	// dont send hints yet. just print whatever we got, and free
-	hint_log("send nothing free hint_data and simply return.");
-	kfree(hint_data);
-	hint_log("return");
-	return;
-#endif
-	// hint empty - return.
-	// Note: not error, maybe we're not doing file-related/swap I/O
-	if(CAST_TO_PAYLOAD(hint_data)->count==0){
-		//hint_log("request with no file data");
-		kfree(hint_data);
-		return;
-	}
-
-	/* non-empty hint_data, send to device */
-	//hint_log("hint count=%u. send to hint device", CAST_TO_PAYLOAD(hint_data)->count);
-	ret = openssd_send_hint(os, hint_data);
-
-	if (ret != 0) {
-		DMINFO("openssd_send_hint error %d", ret);
-		return;
-	}
-}
-
-void openssd_ctr_swap_hint(struct openssd *os){
-	int i;
-
-	for(i=0;i<BLOCK_PAGE_COUNT;i++) os->fast_page_block_map[i] = 0;
-
-	// first four are fast
-	for(i=0;i<4;i++){
-		os->fast_page_block_map[i] = 1;
-	}
-
-	// in between, its slow-slow-fast-fast-slow-slow...
-	for(i=6;i<BLOCK_PAGE_COUNT-4;){
-		os->fast_page_block_map[i] = os->fast_page_block_map[i+1] = 1;
-		i+=4;
-	}
-}
-
-/*----------------------------------------------------------------
- * OpenSSD target methods
- *
- * ctr - Constructor
- * dtr - Destructor
- * map - Maps and execute a given IO.
- *--------------------------------------------------------------*/
-
 /*
  * Accepts an OpenSSD-backed block-device. The OpenSSD device should run the
  * corresponding physical firmware that exports the flash as physical without any
@@ -1100,9 +1367,8 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		goto err_dev_lookup;
 
 	/* Relevant hinting */
-#ifdef SWAP_HINT
-	openssd_ctr_swap_hint(os);
-#endif
+	if (os->hint_flags & HINT_SWAP)
+		openssd_ctr_swap_hint(os);
 
 	DMINFO("allocated %lu physical pages (%lu KB)", os->nr_pages, os->nr_pages * os->sector_size / 1024);
 	DMINFO("successful loaded");
@@ -1157,285 +1423,7 @@ static void openssd_dtr(struct dm_target *ti)
 
 	kfree(os);
 
-	DMINFO("dm-openssd successful unload");
-}
-
-static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap)
-{
-
-	submit_bio(rw, bio);
-}
-
-static void openssd_end_read_bio(struct bio *bio, int error)
-{
-}
-
-static int openssd_handle_read(struct openssd *os, struct bio *bio)
-{
-	struct bio *exec_bio, *split_bio;
-	struct bio_pair *bp;
-	struct bio_vec *bv;
-	struct openssd_addr *phys;
-	sector_t log_addr;
-	int i;
-
-	if (bio_sectors(bio) > NR_PHY_IN_LOG) {
-//		printk("split\n");
-		split_bio = bio;
-		bio_for_each_segment(bv, bio, i) {
-			bp = bio_split(split_bio, NR_PHY_IN_LOG);
-
-			exec_bio = &bp->bio1;
-			split_bio = &bp->bio2;
-
-			log_addr = exec_bio->bi_sector / NR_PHY_IN_LOG;
-			phys = os->lookup_ltop(os, log_addr);
-
-			exec_bio->bi_sector = phys->addr;
-
-//			printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
-			openssd_submit_bio(READ, exec_bio, block_to_ap(os, phys->block));
-		}
-	} else {
-		log_addr = bio->bi_sector / NR_PHY_IN_LOG;
-		phys = os->lookup_ltop(os, log_addr);
-
-//		printk("bio addr: %lu bi_sectors: %u\n", bio->bi_sector, bio_sectors(bio));
-
-		openssd_submit_bio(READ, bio, block_to_ap(os, phys->block));
-	}
-
-	return 0;
-}
-
-static int openssd_ap_must_flush(struct openssd_ap *ap)
-{
-	return ap->cur->next_page == BLOCK_PAGE_COUNT;
-}
-
-static void openssd_end_write_bio(struct bio *bio, int error)
-{
-	/* FIXME: Implement error handling of writes */
-}
-
-static int openssd_handle_write(struct openssd *os, struct bio *bio)
-{
-	struct openssd_pool_block *victim_block = NULL;
-	struct bio_vec *bv;
-	struct bio *issue_bio;
-	sector_t logical_addr, physical_addr;
-	int i, bv_i, size;
-
-	bio_for_each_segment(bv, bio, i) {
-		unsigned int idx;
-
-		if (bv->bv_len != PAGE_SIZE && bv->bv_offset != 0) {
-			printk("Doesn't yet support IO sizes other than system page size. (bv_len %u bv_offset %u)", bv->bv_len, bv->bv_offset);
-			return -ENOSPC;
-		}
-
-		logical_addr = (bio->bi_sector / (EXPOSED_PAGE_SIZE / 512)) + i;
-		physical_addr = os->map_ltop(os, logical_addr, &victim_block);
-
-		//DMINFO("Logical: %lu Physical: %lu OS Sector addr: %u Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
-		if (physical_addr == -1) {
-			DMERR("No more physical addresses");
-			return -ENOSPC;
-		}
-
-		idx = physical_addr % (FLASH_PAGE_SIZE * BLOCK_PAGE_COUNT / PAGE_SIZE);
-		victim_block->data[idx] = bv->bv_page;
-		size = atomic_inc_return(&victim_block->data_size);
-
-		//FIXME: Assumes 4K mapping
-		/* Writes whenever a flash page is full */
-		if (size % (FLASH_PAGE_SIZE / PAGE_SIZE) == 0) {
-			//FIXME: can fail
-			issue_bio = bio_alloc(GFP_NOIO, 2);
-			issue_bio->bi_bdev = bio->bi_bdev;
-			issue_bio->bi_sector = ((physical_addr - 1) * 8);
-			issue_bio->bi_end_io = openssd_end_write_bio;
-
-			for (bv_i = 0; bv_i < (FLASH_PAGE_SIZE / PAGE_SIZE); bv_i++) {
-				unsigned int idx_to_write = size - (FLASH_PAGE_SIZE / PAGE_SIZE) + bv_i;
-				bio_add_page(issue_bio, victim_block->data[idx_to_write], PAGE_SIZE, 0);
-			}
-			openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block));
-		}
-	}
-
-	/* do hint */
-	openssd_bio_hints(os, bio);
-
-	bio_endio(bio, 0);
-
-	return 0;
-}
-
-static int openssd_map(struct dm_target *ti, struct bio *bio)
-{
-	struct openssd *os = ti->private;
-//	struct openssd_ap *active_ap = NULL;
-//	struct per_bio_data *pb;
-
-	/* accepted bio, don't make new request */
-	bio->bi_bdev = os->dev->bdev;
-
-	if (bio_data_dir(bio) == WRITE)
-		openssd_handle_write(os, bio);
-	else {
-		openssd_handle_read(os, bio);
-	}
-
-//	pb = get_per_bio_data(bio);
-//	pb->ap = active_ap;
-
-	/* setup timings - remember overhead. */
-//	do_gettimeofday(&pb->start_tv);
-
-//	if (os->serialize_ap_access && atomic_read(&active_ap->is_active)) {
-//		spin_lock(&active_ap->waiting_lock);
-//		active_ap->io_delayed++;
-//		bio_list_add(&active_ap->waiting_bios, bio);
-//		spin_unlock(&active_ap->waiting_lock);
-//	} else {
-//		atomic_inc(&active_ap->is_active);
-//		generic_make_request(bio);
-//	}
-
-	// We allow counting to be semi-accurate as theres no locking for accounting.
-//	active_ap->io_accesses[bio_data_dir(bio)]++;
-
-	return DM_MAPIO_SUBMITTED;
-}
-
-static int openssd_user_hint_cmd(struct openssd *os, hint_data_t __user *uhint)
-{
-	hint_data_t* hint_data;
-	DMINFO("send user hint");
-
-	/* allocate hint_data */
-	hint_data = kmalloc(sizeof(hint_data_t), GFP_KERNEL);
-	if (hint_data == NULL) {
-		DMERR("hint_data_t kmalloc failed");  
-		return -ENOMEM;
-	}
-
-    // copy hint data from user space
-	if (copy_from_user(hint_data, uhint, sizeof(hint_data_t)))
-		return -EFAULT;
-
-	// send hint to device
-	return openssd_send_hint(os, hint_data);
-}
-
-static int openssd_kernel_hint_cmd(struct openssd *os, hint_data_t *khint)
-{
-    // send hint to device
-    // TODO: do we need to free khint here? or is it freed by block layer?
-    return openssd_send_hint(os, khint);
-}
-
-static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
-			             unsigned long arg)
-{
-    struct openssd *os;
-    struct dm_dev *dev;
-
-    os = (struct openssd *) ti->private;
-    dev = os->dev;
-
-    DMDEBUG("got ioctl %x\n", cmd);
-	switch (cmd) {
-	    case OPENSSD_IOCTL_ID:
-		    return 12345678; // TODO: anything else?
-	    case OPENSSD_IOCTL_SUBMIT_HINT:
-		    return openssd_user_hint_cmd(os, (hint_data_t __user *)arg);
-	    case OPENSSD_IOCTL_KERNEL_HINT:
-		    return openssd_kernel_hint_cmd(os, (hint_data_t*)arg);
-	    default:
-            // general ioctl to device
-            printk("generic ioctl. forward to device\n");
-	        return __blkdev_driver_ioctl(dev->bdev, dev->mode, cmd, arg);
-	}
-}
-
-static int openssd_endio(struct dm_target *ti,
-		      struct bio *bio, int err)
-{
-	struct per_bio_data *pb;
-	struct openssd_ap *ap;
-	struct openssd *os;
-	struct timeval end_tv;
-	unsigned long diff, dev_wait, total_wait = 0;
-
-	if (err) {
-		bio_endio(bio, err);
-		return err;
-	}
-
-	//pb = get_per_bio_data(bio);
-	if (pb->physical_addr == LTOP_EMPTY)
-		goto endio_done;
-
-	//ap = pb->ap;
-	//os = ap->parent;
-	
-	if (bio_data_dir(bio) == WRITE)
-		dev_wait = ap->t_write;
-	else
-		dev_wait = ap->t_read;
-
-#ifdef SWAP_HINT
-	// TODO: consider dev_wait to be part of per_bio_data?
-	if (bio_data_dir(bio) == WRITE){
-		if(os->fast_page_block_map[os->trans_map[bio->bi_sector].addr % BLOCK_PAGE_COUNT])
-			dev_wait = TIMING_WRITE_FAST;
-		else
-			dev_wait = TIMING_WRITE_SLOW;
-	}
-#endif
-/*
-	if (dev_wait) {
-		do_gettimeofday(&end_tv);
-		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
-		if (dev_wait > diff)
-			total_wait = dev_wait - diff;
-
-		if (total_wait > 50) {
-			udelay(total_wait);
-		}
-	}
-
-	// Remember that the IO is first officially finished from here 
-	if (bio_list_peek(&ap->waiting_bios))
-		queue_work(os->kbiod_wq, &ap->waiting_ws);
-	else
-		atomic_set(&ap->is_active, 0);
-*/
-endio_done:
-	return 0;
-}
-
-static void openssd_status(struct dm_target *ti, status_type_t type,
-			 unsigned status_flags, char *result, unsigned maxlen) 
-{
-	struct openssd *os = ti->private;
-	struct openssd_ap *ap;
-	int i, sz = 0;
-
-	switch(type) {
-	case STATUSTYPE_INFO:
-		DMEMIT("Use table information");
-		break;
-	case STATUSTYPE_TABLE:
-		ssd_for_each_ap(os, ap, i) {
-			DMEMIT("Reads: %lu Writes: %lu Delayed: %lu",
-					ap->io_accesses[0], ap->io_accesses[1],
-					ap->io_delayed);
-		}
-		break;
-	}
+	DMINFO("dm-openssd successfully unloaded");
 }
 
 static struct target_type openssd_target = {

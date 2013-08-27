@@ -32,6 +32,7 @@
 #include <linux/time.h>
 #include <linux/workqueue.h>
 #include <linux/kthread.h>
+#include <linux/mempool.h>
 
 #define DM_MSG_PREFIX "openssd"
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
@@ -172,7 +173,7 @@ enum deploy_hint_flags {
 };
 
 /* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS (HINT_SWAP | HINT_IOCTL)
+#define DEPLOYED_HINTS (HINT_NONE) /*HINT_SWAP | HINT_IOCTL)*/
 
 /* Main structure */
 struct openssd {
@@ -203,6 +204,8 @@ struct openssd {
 
 	/* Append points */
 	struct openssd_ap *aps;
+
+	mempool_t *per_bio_pool;
 
 	int nr_pools;
 	int nr_aps;
@@ -236,17 +239,48 @@ struct openssd {
 	struct list_head hintlist;
 };
 
+static struct kmem_cache *_per_bio_cache;
+
 struct per_bio_data {
 	struct openssd_ap *ap;
 	struct timeval start_tv;
 	sector_t physical_addr;
+
+	// Hook up for our overwritten bio fields
+	bio_end_io_t *bi_end_io; 
+	void *bi_private;
 };
 
-static struct per_bio_data *get_per_bio_data(struct bio *bio) 
+static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
-	struct per_bio_data *pb = dm_per_bio_data(bio, sizeof(struct per_bio_data));
-	BUG_ON(!pb);
+	return (struct per_bio_data *) bio->bi_private;
+}
+
+static struct per_bio_data *alloc_decorate_per_bio_data(struct openssd *os, struct bio *bio)
+{
+	struct per_bio_data *pb = mempool_alloc(os->per_bio_pool, GFP_NOIO);
+
+	if (!pb)
+		return NULL;
+
+	pb->bi_end_io = bio->bi_end_io;
+	pb->bi_private = bio->bi_private;
+
+	bio->bi_private = pb;
+
 	return pb;
+}
+
+static void dedecorate_bio(struct per_bio_data *pb, struct bio *bio)
+{
+	bio->bi_private = pb->bi_private;
+	bio->bi_end_io = pb->bi_end_io;
+}
+
+static void free_per_bio_data(struct openssd *os, struct bio *bio)
+{
+	struct per_bio_data *pb = bio->bi_private;
+	mempool_free(pb, os->per_bio_pool);
 }
 
 /* the block with highest number of invalid pages, will be in the beginning of the list */
@@ -651,6 +685,7 @@ static void openssd_bio_hints(struct openssd *os, struct bio *bio)
 	int i, ret;
 	bool is_write = 0;
 
+	return;
 	/* can classify only writes*/
 	switch(bio_rw(bio)) {
 		case READ:
@@ -676,9 +711,9 @@ static void openssd_bio_hints(struct openssd *os, struct bio *bio)
 	CAST_TO_PAYLOAD(hint_data)->lba = lba;
 	CAST_TO_PAYLOAD(hint_data)->sectors_count = sectors_count;
 	CAST_TO_PAYLOAD(hint_data)->is_write = is_write;
-	ino = -1;            
-	DMINFO("%s lba=%d sectors_count=%d", 
-			is_write ? "WRITE" : "READ", 
+	ino = -1;
+	DMINFO("%s lba=%d sectors_count=%d",
+			is_write ? "WRITE" : "READ",
 			lba, sectors_count);
 #if 0
 	hint_log("free hint_data dont look in bvec. simply return");
@@ -959,14 +994,109 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 	return physical_addr;
 }
 
-static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap)
+static void openssd_endio(struct bio *bio, int err)
 {
+	struct per_bio_data *pb;
+	struct openssd_ap *ap;
+	struct openssd *os;
+	struct timeval end_tv;
+	unsigned long diff, dev_wait, total_wait = 0;
 
-	submit_bio(rw, bio);
+	if (err) {
+		bio_endio(bio, err);
+		return;
+	}
+
+	pb = get_per_bio_data(bio);
+
+	ap = pb->ap;
+	os = ap->parent;
+
+	if (pb->physical_addr == LTOP_EMPTY)
+		goto done;
+
+	if (bio_data_dir(bio) == WRITE)
+		dev_wait = ap->t_write;
+	else
+		dev_wait = ap->t_read;
+
+	if ((os->hint_flags & HINT_SWAP) && bio_data_dir(bio) == WRITE) {
+		// TODO: consider dev_wait to be part of per_bio_data?
+		if(os->fast_page_block_map[os->trans_map[bio->bi_sector].addr % BLOCK_PAGE_COUNT])
+			dev_wait = TIMING_WRITE_FAST;
+		else
+			dev_wait = TIMING_WRITE_SLOW;
+	}
+
+	if (dev_wait) {
+		do_gettimeofday(&end_tv);
+		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
+		if (dev_wait > diff)
+			total_wait = dev_wait - diff;
+
+		if (total_wait > 50) {
+			udelay(total_wait);
+		}
+	}
+
+	// Remember that the IO is first officially finished from here 
+	if (bio_list_peek(&ap->waiting_bios))
+		queue_work(os->kbiod_wq, &ap->waiting_ws);
+	else
+		atomic_set(&ap->is_active, 0);
+
+done:
+	dedecorate_bio(pb, bio);
+
+	if (bio->bi_end_io)
+		bio->bi_end_io(bio, err);
+
+	free_per_bio_data(os, bio);
 }
 
-static void openssd_end_read_bio(struct bio *bio, int error)
+static void openssd_end_read_bio(struct bio *bio, int err)
 {
+	/* FIXME: Implement error handling of reads 
+	 * Remember that bio->bi_end_io is overwritten during bio_split() 
+	 */
+	openssd_endio(bio, err);
+}
+
+static void openssd_end_write_bio(struct bio *bio, int err)
+{
+	/* FIXME: Implement error handling of writes */
+	openssd_endio(bio, err);
+}
+
+static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap)
+{
+	struct openssd *os = ap->parent;
+	struct per_bio_data *pb;
+
+	pb = alloc_decorate_per_bio_data(os, bio);
+	pb->ap = ap;
+
+	if (rw == WRITE)
+		bio->bi_end_io = openssd_end_write_bio;
+	else
+		bio->bi_end_io = openssd_end_read_bio;
+
+	/* setup timings - remember overhead. */
+	do_gettimeofday(&pb->start_tv);
+
+	if (os->serialize_ap_access && atomic_read(&ap->is_active)) {
+		spin_lock(&ap->waiting_lock);
+		ap->io_delayed++;
+		bio_list_add(&ap->waiting_bios, bio);
+		spin_unlock(&ap->waiting_lock);
+	} else {
+		atomic_inc(&ap->is_active);
+	}
+
+	// We allow counting to be semi-accurate as theres no locking for accounting.
+	ap->io_accesses[bio_data_dir(bio)]++;
+
+	submit_bio(rw, bio);
 }
 
 static int openssd_handle_read(struct openssd *os, struct bio *bio)
@@ -1007,11 +1137,6 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 	return 0;
 }
 
-static void openssd_end_write_bio(struct bio *bio, int error)
-{
-	/* FIXME: Implement error handling of writes */
-}
-
 static int openssd_handle_write(struct openssd *os, struct bio *bio)
 {
 	struct openssd_pool_block *victim_block = NULL;
@@ -1048,7 +1173,6 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 			issue_bio = bio_alloc(GFP_NOIO, 2);
 			issue_bio->bi_bdev = bio->bi_bdev;
 			issue_bio->bi_sector = ((physical_addr - 1) * 8);
-			issue_bio->bi_end_io = openssd_end_write_bio;
 
 			for (bv_i = 0; bv_i < (FLASH_PAGE_SIZE / PAGE_SIZE); bv_i++) {
 				unsigned int idx_to_write = size - (FLASH_PAGE_SIZE / PAGE_SIZE) + bv_i;
@@ -1090,94 +1214,16 @@ static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
 	}
 }
 
-static int openssd_endio(struct dm_target *ti,
-		      struct bio *bio, int err)
-{
-	struct per_bio_data *pb;
-	struct openssd_ap *ap;
-	struct openssd *os;
-	struct timeval end_tv;
-	unsigned long diff, dev_wait, total_wait = 0;
-
-	if (err) {
-		bio_endio(bio, err);
-		return err;
-	}
-
-	//pb = get_per_bio_data(bio);
-	if (pb->physical_addr == LTOP_EMPTY)
-		goto endio_done;
-
-	//ap = pb->ap;
-	//os = ap->parent;
-	
-	if (bio_data_dir(bio) == WRITE)
-		dev_wait = ap->t_write;
-	else
-		dev_wait = ap->t_read;
-
-	if (os->hint_flags & HINT_SWAP && bio_data_dir(bio) == WRITE) {
-		// TODO: consider dev_wait to be part of per_bio_data?
-		if(os->fast_page_block_map[os->trans_map[bio->bi_sector].addr % BLOCK_PAGE_COUNT])
-			dev_wait = TIMING_WRITE_FAST;
-		else
-			dev_wait = TIMING_WRITE_SLOW;
-	}
-/*
-	if (dev_wait) {
-		do_gettimeofday(&end_tv);
-		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
-		if (dev_wait > diff)
-			total_wait = dev_wait - diff;
-
-		if (total_wait > 50) {
-			udelay(total_wait);
-		}
-	}
-
-	// Remember that the IO is first officially finished from here 
-	if (bio_list_peek(&ap->waiting_bios))
-		queue_work(os->kbiod_wq, &ap->waiting_ws);
-	else
-		atomic_set(&ap->is_active, 0);
-*/
-endio_done:
-	return 0;
-}
-
 static int openssd_map(struct dm_target *ti, struct bio *bio)
 {
 	struct openssd *os = ti->private;
-//	struct openssd_ap *active_ap = NULL;
-//	struct per_bio_data *pb;
 
-	/* accepted bio, don't make new request */
 	bio->bi_bdev = os->dev->bdev;
 
 	if (bio_data_dir(bio) == WRITE)
 		openssd_handle_write(os, bio);
-	else {
+	else
 		openssd_handle_read(os, bio);
-	}
-
-//	pb = get_per_bio_data(bio);
-//	pb->ap = active_ap;
-
-	/* setup timings - remember overhead. */
-//	do_gettimeofday(&pb->start_tv);
-
-//	if (os->serialize_ap_access && atomic_read(&active_ap->is_active)) {
-//		spin_lock(&active_ap->waiting_lock);
-//		active_ap->io_delayed++;
-//		bio_list_add(&active_ap->waiting_bios, bio);
-//		spin_unlock(&active_ap->waiting_lock);
-//	} else {
-//		atomic_inc(&active_ap->is_active);
-//		generic_make_request(bio);
-//	}
-
-	// We allow counting to be semi-accurate as theres no locking for accounting.
-//	active_ap->io_accesses[bio_data_dir(bio)]++;
 
 	return DM_MAPIO_SUBMITTED;
 }
@@ -1212,7 +1258,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 
 	os->nr_aps_per_pool = APS_PER_POOL;
 	os->serialize_ap_access = SERIALIZE_AP_ACCESS;
-	os->hint_flags = DEPLOYED_HINTS;
+	os->hint_flags = 0; //DEPLOYED_HINTS;
 
 	// Simple round-robin strategy
 	atomic_set(&os->next_write_ap, -1);
@@ -1339,12 +1385,16 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	if (!os->rev_trans_map)
 		goto err_rev_trans_map;
 
-	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &os->dev))
+	os->per_bio_pool = mempool_create_slab_pool(16, _per_bio_cache);
+	if (!os->per_bio_pool)
 		goto err_dev_lookup;
+
+	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &os->dev))
+		goto err_per_bio_pool;
 
 	if (bdev_physical_block_size(os->dev->bdev) > EXPOSED_PAGE_SIZE) {
 		ti->error = "dm-openssd: Got bad sector size. Device sector size is larged then the exposed";
-		goto err_dev_lookup;
+		goto err_per_bio_pool;
 	}
 	os->sector_size = EXPOSED_PAGE_SIZE;
 
@@ -1356,15 +1406,13 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	os->ti = ti;
 	ti->private = os;
 
-	ti->per_bio_data_size = sizeof(struct per_bio_data);
-
 	/* Initialize pools. */
 	openssd_pool_init(os, ti);
 
 	// FIXME: Clean up pool init on failure.
 	os->kt_openssd = kthread_run(openssd_kthread, os, "kopenssd");
 	if (!os->kt_openssd)
-		goto err_dev_lookup;
+		goto err_per_bio_pool;
 
 	/* Relevant hinting */
 	if (os->hint_flags & HINT_SWAP)
@@ -1374,7 +1422,8 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	DMINFO("successful loaded");
 
 	return 0;
-
+err_per_bio_pool:
+	mempool_destroy(os->per_bio_pool);
 err_dev_lookup:
 	vfree(os->rev_trans_map);
 err_rev_trans_map:
@@ -1412,6 +1461,7 @@ static void openssd_dtr(struct dm_target *ti)
 	vfree(os->rev_trans_map);
 
 	destroy_workqueue(os->kbiod_wq);
+	mempool_destroy(os->per_bio_pool);
 
 	spin_lock(&os->hintlock);
 	list_for_each_entry_safe(hint_info, next_hint_info, &os->hintlist, list_member) {
@@ -1434,21 +1484,22 @@ static struct target_type openssd_target = {
 	.dtr = openssd_dtr,
 	.map = openssd_map,
 	.ioctl = openssd_ioctl,
-	.end_io = openssd_endio,
 	.status = openssd_status,
 };
 
 static int __init dm_openssd_init(void)
 {
-	int r;
+	_per_bio_cache = kmem_cache_create("openssd_per_bio_cache",
+				sizeof(struct per_bio_data), 0, 0, NULL); 
+	if (!_per_bio_cache)
+		return -ENOMEM;
 
-	r = dm_register_target(&openssd_target);
-
-	return r;
+	return dm_register_target(&openssd_target);
 }
 
 static void dm_openssd_exit(void)
 {
+	kmem_cache_destroy(_per_bio_cache);
 	dm_unregister_target(&openssd_target);
 }
 

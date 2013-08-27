@@ -33,7 +33,7 @@
 #include <linux/workqueue.h>
 #include <linux/kthread.h>
 
-#define DM_MSG_PREFIX "openssd hint mapper"
+#define DM_MSG_PREFIX "openssd"
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
 						  a pool is serial (NAND flash / PCM / etc.) */
 #define SERIALIZE_AP_ACCESS 1 /* If enabled, we delay bios on each ap to run serialized. */

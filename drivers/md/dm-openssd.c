@@ -108,7 +108,7 @@ struct openssd_pool_block {
 	struct list_head list;
 	struct list_head prio;
 
-	struct page **data;
+	struct page *data;
 	atomic_t data_size; /* data pages inserted into data variable */
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
 };
@@ -359,9 +359,10 @@ static void openssd_update_mapping(struct openssd *os,  sector_t l_addr,
 static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool)
 {
 	struct openssd_pool_block *block = NULL;
-	void *data;
+	struct page *data;
+	unsigned int order = ffs(NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT) - 1;
 
-	data = kmalloc((FLASH_PAGE_SIZE * BLOCK_PAGE_COUNT) / PAGE_SIZE * sizeof(struct page *), GFP_NOIO);
+	data = alloc_pages(GFP_NOIO, order);
 
 	if (!data)
 		return NULL;
@@ -371,6 +372,7 @@ static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *po
 	if (list_empty(&pool->free_list)) 
 	{
 		spin_unlock(&pool->lock);
+		__free_pages(data, order);
 		return NULL;
 	}
 
@@ -389,6 +391,8 @@ static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *po
 /* requires pool->lock taken */
 static inline void openssd_reset_block(struct openssd_pool_block *block)
 {
+	unsigned int order = ffs(NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT) - 1;
+
 	BUG_ON(!block);
 
 	spin_lock(&block->lock);
@@ -398,7 +402,8 @@ static inline void openssd_reset_block(struct openssd_pool_block *block)
 	block->is_full = false;
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
-	kfree(block->data);
+	if (block->data)
+		__free_pages(block->data, order);
 	spin_unlock(&block->lock);
 }
 
@@ -1163,6 +1168,7 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 	struct bio *issue_bio;
 	sector_t logical_addr, physical_addr;
 	int i, bv_i, size;
+	void *src_p, *dst_p;
 
 	bio_for_each_segment(bv, bio, i) {
 		unsigned int idx;
@@ -1181,21 +1187,28 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 			return -ENOSPC;
 		}
 
-		idx = physical_addr % (FLASH_PAGE_SIZE * BLOCK_PAGE_COUNT / PAGE_SIZE);
-		victim_block->data[idx] = bv->bv_page;
+		idx = physical_addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
+		src_p = kmap_atomic(bv->bv_page);
+		dst_p = kmap_atomic(&victim_block->data[idx]);
+
+		memcpy(dst_p, src_p, bv->bv_len);
+
+		kunmap_atomic(dst_p);
+		kunmap_atomic(src_p);
+
 		size = atomic_inc_return(&victim_block->data_size);
 
 		//FIXME: Assumes 4K mapping
 		/* Writes whenever a flash page is full */
-		if (size % (FLASH_PAGE_SIZE / PAGE_SIZE) == 0) {
+		if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0) {
 			//FIXME: can fail
 			issue_bio = bio_alloc(GFP_NOIO, 2);
 			issue_bio->bi_bdev = bio->bi_bdev;
 			issue_bio->bi_sector = ((physical_addr - 1) * 8);
 
-			for (bv_i = 0; bv_i < (FLASH_PAGE_SIZE / PAGE_SIZE); bv_i++) {
-				unsigned int idx_to_write = size - (FLASH_PAGE_SIZE / PAGE_SIZE) + bv_i;
-				bio_add_page(issue_bio, victim_block->data[idx_to_write], PAGE_SIZE, 0);
+			for (bv_i = 0; bv_i < NR_HOST_PAGES_IN_FLASH_PAGE; bv_i++) {
+				unsigned int idx_to_write = size - NR_HOST_PAGES_IN_FLASH_PAGE + bv_i;
+				bio_add_page(issue_bio, &victim_block->data[idx_to_write], PAGE_SIZE, 0);
 			}
 			openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block));
 		}

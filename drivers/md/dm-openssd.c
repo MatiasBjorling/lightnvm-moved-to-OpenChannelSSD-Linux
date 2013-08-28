@@ -422,12 +422,12 @@ static void openssd_pool_put_block(struct openssd_pool_block *block)
 
 static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 {
-	sector_t addr;
+	sector_t addr = -1;
 
 	spin_lock(&block->lock);
 
 	if (block->next_page + block->next_offset == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)
-		return -1;
+		goto get_done;
 
 	/* If there is multiple host pages within a flash page, we add the 
 	 * the offset to the address, instead of requesting a new page
@@ -443,6 +443,7 @@ static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
 		block->is_full = true;
 
+get_done:
 	spin_unlock(&block->lock);
 	return addr;
 }

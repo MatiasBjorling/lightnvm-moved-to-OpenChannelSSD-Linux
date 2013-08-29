@@ -297,7 +297,7 @@ static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_h
 
 static inline sector_t block_to_addr(struct openssd_pool_block *block)
 {
-	return (block->id * BLOCK_PAGE_COUNT);
+	return (block->id * BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE);
 }
 
 static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
@@ -431,18 +431,19 @@ static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 
 	spin_lock(&block->lock);
 
-	if (block->next_page + block->next_offset == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)
+	if ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) {
 		goto get_done;
+	}
 
 	/* If there is multiple host pages within a flash page, we add the 
 	 * the offset to the address, instead of requesting a new page
 	 * from the physical block */
-	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE - 1) {
+	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
 		block->next_offset = 0;
 		block->next_page++;
 	}
 
-	addr = block_to_addr(block) + block->next_page + block->next_offset;
+	addr = (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
 	block->next_offset++;
 
 	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
@@ -928,7 +929,7 @@ static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, s
 	}
 
 	physical_addr = block_to_addr(block) + page_id;
-	DMINFO("logical_addr=%ld physical_addr=%ld (page_id=%d)", logical_addr, physical_addr, page_id);
+	//DMINFO("logical_addr=%ld physical_addr=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr, page_id, block->id);
 
 	openssd_update_mapping(os, logical_addr, physical_addr, block);
 

@@ -278,10 +278,9 @@ static void dedecorate_bio(struct per_bio_data *pb, struct bio *bio)
 	bio->bi_end_io = pb->bi_end_io;
 }
 
-static void free_per_bio_data(struct openssd *os, struct bio *bio)
+static void free_per_bio_data(struct openssd *os, struct per_bio_data *pb)
 {
-	struct per_bio_data *pb = bio->bi_private;
-	mempool_free(pb, os->per_bio_pool);
+	mempool_free(&pb, os->per_bio_pool);
 }
 
 /* the block with highest number of invalid pages, will be in the beginning of the list */
@@ -1062,7 +1061,7 @@ done:
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
-	free_per_bio_data(os, bio);
+	free_per_bio_data(os, pb);
 }
 
 static void openssd_end_read_bio(struct bio *bio, int err)

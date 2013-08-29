@@ -37,7 +37,7 @@
 #define DM_MSG_PREFIX "openssd"
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
 						  a pool is serial (NAND flash / PCM / etc.) */
-#define SERIALIZE_AP_ACCESS 1 /* If enabled, we delay bios on each ap to run serialized. */
+#define SERIALIZE_AP_ACCESS 0 /* If enabled, we delay bios on each ap to run serialized. */
 #define LTOP_EMPTY -1
 
 /* Sleep timings before simulating device specific storage (in us)*/

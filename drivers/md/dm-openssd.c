@@ -1018,11 +1018,6 @@ static void openssd_endio(struct bio *bio, int err)
 	struct timeval end_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
 
-	if (err) {
-		bio_endio(bio, err);
-		return;
-	}
-
 	pb = get_per_bio_data(bio);
 
 	ap = pb->ap;

@@ -97,7 +97,8 @@ struct openssd_pool_block {
 		unsigned char next_offset; /* if a flash page can have multiple host pages, 
 									   fill up the flash page before going to the next 
 									   writable flash page */
-		unsigned int nr_invalid_pages;
+		unsigned int nr_invalid_pages; /* number of pages that are invalid, with respect to host page size */
+		unsigned long invalid_pages[NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT / BITS_PER_LONG];
 		bool is_full;
 
 		/* no need to sync. Move down if it overflow the cacheline */
@@ -327,6 +328,7 @@ static void openssd_update_mapping(struct openssd *os,  sector_t l_addr,
 						   sector_t p_addr, struct openssd_pool_block *p_block)
 {
 	struct openssd_addr *l;
+	unsigned int page_offset;
 
 	if(l_addr >= os->nr_pages || p_addr >= os->nr_pages){
 		DMERR("update_mapping: illegal address l_addr %ld p_addr %ld", l_addr, p_addr);
@@ -337,7 +339,9 @@ static void openssd_update_mapping(struct openssd *os,  sector_t l_addr,
 
 	l = &os->trans_map[l_addr];
 	if (l->block) {
-		BUG_ON(l->block->nr_invalid_pages == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE);
+		page_offset = l->addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
+		if (test_and_set_bit(page_offset, l->block->invalid_pages))
+			WARN_ON(true);
 		l->block->nr_invalid_pages++;
 	}
 
@@ -402,8 +406,12 @@ static inline void openssd_reset_block(struct openssd_pool_block *block)
 	block->is_full = false;
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
-	if (block->data)
+	if (block->data) {
+		if (!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT))
+			WARN_ON(true);
+		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
 		__free_pages(block->data, order);
+	}
 	spin_unlock(&block->lock);
 }
 

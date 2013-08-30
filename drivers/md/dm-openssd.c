@@ -1150,6 +1150,8 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 		log_addr = bio->bi_sector / NR_PHY_IN_LOG;
 		phys = os->lookup_ltop(os, log_addr);
 
+		bio->bi_sector = phys->addr;
+
 		if (!phys->block) {
 			openssd_fill_bio_and_end(bio);
 			return DM_MAPIO_SUBMITTED;

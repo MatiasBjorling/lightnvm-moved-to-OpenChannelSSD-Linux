@@ -231,6 +231,7 @@ struct openssd {
 							*/
 	struct workqueue_struct *kbiod_wq;
 
+	spinlock_t gc_lock;
 	struct task_struct *kt_openssd; /* handles gc and any other async work */
 
 	/* Hint related*/
@@ -399,18 +400,17 @@ static inline void openssd_reset_block(struct openssd_pool_block *block)
 	BUG_ON(!block);
 
 	spin_lock(&block->lock);
+	if (block->data) {
+		WARN_ON(!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT));
+		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
+		__free_pages(block->data, order);
+	}
 	block->next_page = 0;
 	block->next_offset = 0;
 	block->nr_invalid_pages = 0;
 	block->is_full = false;
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
-	if (block->data) {
-		if (!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT))
-			WARN_ON(true);
-		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
-		__free_pages(block->data, order);
-	}
 	spin_unlock(&block->lock);
 }
 
@@ -499,6 +499,7 @@ static void openssd_gc_collect(struct openssd *os)
 
 	//openssd_print_total_blocks(os);
 
+	spin_lock(&os->gc_lock);
 	while (max_collect) {
 		block = NULL;
 		/* Iterate the pools once to look for pool that has a block to be freed. */
@@ -527,6 +528,7 @@ static void openssd_gc_collect(struct openssd *os)
 		os->next_collect_pool++;
 		max_collect--;
 	}
+	spin_unlock(&os->gc_lock);
 }
 
 static int openssd_kthread(void *data)
@@ -1315,6 +1317,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 		os->map_ltop = openssd_map_ltop_rr;
 
 	spin_lock_init(&os->hintlock);
+	spin_lock_init(&os->gc_lock);
 	INIT_LIST_HEAD(&os->hintlist);
 
 	os->nr_pools = POOL_COUNT;

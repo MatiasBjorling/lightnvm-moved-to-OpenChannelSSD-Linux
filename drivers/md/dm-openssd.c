@@ -1138,7 +1138,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 
 			if (!phys->block) {
 				openssd_fill_bio_and_end(bio);
-				return 0;
+				return DM_MAPIO_SUBMITTED;
 			}
 
 			exec_bio->bi_sector = phys->addr;
@@ -1152,7 +1152,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 
 		if (!phys->block) {
 			openssd_fill_bio_and_end(bio);
-			return 0;
+			return DM_MAPIO_SUBMITTED;
 		}
 
 
@@ -1161,7 +1161,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 		openssd_submit_bio(READ, bio, block_to_ap(os, phys->block));
 	}
 
-	return 0;
+	return DM_MAPIO_SUBMITTED;
 }
 
 static int openssd_handle_write(struct openssd *os, struct bio *bio)
@@ -1170,7 +1170,7 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 	struct bio_vec *bv;
 	struct bio *issue_bio;
 	sector_t logical_addr, physical_addr;
-	int i, bv_i, size;
+	int i, bv_i, size, retries;
 	void *src_p, *dst_p;
 
 	bio_for_each_segment(bv, bio, i) {
@@ -1182,12 +1182,20 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 		}
 
 		logical_addr = (bio->bi_sector / (EXPOSED_PAGE_SIZE / 512)) + i;
-		physical_addr = os->map_ltop(os, logical_addr, &victim_block);
 
+		for (retries = 0; retries < 3; retries++) {
+			physical_addr = os->map_ltop(os, logical_addr, &victim_block);
+
+			if (physical_addr != -1)
+				break;
+
+			openssd_gc_collect(os);
+		}
 		//DMINFO("Logical: %lu Physical: %lu OS Sector addr: %u Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
+
 		if (physical_addr == -1) {
-			DMERR("No more physical addresses");
-			return -ENOSPC;
+			DMERR("Out of physical addresses. Retry");
+			return DM_MAPIO_REQUEUE;
 		}
 
 		idx = physical_addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
@@ -1222,7 +1230,7 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 
 	bio_endio(bio, 0);
 
-	return 0;
+	return DM_MAPIO_SUBMITTED;
 }
 
 static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
@@ -1252,15 +1260,15 @@ static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
 static int openssd_map(struct dm_target *ti, struct bio *bio)
 {
 	struct openssd *os = ti->private;
-
+	int ret;
 	bio->bi_bdev = os->dev->bdev;
 
 	if (bio_data_dir(bio) == WRITE)
-		openssd_handle_write(os, bio);
+		ret = openssd_handle_write(os, bio);
 	else
-		openssd_handle_read(os, bio);
+		ret = openssd_handle_read(os, bio);
 
-	return DM_MAPIO_SUBMITTED;
+	return ret;
 }
 
 static void openssd_status(struct dm_target *ti, status_type_t type,

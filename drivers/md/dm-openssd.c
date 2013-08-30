@@ -495,7 +495,7 @@ static void openssd_gc_collect(struct openssd *os)
 	struct openssd_pool_block *block;
 	unsigned int nr_blocks_need;
 	int pid, pid_start;
-	int max_collect = os->nr_pools / 2;
+	int max_collect = round_up(os->nr_pools, 2);
 
 	//openssd_print_total_blocks(os);
 

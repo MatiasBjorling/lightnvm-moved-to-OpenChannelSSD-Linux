@@ -349,7 +349,9 @@ static void openssd_update_mapping(struct openssd *os,  sector_t l_addr,
 	l->block = p_block;
 
 	/* Physical -> Logical address */
+	
 	os->rev_trans_map[p_addr] = l_addr;
+	//DMINFO("update_mapping(): l_addr %lu now points to p_addr %lu", l_addr, p_addr);
 }
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
@@ -458,6 +460,8 @@ static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 
 get_done:
 	spin_unlock(&block->lock);
+	
+	DMINFO("get_page() - return %ld", addr);
 	return addr;
 }
 
@@ -573,35 +577,81 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 	return NULL;
 }
 
-static int openssd_get_fast_page_id(struct openssd *os, struct openssd_pool_block *block)
+
+#if 0
+static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 {
-	int page_id = -1;
+	sector_t addr = -1;
+
+	spin_lock(&block->lock);
+
+	if ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) {
+		goto get_done;
+	}
+
+	/* If there is multiple host pages within a flash page, we add the 
+	 * the offset to the address, instead of requesting a new page
+	 * from the physical block */
+	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
+		block->next_offset = 0;
+		block->next_page++;
+	}
+
+	addr = (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
+	block->next_offset++;
+
+	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
+		block->is_full = true;
+
+get_done:
+	spin_unlock(&block->lock);
+	
+	DMINFO("get_page() - return %d", addr);
+	return addr;
+}
+
+#endif
+
+static int openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_block *block)
+{
+	sector_t addr = -1;
 
 	// access block next_page in protected manner
 	// TODO: now that this access is protected by spinlock (to avoid race condition with
 	//       openssd_get_page_id, is the atomic_XXX_return part redundant?
 	spin_lock(&block->lock);
-	page_id = --block->next_page;
-
-	// block exhausted
-	if (page_id >= BLOCK_PAGE_COUNT){
-		//DMINFO("block exhausted");
-		page_id = -1;
-		goto fast_done;
+	/* Block is full */	
+	if ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) {
+		DMINFO("block is full. return -1");
+		goto get_fast_done;
 	}
 
-	// slow page
-	if (!os->fast_page_block_map[page_id]){
-		//DMINFO("block page_id=%d is slow", page_id);
-		block->next_page--;
-		page_id = -1;
-		goto fast_done;
+	/* If there is multiple host pages within a flash page, we add the 
+	 * the offset to the address, instead of requesting a new page
+	 * from the physical block */
+	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
+		block->next_offset = 0;
+		block->next_page++;
 	}
 
-	DMINFO("block page_id=%d is fast", page_id);
-fast_done:
+	/* Current page is slow */
+	if (!os->fast_page_block_map[block->next_page]){
+		goto get_fast_done;
+	}
+
+	/* Calc addr*/ 
+	addr = (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
+	block->next_offset++;
+
+	/* Mark block as full (if necessary) */
+	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1){
+		DMINFO("mark block as full");
+		block->is_full = true;
+	}
+
+get_fast_done:
 	spin_unlock(&block->lock);
-	return page_id;
+	return addr;
 }
 
 fclass file_classify(struct bio_vec* bvec) 
@@ -664,9 +714,9 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 		hint_info->is_write  = CAST_TO_PAYLOAD(hint_data)->is_write;
 		hint_info->is_swap   = CAST_TO_PAYLOAD(hint_data)->is_swap;
 
-		DMINFO("about to add hint_info to list. %s %s", 
-				(CAST_TO_PAYLOAD(hint_data)->is_swap) ? "SWAP" : "REGULAR", 
-				(CAST_TO_PAYLOAD(hint_data)->is_write) ? "WRITE" : "READ");
+		//DMINFO("about to add hint_info to list. %s %s", 
+		//		(CAST_TO_PAYLOAD(hint_data)->is_swap) ? "SWAP" : "REGULAR", 
+		//		(CAST_TO_PAYLOAD(hint_data)->is_write) ? "WRITE" : "READ");
 
 		spin_lock(&os->hintlock);
 		list_add_tail(&hint_info->list_member, &os->hintlist);
@@ -938,7 +988,7 @@ static sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, s
 	}
 
 	physical_addr = block_to_addr(block) + page_id;
-	//DMINFO("logical_addr=%ld physical_addr=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr, page_id, block->id);
+	DMINFO("logical_addr=%ld physical_addr=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr, page_id, block->id);
 
 	openssd_update_mapping(os, logical_addr, physical_addr, block);
 
@@ -979,7 +1029,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 		ap = &os->aps[ap_id];
 		block = ap->cur;
 
-		page_id = openssd_get_fast_page_id(os, block);
+		page_id = openssd_get_physical_fast_page(os, block);
 		i++;
 	}
 
@@ -996,18 +1046,16 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 
 	// no fast page available, resort to openssd_map_ltop_rr
 	if(page_id < 0){
-		//DMINFO("write lba %ld to slow page", logical_addr);
+		DMINFO("write lba %ld to (possible) SLOW page", logical_addr);
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block);
 	}
 
-	//DMINFO("fast page_id=%d", page_id);
-
 	physical_addr = block_to_addr(block) + page_id;
-
+	//DMINFO("logical_addr=%ld physical_addr=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr, page_id, block->id);
 	openssd_update_mapping(os, logical_addr, physical_addr, block);
 
 	(*ret_victim_block) = block;
-	//DMINFO("write lba %ld to fast page %ld", logical_addr, physical_addr);
+	DMINFO("write lba %ld to FAST page %ld", logical_addr, physical_addr);
 	return physical_addr;
 }
 
@@ -1018,28 +1066,35 @@ static void openssd_endio(struct bio *bio, int err)
 	struct openssd *os;
 	struct timeval end_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
+	int page_id;
 
 	pb = get_per_bio_data(bio);
 
 	ap = pb->ap;
 	os = ap->parent;
 
+	//DMINFO("openssd_endio: %s pb->physical_addr %ld", (bio_data_dir(bio) == WRITE)?"WRITE":"READ",pb->physical_addr);
 	if (pb->physical_addr == LTOP_EMPTY)
 		goto done;
 
-	if (bio_data_dir(bio) == WRITE)
+	if (bio_data_dir(bio) == WRITE){
 		dev_wait = ap->t_write;
+	}
 	else
 		dev_wait = ap->t_read;
 
 	if ((os->hint_flags & HINT_SWAP) && bio_data_dir(bio) == WRITE) {
+		page_id = (pb->physical_addr / NR_HOST_PAGES_IN_FLASH_PAGE) % BLOCK_PAGE_COUNT;
+		//DMINFO("pb->physical_addr %ld. page_id %d", pb->physical_addr, page_id);
+		//DMINFO("os->fast_page_block_map[%d] %ld", page_id, os->fast_page_block_map[page_id]);
+
 		// TODO: consider dev_wait to be part of per_bio_data?
-		if(os->fast_page_block_map[os->trans_map[bio->bi_sector].addr % BLOCK_PAGE_COUNT])
+		if(os->fast_page_block_map[page_id])
 			dev_wait = TIMING_WRITE_FAST;
 		else
 			dev_wait = TIMING_WRITE_SLOW;
 	}
-
+	
 	if (dev_wait) {
 		do_gettimeofday(&end_tv);
 		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
@@ -1080,13 +1135,14 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 	openssd_endio(bio, err);
 }
 
-static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap)
+static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, sector_t physical_addr)
 {
 	struct openssd *os = ap->parent;
 	struct per_bio_data *pb;
 
 	pb = alloc_decorate_per_bio_data(os, bio);
 	pb->ap = ap;
+	pb->physical_addr = physical_addr;
 
 	if (rw == WRITE)
 		bio->bi_end_io = openssd_end_write_bio;
@@ -1146,7 +1202,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 			exec_bio->bi_sector = phys->addr;
 
 //			printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
-			openssd_submit_bio(READ, exec_bio, block_to_ap(os, phys->block));
+			openssd_submit_bio(READ, exec_bio, block_to_ap(os, phys->block), phys->addr);
 		}
 	} else {
 		log_addr = bio->bi_sector / NR_PHY_IN_LOG;
@@ -1162,7 +1218,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 
 //		printk("bio addr: %lu bi_sectors: %u\n", bio->bi_sector, bio_sectors(bio));
 
-		openssd_submit_bio(READ, bio, block_to_ap(os, phys->block));
+		openssd_submit_bio(READ, bio, block_to_ap(os, phys->block), phys->addr);
 	}
 
 	return DM_MAPIO_SUBMITTED;
@@ -1195,7 +1251,7 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 
 			openssd_gc_collect(os);
 		}
-		//DMINFO("Logical: %lu Physical: %lu OS Sector addr: %u Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
+		DMINFO("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
 		if (physical_addr == -1) {
 			DMERR("Out of physical addresses. Retry");
@@ -1225,7 +1281,8 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 				unsigned int idx_to_write = size - NR_HOST_PAGES_IN_FLASH_PAGE + bv_i;
 				bio_add_page(issue_bio, &victim_block->data[idx_to_write], PAGE_SIZE, 0);
 			}
-			openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block));
+			//DMINFO("openssd_submit_bio WRITE issue_bio->bi_sector %ld", issue_bio->bi_sector);
+			openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block), physical_addr);
 		}
 	}
 
@@ -1305,7 +1362,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 
 	os->nr_aps_per_pool = APS_PER_POOL;
 	os->serialize_ap_access = SERIALIZE_AP_ACCESS;
-	os->hint_flags = 0; //DEPLOYED_HINTS;
+	os->hint_flags = 0;//DEPLOYED_HINTS;
 
 	// Simple round-robin strategy
 	atomic_set(&os->next_write_ap, -1);

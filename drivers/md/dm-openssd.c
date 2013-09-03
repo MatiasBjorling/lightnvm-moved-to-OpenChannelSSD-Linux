@@ -99,7 +99,7 @@ struct openssd_pool_block {
 									   fill up the flash page before going to the next 
 									   writable flash page */
 		unsigned int nr_invalid_pages; /* number of pages that are invalid, with respect to host page size */
-		unsigned long invalid_pages[NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT / BITS_PER_LONG];
+		unsigned long invalid_pages[NR_HOST_PAGES_IN_BLOCK / BITS_PER_LONG];
 		bool is_full;
 
 		/* no need to sync. Move down if it overflow the cacheline */
@@ -311,7 +311,7 @@ static inline int block_is_full(struct openssd_pool_block *block)
 
 static inline sector_t block_to_addr(struct openssd_pool_block *block)
 {
-	return (block->id * BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE);
+	return (block->id * NR_HOST_PAGES_IN_BLOCK);
 }
 
 static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
@@ -352,7 +352,7 @@ static void openssd_update_mapping(struct openssd *os,  sector_t l_addr,
 
 	l = &os->trans_map[l_addr];
 	if (l->block) {
-		page_offset = l->addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
+		page_offset = l->addr % NR_HOST_PAGES_IN_BLOCK;
 		if (test_and_set_bit(page_offset, l->block->invalid_pages))
 			WARN_ON(true);
 		l->block->nr_invalid_pages++;
@@ -379,7 +379,7 @@ static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *po
 {
 	struct openssd_pool_block *block = NULL;
 	struct page *data;
-	unsigned int order = ffs(NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT) - 1;
+	unsigned int order = ffs(NR_HOST_PAGES_IN_BLOCK) - 1;
 
 	data = alloc_pages(GFP_NOIO, order);
 
@@ -410,14 +410,14 @@ static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *po
 /* requires pool->lock taken */
 static inline void openssd_reset_block(struct openssd_pool_block *block)
 {
-	unsigned int order = ffs(NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT) - 1;
+	unsigned int order = ffs(NR_HOST_PAGES_IN_BLOCK) - 1;
 
 	BUG_ON(!block);
 
 	spin_lock(&block->lock);
 	if (block->data) {
-		WARN_ON(!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT));
-		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
+		WARN_ON(!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK));
+		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
 		__free_pages(block->data, order);
 	}
 	block->next_page = 0;
@@ -1337,7 +1337,7 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 		if (physical_addr == -1)
 			return DM_MAPIO_REQUEUE;
 
-		idx = physical_addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
+		idx = physical_addr % NR_HOST_PAGES_IN_BLOCK;
 		src_p = kmap_atomic(bv->bv_page);
 		dst_p = kmap_atomic(&victim_block->data[idx]);
 
@@ -1570,7 +1570,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		return -ENOMEM;
 	}
 
-	os->nr_pages = POOL_COUNT * POOL_BLOCK_COUNT * BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE;
+	os->nr_pages = POOL_COUNT * POOL_BLOCK_COUNT * NR_HOST_PAGES_IN_BLOCK;
 
 	os->trans_map = vmalloc(sizeof(struct openssd_addr) * os->nr_pages);
 	if (!os->trans_map)

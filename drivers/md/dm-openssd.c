@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Matias Bjørling.
+ * Copyright (C) 2012 Matias BjÃ¸rling.
  *
  * This file is released under the GPL.
  *
@@ -176,7 +176,7 @@ typedef struct openssd_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
 
 /* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS /* (HINT_NONE) */ (HINT_LATENCY | HINT_IOCTL)
+#define DEPLOYED_HINTS (HINT_NONE)  /* (HINT_LATENCY | HINT_IOCTL) */ /* (HINT_SWAP | HINT_IOCTL) */
 
 /* Main structure */
 struct openssd {
@@ -504,7 +504,7 @@ static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 get_done:
 	spin_unlock(&block->lock);
 	
-	DMINFO("get_page() - return %ld", addr);
+	//DMINFO("get_page() - return %ld (block->next_page %d)", addr, block->next_page);
 	return addr;
 }
 
@@ -512,6 +512,7 @@ static void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block 
 {
 	spin_lock(&ap->lock);
 	ap->cur = block;
+	DMINFO("set ap->cur with block in addr %ld", block_to_addr(block));
 	spin_unlock(&ap->lock);
 }
 
@@ -532,12 +533,12 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 	hint_info_t *hint_info;
 	struct list_head *node;
 
-	DMINFO("find hint for lba %ld is_write %d", logical_addr, is_write);
+	//DMINFO("find hint for lba %ld is_write %d", logical_addr, is_write);
 	spin_lock(&os->hintlock);
 	/*see if hint is already in list*/
 	list_for_each(node, &os->hintlist){
 		hint_info = list_entry(node, hint_info_t, list_member);
-		DMINFO("hint start_lba=%d count=%d", hint_info->hint.start_lba, hint_info->hint.count);
+		//DMINFO("hint start_lba=%d count=%d", hint_info->hint.start_lba, hint_info->hint.count);
 		//continue;
 		/* verify lba covered by hint*/
 		if (is_hint_relevant(logical_addr, hint_info, is_write, flags)) {
@@ -552,41 +553,6 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 
 	return NULL;
 }
-
-
-#if 0
-static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
-{
-	sector_t addr = -1;
-
-	spin_lock(&block->lock);
-
-	if ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) {
-		goto get_done;
-	}
-
-	/* If there is multiple host pages within a flash page, we add the 
-	 * the offset to the address, instead of requesting a new page
-	 * from the physical block */
-	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
-		block->next_offset = 0;
-		block->next_page++;
-	}
-
-	addr = (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
-	block->next_offset++;
-
-	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
-		block->is_full = true;
-
-get_done:
-	spin_unlock(&block->lock);
-	
-	DMINFO("get_page() - return %d", addr);
-	return addr;
-}
-
-#endif
 
 static int openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_block *block)
 {
@@ -1019,7 +985,6 @@ static sector_t* openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, 
 
 	ap = &os->aps[ap_id];
 	block = ap->cur;
-	DMINFO("map_ltop_rr: get_physical_page");
 	page_id = openssd_get_physical_page(block);
 	DMINFO("map_ltop_rr: page_id=%d", page_id);
 	while (page_id < 0) {
@@ -1150,12 +1115,17 @@ static sector_t* openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logi
 
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to openssd_map_ltop_rr */
-	if(old_p_addr == LTOP_EMPTY && (hint_info = openssd_find_hint(os, logical_addr, 1, HINT_SWAP)) == NULL)
+	if(old_p_addr == LTOP_EMPTY && (hint_info = openssd_find_hint(os, logical_addr, 1, HINT_SWAP)) == NULL){	
+		DMINFO("swap_map: non-GC write");
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, old_p_addr);
-
+	}
 	/* GC write of a slow page */
-	if(old_p_addr != LTOP_EMPTY && !os->fast_page_block_map[physical_to_slot(old_p_addr)])
+	if(old_p_addr != LTOP_EMPTY && !os->fast_page_block_map[physical_to_slot(old_p_addr)]){
+		DMINFO("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", old_p_addr, physical_to_slot(old_p_addr));
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, old_p_addr);
+	}
+	if(old_p_addr != LTOP_EMPTY) DMINFO("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", old_p_addr, physical_to_slot(old_p_addr));
+
 
 	/* For compatibility with latnecy hints */
 	physical_addr = kmalloc(sizeof(sector_t) * 2, GFP_NOIO);
@@ -1223,9 +1193,11 @@ static void openssd_endio(struct bio *bio, int err)
 	ap = pb->ap;
 	os = ap->parent;
 
-	//DMINFO("openssd_endio: %s pb->physical_addr %ld", (bio_data_dir(bio) == WRITE)?"WRITE":"READ",pb->physical_addr);
-	if (pb->physical_addr == LTOP_EMPTY)
+	DMINFO("openssd_endio: %s pb->physical_addr %ld bio->bi_sector %ld", (bio_data_dir(bio) == WRITE)?"WRITE":"READ",pb->physical_addr, bio->bi_sector);
+	if (pb->physical_addr == LTOP_EMPTY){
+		DMINFO("openssd_endio: no real IO performed. goto done");
 		goto done;
+	}
 
 	if (bio_data_dir(bio) == WRITE){
 		dev_wait = ap->t_write;
@@ -1341,6 +1313,11 @@ static void openssd_erase_block(struct openssd_pool_block *block)
 	/* Send erase command to device. */
 }
 
+static int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block* victim_block, struct bio_vec *bv);
+
+static void openssd_submit_write(struct openssd *os, sector_t physical_addr, 
+				 struct openssd_pool_block* victim_block, int size);
+
 /* Move data away from flash block to be erased. Additionally update the l to p and p to l 
  * mappings.
  */
@@ -1352,12 +1329,13 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 	struct openssd_pool_block* victim_block[2];
 	int slot = -1;
 	sector_t physical_addr, logical_addr, *dest_addr;
+	int i;
+	struct bio_vec *bv;
 
 	if (bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK))
 		return;
 
 	page = alloc_page(GFP_NOIO);
-	dst_page = alloc_page(GFP_NOIO);
 	while ((slot = find_next_zero_bit(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK, slot + 1)) < NR_HOST_PAGES_IN_BLOCK) {
 		// Perform read
 		physical_addr = block_to_addr(block) + slot;
@@ -1380,29 +1358,15 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 		DMINFO("move page physical_addr=%ld logical_addr=%ld (trans_map[%ld]=%ld)", physical_addr, logical_addr, logical_addr, os->trans_map[logical_addr].addr);
 		dest_addr = os->map_ltop(os, logical_addr, victim_block, physical_addr);
 
-		/* XXX should also be buffered to 8K. Optimally will share most of code with handle_write*/
-		dst_bio = bio_alloc(GFP_NOIO, 1);
-		dst_bio->bi_bdev = os->dev->bdev;
-		dst_bio->bi_sector = dest_addr[0] * NR_PHY_IN_LOG;
-		bio_add_page(dst_bio, dst_page, EXPOSED_PAGE_SIZE, 0);
-
-		src_p = kmap_atomic(page);
-		dst_p = kmap_atomic(dst_page);
-
-		memcpy(dst_p, src_p, EXPOSED_PAGE_SIZE);
-		DMINFO("dst_p[0]=%d", ((int*)dst_p)[0]);
-		kunmap_atomic(dst_p);
-		kunmap_atomic(src_p);
-
-		openssd_submit_bio(WRITE, dst_bio, block_to_ap(os, victim_block[0]), 1);
-
-		printk("finished with moving %lu (of logical %lu) to new %lu slot(%u)\n", physical_addr, logical_addr, dest_addr[0], slot);
-		bio_put(src_bio);
-		kfree(dest_addr);
+		/* Write using regular write machanism */
+		bio_for_each_segment(bv, src_bio, i) {
+			unsigned int size = openssd_handle_buffered_write(dest_addr[0], victim_block[0], bv);
+			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0) {
+				openssd_submit_write(os, dest_addr[0], victim_block[0], size);
+			}
+		}
 	}
 	__free_page(page);
-	__free_page(dst_page);
-	DMINFO("bitmap fill block in addr %ld", block_to_addr(block));
 	bitmap_fill(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
 }
 
@@ -1431,11 +1395,11 @@ static void openssd_gc_collect(struct openssd *os)
 			nr_blocks_need = pool->nr_blocks;
 			do_div(nr_blocks_need, GC_LIMIT_INVERSE);
 		
-			DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
+			//DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
 			if (nr_blocks_need >= pool->nr_free_blocks) {
 				list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
 				block = list_first_entry(&pool->prio_list, struct openssd_pool_block, prio);
-				DMINFO("block->id=%d addr=%ld block->nr_invalid_pages=%d block->invalid_pages=%x%x", block->id, block_to_addr(block), block->nr_invalid_pages, block->invalid_pages[0], block->invalid_pages[1]);
+				//DMINFO("block->id=%d addr=%ld block->nr_invalid_pages=%d block->invalid_pages=%x%x", block->id, block_to_addr(block), block->nr_invalid_pages, block->invalid_pages[0], block->invalid_pages[1]);
 
 				if (block->nr_invalid_pages != 0 &&
 					block_is_full(block)) {
@@ -1476,7 +1440,7 @@ static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, str
 		addr = block_to_addr(ap->cur)+ap->cur->next_page * NR_HOST_PAGES_IN_FLASH_PAGE;
 
 		// if this is the first page in a the ap buffer
-		//DMINFO("pool_idx=%d j=%d addr=%ld phys->addr=%ld", pool_idx, j, addr, phys->addr);
+		//DMINFO("pool_idx=%d pool_ap=%d addr=%ld phys->addr=%ld", pool_idx, j, addr, phys->addr);
 		if(addr == phys->addr){
 			printk("buffered data\n");
 			bio_for_each_segment(bv, bio, i){
@@ -1484,6 +1448,7 @@ static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, str
 				src_p = kmap_atomic(&ap->cur->data[idx]);
 
 				memcpy(dst_p, src_p, bv->bv_len);
+				//DMINFO("dst_p[0]=%d", ((int*)dst_p)[0]);
 				kunmap_atomic(dst_p);
 				kunmap_atomic(src_p);
 				break;
@@ -1527,7 +1492,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 
 			// XXX buffered reads!
 
-//			printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
+			//printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
 			openssd_submit_bio(READ, exec_bio, block_to_ap(os, phys->block), 0);
 		}
 	} else {
@@ -1544,7 +1509,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 		/* When physical page contains several logical pages, we may need to read from buffer.
 		   Check if so, and if page is cached in ap, read from there*/
 		if(NR_HOST_PAGES_IN_FLASH_PAGE > 1){
-			DMINFO("handle buffered read");
+			//DMINFO("handle buffered read");
 			if(openssd_handle_buffered_read(os, bio, phys) == 0)
 				return DM_MAPIO_SUBMITTED;
 		}
@@ -1554,6 +1519,40 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 	}
 
 	return DM_MAPIO_SUBMITTED;
+}
+
+static int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block* victim_block, struct bio_vec *bv)
+{
+	unsigned int idx;
+	void *src_p, *dst_p;
+
+	idx = physical_addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
+	src_p = kmap_atomic(bv->bv_page);
+	dst_p = kmap_atomic(&victim_block->data[idx]);
+	memcpy(dst_p, src_p, bv->bv_len);
+
+	kunmap_atomic(dst_p);
+	kunmap_atomic(src_p);
+
+	return atomic_inc_return(&victim_block->data_size);
+}
+
+static void openssd_submit_write(struct openssd *os, sector_t physical_addr, 
+				 struct openssd_pool_block* victim_block, int size)
+{
+	struct bio *issue_bio;
+	int bv_i;
+
+	//FIXME: can fail
+	issue_bio = bio_alloc(GFP_NOIO, 2);
+	issue_bio->bi_bdev = os->dev->bdev;
+	issue_bio->bi_sector = ((physical_addr-1) * NR_PHY_IN_LOG);
+
+	for (bv_i = 0; bv_i < NR_HOST_PAGES_IN_FLASH_PAGE; bv_i++) {
+		unsigned int idx_to_write = size - NR_HOST_PAGES_IN_FLASH_PAGE + bv_i;
+		bio_add_page(issue_bio, &victim_block->data[idx_to_write], PAGE_SIZE, 0);
+	}
+	openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block), 0);
 }
 
 static int openssd_handle_write(struct openssd *os, struct bio *bio)
@@ -1580,12 +1579,12 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 
 		victim_block[0] = victim_block[1] = 0;
 		for (retries = 0; retries < 3; retries++) {
-			DMINFO("hanlde_write: call map_ltop");
+			//DMINFO("hanlde_write: call map_ltop");
 			physical_addr = os->map_ltop(os, logical_addr, victim_block, LTOP_EMPTY);
 
 			if (physical_addr != NULL)
 				break;
-			DMINFO("hanlde_write: call gc_collect");
+
 			openssd_gc_collect(os);
 		}
 		//DMINFO("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr[0], bio->bi_sector, bio_sectors(bio), bio->bi_size);
@@ -1603,6 +1602,11 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 			}
 			DMINFO("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr[j], bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
+			size = openssd_handle_buffered_write(physical_addr[j], victim_block[j], bv);
+			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0) {
+				openssd_submit_write(os, physical_addr[j], victim_block[j], size);
+			}
+#if 0
 			idx = physical_addr[j] % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
 			src_p = kmap_atomic(bv->bv_page);
 			dst_p = kmap_atomic(&victim_block[j]->data[idx]);
@@ -1627,6 +1631,7 @@ static int openssd_handle_write(struct openssd *os, struct bio *bio)
 				}
 				openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block[j]), 0);
 			}
+#endif
 		}
 
 		kfree(physical_addr);
@@ -1681,12 +1686,12 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 	int ret;
 	bio->bi_bdev = os->dev->bdev;
 
-	DMINFO("openssd_map: %s log_addr %ld, call handler", (bio_data_dir(bio) == WRITE)?"WRITE":"READ", bio->bi_sector/8);
+	//DMINFO("openssd_map: %s log_addr %ld, call handler", (bio_data_dir(bio) == WRITE)?"WRITE":"READ", bio->bi_sector/8);
 	if (bio_data_dir(bio) == WRITE)
 		ret = openssd_handle_write(os, bio);
 	else
 		ret = openssd_handle_read(os, bio);
-
+	DMINFO("openssd_map: %s log_addr %ld, handler done!!", (bio_data_dir(bio) == WRITE)?"WRITE":"READ", bio->bi_sector/8);
 	return ret;
 }
 
@@ -1996,6 +2001,6 @@ module_init(dm_openssd_init);
 module_exit(dm_openssd_exit);
 
 MODULE_DESCRIPTION(DM_NAME "device-mapper openssd target");
-MODULE_AUTHOR("Matias Bjørling <mb@silverwolf.dk>");
+MODULE_AUTHOR("Matias BjÃ¸rling <mb@silverwolf.dk>");
 MODULE_LICENSE("GPL");
 

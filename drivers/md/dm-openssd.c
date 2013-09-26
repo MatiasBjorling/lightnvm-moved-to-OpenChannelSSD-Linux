@@ -90,6 +90,13 @@ enum ltop_flags {
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 
+enum block_sate {
+	BLOCK_STATE_NEW		= 0,
+	BLOCK_STATE_FULL	= 1,
+	BLOCK_STATE_GC		= 2,
+	BLOCK_STATE_RELEASED= 3,
+};
+
 struct openssd_dev_conf {
 	unsigned short int flash_block_size; /* the number of flash pages per block */
 	unsigned short int flash_page_size;  /* the flash page size in bytes */
@@ -106,7 +113,6 @@ struct openssd_pool_block {
 									   writable flash page */
 		unsigned int nr_invalid_pages; /* number of pages that are invalid, with respect to host page size */
 		unsigned long invalid_pages[NR_HOST_PAGES_IN_BLOCK / BITS_PER_LONG];
-		bool is_full;
 
 		/* no need to sync. Move down if it overflow the cacheline */
 		struct openssd_pool *parent;
@@ -119,6 +125,11 @@ struct openssd_pool_block {
 	struct page *data;
 	atomic_t data_size; /* data pages inserted into data variable */
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
+
+	/* Block state handling */
+	atomic_t state; /* BLOCK_STATE_* -> When larger than FULL, address lookups are postponed until its finished. */
+	/* some method to postpone work should be allocated here. */
+
 };
 
 struct openssd_addr {

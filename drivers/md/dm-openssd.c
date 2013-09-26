@@ -130,10 +130,11 @@ struct openssd_pool {
 	/* Pool block lists */
 	struct {
 		spinlock_t lock;
-		struct list_head used_list;
-		struct list_head free_list;
-		struct list_head prio_list;
+		struct list_head used_list;	/* In-use blocks */
+		struct list_head free_list;	/* Not used blocks i.e. released and ready for use */
+		struct list_head prio_list;	/* Prioritized list of blocks. Sorted according to cost/benefit. */
 	} ____cacheline_aligned_in_smp;
+
 	unsigned long phy_addr_start;	/* References the physical start block */
 	unsigned int phy_addr_end;		/* References the physical end block */
 

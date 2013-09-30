@@ -465,7 +465,6 @@ static inline void openssd_reset_block(struct openssd_pool_block *block)
 	block->next_page = 0;
 	block->next_offset = 0;
 	block->nr_invalid_pages = 0;
-	block->is_full = false;
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
 	spin_unlock(&block->lock);
@@ -491,12 +490,9 @@ static void openssd_pool_put_block(struct openssd_pool_block *block)
 
 static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 {
-	sector_t addr = -1;
+	sector_t addr;
 
 	spin_lock(&block->lock);
-
-	if (block_is_full(block))
-		goto get_done;
 
 	/* If there is multiple host pages within a flash page, we add the 
 	 * the offset to the address, instead of requesting a new page
@@ -510,7 +506,7 @@ static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 	block->next_offset++;
 
 	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
-		block->is_full = true;
+		addr = -1;
 
 get_done:
 	spin_unlock(&block->lock);
@@ -599,7 +595,6 @@ static int openssd_get_physical_fast_page(struct openssd *os, struct openssd_poo
 	/* Mark block as full (if necessary) */
 	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1){
 		DMINFO("mark block as full");
-		block->is_full = true;
 	}
 
 get_fast_done:

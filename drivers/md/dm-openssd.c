@@ -90,7 +90,7 @@ enum ltop_flags {
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 
-enum block_sate {
+enum block_state {
 	BLOCK_STATE_NEW		= 0,
 	BLOCK_STATE_FULL	= 1,
 	BLOCK_STATE_GC		= 2,

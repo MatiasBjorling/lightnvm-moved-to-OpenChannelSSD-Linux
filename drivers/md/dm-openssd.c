@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012 Matias Bjørling.
  *
- * This file is released under the GPL.
+ * This file is released under GPL.
  *
  * Todo
  *
@@ -12,6 +12,13 @@
  * Hints
  * - configurable sector size
  * - handle case of in-page bv_offset (currently hidden assumption of offset=0, and bv_len spans entire page)
+ * 
+ * Optimization possibilities
+ * - Move ap_next_write into a conconcurrency friendly data structure. Could be handled
+ *   by more intelligent map_ltop function.
+ * - Implement per-cpu openssd_pool_block data structure ownership. Removes need for taking lock on
+ *   block next_write_id function. I.e. page allocation becomes nearly lockless, with occasionally
+ *   movement of blocks on openssd_pool_block lists.
  */
 
 #include "dm-openssd.h"
@@ -119,15 +126,18 @@ struct openssd_pool_block {
 		unsigned int id;
 	} ____cacheline_aligned_in_smp;
 
+	// Management and GC structures
 	struct list_head list;
 	struct list_head prio;
 
+	// Persistent data structures
 	struct page *data;
 	atomic_t data_size; /* data pages inserted into data variable */
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
 
 	/* Block state handling */
-	atomic_t state; /* BLOCK_STATE_* -> When larger than FULL, address lookups are postponed until its finished. */
+	spinlock_t gc_lock;
+	enum block_state state; /* BLOCK_STATE_* -> When larger than FULL, address lookups are postponed until its finished. */
 	/* some method to postpone work should be allocated here. */
 
 };

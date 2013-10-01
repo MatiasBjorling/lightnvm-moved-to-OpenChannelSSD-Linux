@@ -73,26 +73,25 @@ static void free_per_bio_data(struct openssd *os, struct per_bio_data *pb)
 	mempool_free(pb, os->per_bio_pool);
 }
 
-/* the block with highest number of invalid pages, will be in the beginning of the list */
-static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_head *lh_b)
-{
-	struct openssd_pool_block *a = list_entry(lh_a, struct openssd_pool_block, prio);
-	struct openssd_pool_block *b = list_entry(lh_b, struct openssd_pool_block, prio);
-
-	if (a->nr_invalid_pages == b->nr_invalid_pages)
-		return 0;
-
-	return a->nr_invalid_pages < b->nr_invalid_pages;
-}
-
-static inline int block_is_full(struct openssd_pool_block *block)
+inline int block_is_full(struct openssd_pool_block *block)
 {
 	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == NR_HOST_PAGES_IN_BLOCK);
 }
 
-static inline sector_t block_to_addr(struct openssd_pool_block *block)
+inline sector_t block_to_addr(struct openssd_pool_block *block)
 {
 	return (block->id * NR_HOST_PAGES_IN_BLOCK);
+}
+
+inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
+{
+	unsigned int ap_idx, div, mod;
+
+	div = block->id / POOL_BLOCK_COUNT;
+	mod = block->id % POOL_BLOCK_COUNT;
+	ap_idx = div + (mod / (POOL_BLOCK_COUNT / APS_PER_POOL));
+
+	return &os->aps[ap_idx];
 }
 
 static inline int physical_to_slot(sector_t phys){
@@ -119,17 +118,6 @@ static inline void openssd_get_block(struct openssd_pool_block *block)
 static inline void openssd_put_block(struct openssd_pool_block *block)
 {
 	kref_put(__openssd_get_block_kref(block, get_cpu()), openssd_block_release_prematurely);
-}
-
-static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
-{
-	unsigned int ap_idx, div, mod;
-
-	div = block->id / POOL_BLOCK_COUNT;
-	mod = block->id % POOL_BLOCK_COUNT;
-	ap_idx = div + (mod / (POOL_BLOCK_COUNT / APS_PER_POOL));
-
-	return &os->aps[ap_idx];
 }
 
 static void openssd_delayed_bio_submit(struct work_struct *work)
@@ -239,7 +227,7 @@ static struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *po
 }
 
 /* requires pool->lock taken */
-static inline void openssd_reset_block(struct openssd_pool_block *block)
+inline void openssd_reset_block(struct openssd_pool_block *block)
 {
 	unsigned int order = ffs(NR_HOST_PAGES_IN_BLOCK) - 1;
 
@@ -263,7 +251,7 @@ static inline void openssd_reset_block(struct openssd_pool_block *block)
  * free list. We add it last to allow round-robin use of all pages. Thereby provide
  * simple (naive) wear-leveling.
  */
-static void openssd_pool_put_block(struct openssd_pool_block *block)
+void openssd_pool_put_block(struct openssd_pool_block *block)
 {
 	struct openssd_pool *pool = block->parent;
 
@@ -311,7 +299,7 @@ static void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block 
 	spin_unlock(&ap->lock);
 }
 
-static void openssd_print_total_blocks(struct openssd *os)
+void openssd_print_total_blocks(struct openssd *os)
 {
 	struct openssd_pool *pool;
 	unsigned int total = 0;
@@ -1066,7 +1054,7 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 	openssd_endio(bio, err);
 }
 
-static void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, int sync)
+void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, int sync)
 {
 	struct openssd *os = ap->parent;
 	struct per_bio_data *pb;
@@ -1114,119 +1102,9 @@ static void openssd_fill_bio_and_end(struct bio *bio)
 	bio_endio(bio, 0);
 }
 
-static void openssd_erase_block(struct openssd_pool_block *block)
+void openssd_erase_block(struct openssd_pool_block *block)
 {
 	/* Send erase command to device. */
-}
-
-static int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block* victim_block, struct bio_vec *bv);
-
-static void openssd_submit_write(struct openssd *os, sector_t physical_addr, 
-				 struct openssd_pool_block* victim_block, int size);
-
-/* Move data away from flash block to be erased. Additionally update the l to p and p to l 
- * mappings.
- */
-static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_block *block)
-{
-	struct bio *src_bio;
-	struct page *page;
-	struct openssd_pool_block* victim_block[2];
-	int slot = -1;
-	sector_t physical_addr, logical_addr, *dest_addr;
-	int i;
-	struct bio_vec *bv;
-
-	if (bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK))
-		return;
-
-	page = alloc_page(GFP_NOIO);
-	while ((slot = find_next_zero_bit(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK, slot + 1)) < NR_HOST_PAGES_IN_BLOCK) {
-		// Perform read
-		physical_addr = block_to_addr(block) + slot;
-		DMINFO("move page physical_addr=%ld", physical_addr);
-		src_bio = bio_alloc(GFP_NOIO, 1); // handle mem error
-
-		bio_get(src_bio);
-
-		src_bio->bi_bdev = os->dev->bdev;
-		src_bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
-		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
-
-		openssd_submit_bio(READ, src_bio, block_to_ap(os, block), 1);
-
-		// Perform write
-
-		// We use the physical address to go to the logical page addr, and then update its mapping
-		// to its new place.
-		logical_addr = os->lookup_ptol(os, physical_addr);
-		DMINFO("move page physical_addr=%ld logical_addr=%ld (trans_map[%ld]=%ld)", physical_addr, logical_addr, logical_addr, os->trans_map[logical_addr].addr);
-		dest_addr = os->map_ltop(os, logical_addr, victim_block, physical_addr);
-
-		/* Write using regular write machanism */
-		bio_for_each_segment(bv, src_bio, i) {
-			unsigned int size = openssd_handle_buffered_write(dest_addr[0], victim_block[0], bv);
-			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0) {
-				openssd_submit_write(os, dest_addr[0], victim_block[0], size);
-			}
-		}
-	}
-	__free_page(page);
-	bitmap_fill(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
-}
-
-
-static void openssd_gc_collect(struct openssd *os)
-{
-	struct openssd_pool *pool;
-	struct openssd_pool_block *block;
-	unsigned int nr_blocks_need;
-	int pid, pid_start;
-	int max_collect = round_up(os->nr_pools, 2);
-	openssd_print_total_blocks(os);
-
-	if (!spin_trylock(&os->gc_lock))
-		return;
-
-	while (max_collect) {
-		block = NULL;
-		/* Iterate the pools once to look for pool that has a block to be freed. */
-		pid = os->next_collect_pool % os->nr_pools;
-		pid_start = pid;
-		do {
-			pool = &os->pools[pid];
-
-			nr_blocks_need = pool->nr_blocks;
-			do_div(nr_blocks_need, GC_LIMIT_INVERSE);
-		
-			//DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
-			if (nr_blocks_need >= pool->nr_free_blocks) {
-				list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
-				block = list_first_entry(&pool->prio_list, struct openssd_pool_block, prio);
-				//DMINFO("block->id=%d addr=%ld block->nr_invalid_pages=%d block->invalid_pages=%x%x", block->id, block_to_addr(block), block->nr_invalid_pages, block->invalid_pages[0], block->invalid_pages[1]);
-
-				if (block->nr_invalid_pages != 0 &&
-					block_is_full(block)) {
-					/* rewrite to have moves outside lock. i.e. so we can prepare multiple pages
-					 * in parallel on the attached device. */
-					DMINFO("move pages");
-					openssd_move_valid_pages(os, block);
-
-					openssd_erase_block(block);
-					openssd_pool_put_block(block);
-
-					break;
-				}
-			}
-
-			pid++;
-			pid %= os->nr_pools;
-		} while (pid_start != pid);
-
-		os->next_collect_pool++;
-		max_collect--;
-	}
-	spin_unlock(&os->gc_lock);
 }
 
 static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, struct openssd_addr *phys)
@@ -1325,7 +1203,7 @@ static int openssd_handle_read(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
-static int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block* victim_block, struct bio_vec *bv)
+int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block* victim_block, struct bio_vec *bv)
 {
 	unsigned int idx;
 	void *src_p, *dst_p;
@@ -1341,7 +1219,7 @@ static int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_
 	return atomic_inc_return(&victim_block->data_size);
 }
 
-static void openssd_submit_write(struct openssd *os, sector_t physical_addr, 
+void openssd_submit_write(struct openssd *os, sector_t physical_addr, 
 				 struct openssd_pool_block* victim_block, int size)
 {
 	struct bio *issue_bio;

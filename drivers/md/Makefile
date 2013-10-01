@@ -52,7 +52,7 @@ obj-$(CONFIG_DM_VERITY)		+= dm-verity.o
 obj-$(CONFIG_DM_CACHE)		+= dm-cache.o
 obj-$(CONFIG_DM_CACHE_MQ)	+= dm-cache-mq.o
 obj-$(CONFIG_DM_CACHE_CLEANER)	+= dm-cache-cleaner.o
-obj-$(CONFIG_DM_OPENSSD)		+= dm-openssd.o
+obj-$(CONFIG_DM_OPENSSD)		+= dm-openssd-gc.o dm-openssd.o
 
 ifeq ($(CONFIG_DM_UEVENT),y)
 dm-mod-objs			+= dm-uevent.o

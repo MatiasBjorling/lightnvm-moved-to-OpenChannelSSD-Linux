@@ -266,9 +266,29 @@ struct per_bio_data {
 	unsigned int sync;
 };
 
+/* dm-openssd-c */
 
+/* Helpers */
+void openssd_print_total_blocks(struct openssd *os);
+int block_is_full(struct openssd_pool_block *block);
+sector_t block_to_addr(struct openssd_pool_block *block);
+struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block);
 
+/* I/O bio related */
+void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, int sync);
+void openssd_submit_write(struct openssd *os, sector_t physical_addr, 
+				 struct openssd_pool_block* victim_block, int size);
+int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block* victim_block, struct bio_vec *bv);
 
+/* NVM device related */
+void openssd_erase_block(struct openssd_pool_block *block);
+
+/* Block maintanence */
+void openssd_pool_put_block(struct openssd_pool_block *block);
+void openssd_reset_block(struct openssd_pool_block *block);
+
+	/* dm-openssd-gc.c */
+void openssd_gc_collect(struct openssd *os);
 
 #define ssd_for_each_pool(openssd, pool, i)									\
 		for ((i) = 0, pool = &(openssd)->pools[0];							\

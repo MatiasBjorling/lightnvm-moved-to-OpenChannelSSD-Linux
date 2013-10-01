@@ -140,6 +140,7 @@ struct openssd_pool_block {
 	enum block_state state; /* BLOCK_STATE_* -> When larger than FULL, address lookups are postponed until its finished. */
 	/* some method to postpone work should be allocated here. */
 
+	struct kref *ref_count; /* Outstanding IOs to be completed on block */
 };
 
 struct openssd_addr {
@@ -342,6 +343,28 @@ static inline int physical_to_slot(sector_t phys){
 	return (phys % (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
+static inline struct kref *__openssd_get_block_kref(struct openssd_pool_block *block, unsigned int cpu)
+{
+	return per_cpu_ptr(block->ref_count, cpu);
+}
+
+/* Push erase condition to automatically be executed when block goes to zero.
+ * Only GC should do this */
+static void openssd_block_release_prematurely(struct kref *ref_count)
+{
+	WARN_ON(1);
+}
+
+static inline void openssd_get_block(struct openssd_pool_block *block)
+{
+	return kref_get(__openssd_get_block_kref(block, get_cpu()));
+}
+
+static inline void openssd_put_block(struct openssd_pool_block *block)
+{
+	kref_put(__openssd_get_block_kref(block, get_cpu()), openssd_block_release_prematurely);
+}
+
 static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
 {
 	unsigned int ap_idx, div, mod;
@@ -518,7 +541,6 @@ static sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
 		addr = -1;
 
-get_done:
 	spin_unlock(&block->lock);
 	
 	//DMINFO("get_page() - return %ld (block->next_page %d)", addr, block->next_page);
@@ -938,7 +960,19 @@ static struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t log
 {
 	// TODO: during GC or w-r-w we may get a translation for an old page.
 	//       do we care enough to enforce some serializibilty in LBA accesses?
-	return &os->trans_map[logical_addr];
+	struct openssd_addr *addr;
+
+	while (1) {
+		addr = &os->trans_map[logical_addr];
+
+		if (!addr->block)
+			return addr;
+
+		if (!spin_is_locked(&addr->block->gc_lock))
+			return addr;
+
+		schedule();
+	}
 }
 
 static sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)
@@ -1755,7 +1789,18 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			goto err_blocks;
 
 		pool_for_each_block(pool, block, j) {
+			unsigned int cpu;
 			spin_lock_init(&block->lock);
+			spin_lock_init(&block->gc_lock);
+
+			block->ref_count = alloc_percpu(struct kref);
+			if (!block->ref_count)
+				goto err_blocks;
+
+			/* TODO: Implement online/offline CPU handling */
+			for_each_online_cpu(cpu)
+				kref_init(__openssd_get_block_kref(block, cpu));
+
 			block->parent = pool;
 			block->id = (i * POOL_BLOCK_COUNT) + j;
 
@@ -1798,11 +1843,14 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 	}
 
 	return 0;
-
 err_blocks:
 	ssd_for_each_pool(os, pool, i) {
 		if (!pool->blocks)
 			break;
+		pool_for_each_block(pool, block, j) {
+			if (block->ref_count)
+				free_percpu(block->ref_count);
+		}
 		kfree(pool->blocks);
 	}
 	kfree(os->pools);
@@ -1913,9 +1961,10 @@ static void openssd_dtr(struct dm_target *ti)
 {
 	struct openssd *os = (struct openssd *) ti->private;
 	struct openssd_pool *pool;
+	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
 	hint_info_t *hint_info, *next_hint_info;
-	int i;
+	int i, j;
 
 	dm_put_device(ti, os->dev);
 
@@ -1926,8 +1975,11 @@ static void openssd_dtr(struct dm_target *ti)
 
 	kthread_stop(os->kt_openssd);
 
-	ssd_for_each_pool(os, pool, i)
+	ssd_for_each_pool(os, pool, i) {
+		pool_for_each_block(pool, block, j)
+			free_percpu(block->ref_count);
 		kfree(pool->blocks);
+	}
 
 	kfree(os->pools);
 	kfree(os->aps);

@@ -262,14 +262,6 @@ struct per_bio_data {
 	unsigned int sync;
 };
 
-// Push to dm-openssd-hint when possible.
-struct openssd_hint_map_private {
-	sector_t old_p_addr;
-	unsigned int prev_ap;
-	unsigned long flags;
-};
-
-
 /* dm-openssd-c */
 
 /*   Helpers */

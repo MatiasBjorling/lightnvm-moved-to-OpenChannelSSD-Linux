@@ -61,13 +61,6 @@ struct openssd_hint {
 	struct openssd_addr *shadow_map; // TODO should be hash table for efficiency? (but then we also need to use a lock...)
 };
 
-enum deploy_hint_flags {
-	HINT_NONE	= 0 << 0, /* No hints applied */
-	HINT_SWAP	= 1 << 0, /* Swap aware hints. Detected from block request type */
-	HINT_IOCTL	= 1 << 1, /* IOCTL aware hints. Applications may submit direct hints */
-	HINT_LATENCY	= 1 << 2, /* Latency aware hints. Detected from file type or durectly from app */
-};
-
 #ifdef __KERNEL__
 typedef struct hint_info_s{
     	ino_hint_t hint; // if NULL, none
@@ -77,6 +70,20 @@ typedef struct hint_info_s{
     	struct list_head list_member;
 }hint_info_t;
 #endif
+
+struct openssd_hint_map_private {
+	sector_t old_p_addr;
+	unsigned int prev_ap;
+	unsigned long flags;
+	hint_info_t *hint_info;
+};
+
+enum deploy_hint_flags {
+	HINT_NONE	= 0 << 0, /* No hints applied */
+	HINT_SWAP	= 1 << 0, /* Swap aware hints. Detected from block request type */
+	HINT_IOCTL	= 1 << 1, /* IOCTL aware hints. Applications may submit direct hints */
+	HINT_LATENCY	= 1 << 2, /* Latency aware hints. Detected from file type or durectly from app */
+};
 
 // r/w matches, and LBA is in lba range of hint
 #define is_hint_relevant(LBA, HINT_INFO, IS_WRITE, FLAGS) \

@@ -359,6 +359,7 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 	/* do hint */
 	openssd_bio_hint(os, bio);
 
+
 	if (hint->hint_flags & HINT_LATENCY)
 		numCopies = 2;
 
@@ -370,11 +371,13 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 
 		logical_addr = (bio->bi_sector / NR_PHY_IN_LOG) + i;
 
+		map_alloc_data.hint_info = openssd_find_hint(os, logical_addr, 1, HINT_LATENCY);
+
 		/* Submit bio for all physical addresses*/
 		for(j = 0; j < numCopies; j++) {
 
 			if (j == 1)
-				map_alloc_data.flags = MAP_SINGLE|MAP_SHADOW;
+				map_alloc_data.flags = (MAP_SINGLE|MAP_SHADOW);
 
 			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, &map_alloc_data);
 
@@ -393,11 +396,11 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 
 	/* Processed entire hint */
 	spin_lock(&hint->hintlock);
-//	if(hint_info->processed == hint_info->hint.count){
-//		//DMINFO("delete latency hint");
-//		list_del(&hint_info->list_member);
-//		kfree(hint_info);
-//	}
+	if(map_alloc_data.hint_info->processed == map_alloc_data.hint_info->hint.count){
+		//DMINFO("delete latency hint");
+		list_del(&map_alloc_data.hint_info->list_member);
+		kfree(map_alloc_data.hint_info);
+	}
 	spin_unlock(&hint->hintlock);
 
 	bio_endio(bio, 0);
@@ -474,14 +477,13 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	struct openssd_hint_map_private *map_alloc_data = private;
 	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
-	hint_info_t* hint_info;
 	int ap_id, page_id;
 	sector_t physical_addr;
 
 	/* If there is no hint, or this is a reclaimed ltop mapping, 
 	 * use regular (single-page) map_ltop*/
 	//DMINFO("find hint");
-	if(map_alloc_data->old_p_addr != LTOP_EMPTY || (hint_info = openssd_find_hint(os, logical_addr, 1, HINT_LATENCY)) == NULL) {
+	if(map_alloc_data->old_p_addr != LTOP_EMPTY || (map_alloc_data->hint_info = openssd_find_hint(os, logical_addr, 1, HINT_LATENCY)) == NULL) {
 		//DMINFO("hint not found. resort to regular allocation");
 		physical_addr = openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
 
@@ -542,7 +544,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to openssd_map_ltop_rr */
-	if(map_alloc_data->old_p_addr == LTOP_EMPTY && (hint_info = openssd_find_hint(os, logical_addr, 1, HINT_SWAP)) == NULL) {
+	if(map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
 		DMINFO("swap_map: non-GC write");
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
 	}

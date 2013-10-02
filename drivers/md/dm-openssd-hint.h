@@ -53,7 +53,7 @@ typedef struct hint_data_s {
   char hint_payload[HINT_PAYLOAD_SIZE];
 } hint_data_t;
 
-struct hint_openssd {
+struct openssd_hint {
 	unsigned int hint_flags;
 	char* ino_hints; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
 	spinlock_t hintlock;

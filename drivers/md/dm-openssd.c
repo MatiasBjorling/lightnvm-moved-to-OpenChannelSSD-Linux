@@ -260,25 +260,6 @@ sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 	return addr;
 }
 
-void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block)
-{
-	spin_lock(&ap->lock);
-	ap->cur = block;
-	DMINFO("set ap->cur with block in addr %ld", block_to_addr(block));
-	spin_unlock(&ap->lock);
-}
-
-void openssd_print_total_blocks(struct openssd *os)
-{
-	struct openssd_pool *pool;
-	unsigned int total = 0;
-	int i;
-
-	ssd_for_each_pool(os, pool, i)
-		total += pool->nr_free_blocks;
-	DMINFO("Total free blocks: %u", total);
-}
-
 sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_block *block)
 {
 	sector_t addr = LTOP_EMPTY;
@@ -318,6 +299,26 @@ sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_
 get_fast_done:
 	spin_unlock(&block->lock);
 	return addr;
+}
+
+void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block)
+{
+	spin_lock(&ap->lock);
+	ap->cur = block;
+	DMINFO("set ap->cur with block in addr %ld", block_to_addr(block));
+	spin_unlock(&ap->lock);
+}
+
+void openssd_print_total_blocks(struct openssd *os)
+{
+	struct openssd_pool *pool;
+	unsigned int total = 0;
+	int i;
+
+	ssd_for_each_pool(os, pool, i)
+		total += pool->nr_free_blocks;
+
+	DMINFO("Total free blocks: %u", total);
 }
 
 static struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
@@ -856,7 +857,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		return -EINVAL;
 	}
 
-	os = kmalloc(sizeof(*os), GFP_KERNEL);
+	os = kzalloc(sizeof(*os), GFP_KERNEL);
 	if (os == NULL)
 		return -ENOMEM;
 
@@ -898,7 +899,6 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	os->map_ltop = openssd_map_ltop_rr;
 	os->write_bio = openssd_write_bio_generic;
 	os->read_bio = openssd_read_bio_generic;
-
 
 	if (openssd_alloc_hint(os)) 
 		goto err_per_bio_pool;

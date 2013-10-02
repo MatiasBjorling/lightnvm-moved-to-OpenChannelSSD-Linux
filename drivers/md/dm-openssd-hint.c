@@ -723,7 +723,7 @@ int openssd_alloc_hint(struct openssd *os)
 	spin_lock_init(&hint->hintlock);
 	INIT_LIST_HEAD(&hint->hintlist);
 
-	hint->ino_hints = kzalloc(HINT_MAX_INOS,GFP_KERNEL); // ino ~> hinted file type
+	hint->ino_hints = kzalloc(HINT_MAX_INOS, GFP_KERNEL); // ino ~> hinted file type
 	if (!hint->ino_hints)
 		goto err_hints;
 

@@ -19,9 +19,9 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 {
 	struct bio *src_bio;
 	struct page *page;
-	struct openssd_pool_block* victim_block[2];
+	struct openssd_pool_block* victim_block;
 	int slot = -1;
-	sector_t physical_addr, logical_addr, *dest_addr;
+	sector_t physical_addr, logical_addr, dest_addr;
 	int i;
 	struct bio_vec *bv;
 
@@ -49,13 +49,14 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 		// to its new place.
 		logical_addr = os->lookup_ptol(os, physical_addr);
 		DMINFO("move page physical_addr=%ld logical_addr=%ld (trans_map[%ld]=%ld)", physical_addr, logical_addr, logical_addr, os->trans_map[logical_addr].addr);
-		dest_addr = os->map_ltop(os, logical_addr, victim_block, physical_addr);
+		// Doesn't handle shadow addresses yet.
+		dest_addr = os->map_ltop(os, logical_addr, &victim_block, (void*)NULL);
 
 		/* Write using regular write machanism */
 		bio_for_each_segment(bv, src_bio, i) {
-			unsigned int size = openssd_handle_buffered_write(dest_addr[0], victim_block[0], bv);
+			unsigned int size = openssd_handle_buffered_write(dest_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0) {
-				openssd_submit_write(os, dest_addr[0], victim_block[0], size);
+				openssd_submit_write(os, dest_addr, victim_block, size);
 			}
 		}
 	}
@@ -115,6 +116,3 @@ void openssd_gc_collect(struct openssd *os)
 	}
 	spin_unlock(&os->gc_lock);
 }
-
-
-

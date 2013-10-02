@@ -23,9 +23,6 @@
 #include <linux/kthread.h>
 #include <linux/mempool.h>
 
-#include "dm-openssd-hint.h"
-#include "dm-openssd-pool.h"
-
 #define OPENSSD_IOC_MAGIC 'O'
 
 #define OPENSSD_IOCTL_ID          _IO(OPENSSD_IOC_MAGIC, 0x40)
@@ -179,12 +176,11 @@ struct openssd_ap {
 
 struct openssd;
 
-typedef sector_t* (map_ltop_fn)(struct openssd *, sector_t, struct openssd_pool_block **, sector_t);
+typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct openssd_pool_block **, void *);
 typedef struct openssd_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
-
-/* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS (HINT_NONE)  /* (HINT_LATENCY | HINT_IOCTL) */ /* (HINT_SWAP | HINT_IOCTL) */
+typedef int (write_bio_fn)(struct openssd *, struct bio *);
+typedef int (read_bio_fn)(struct openssd *, struct bio *);
 
 /* Main structure */
 struct openssd {
@@ -227,6 +223,8 @@ struct openssd {
 	map_ltop_fn *map_ltop;
 	lookup_ltop_fn *lookup_ltop;
 	lookup_ptol_fn *lookup_ptol;
+	write_bio_fn *write_bio;
+	read_bio_fn *read_bio;
 
 	/* Write strategy variables. Move these into each for structure for each 
 	 * strategy */
@@ -243,13 +241,11 @@ struct openssd {
 	spinlock_t gc_lock;
 	struct task_struct *kt_openssd; /* handles gc and any other async work */
 
-	/* Hint related*/
-	unsigned int hint_flags;
+	/* Fast/slow pages */
 	char fast_page_block_map[BLOCK_PAGE_COUNT];
-	char* ino_hints; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
-	spinlock_t hintlock;
-	struct list_head hintlist;
-	struct openssd_addr *shaddow_map; // TODO should be hash table for efficiency? (but then we also need to use a lock...)
+
+	/* Hint related*/
+	void *hint_private;
 };
 
 static struct kmem_cache *_per_bio_cache;
@@ -266,29 +262,69 @@ struct per_bio_data {
 	unsigned int sync;
 };
 
+// Push to dm-openssd-hint when possible.
+struct openssd_hint_map_private {
+	sector_t old_p_addr;
+	unsigned int prev_ap;
+	unsigned long flags;
+};
+
+
 /* dm-openssd-c */
 
-/* Helpers */
+/*   Helpers */
 void openssd_print_total_blocks(struct openssd *os);
 int block_is_full(struct openssd_pool_block *block);
-sector_t block_to_addr(struct openssd_pool_block *block);
 struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block);
+sector_t block_to_addr(struct openssd_pool_block *block);
+int physical_to_slot(sector_t phys);
 
-/* I/O bio related */
+
+void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block);
+struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool);
+sector_t openssd_get_physical_page(struct openssd_pool_block *block);
+sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_block *block);
+
+
+/*   Naive implementations */
+
+/* Maps a logical to physical address in round robin order. */
+sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+/* Calls map_ltop_rr with a specified number of retries. Returns LTOP_EMPTY if failed */
+sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+
+/*   I/O bio related */
 void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, int sync);
-void openssd_submit_write(struct openssd *os, sector_t physical_addr, 
+void openssd_submit_write(struct openssd *os, sector_t physical_addr,
 				 struct openssd_pool_block* victim_block, int size);
-int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block* victim_block, struct bio_vec *bv);
+int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block *victim_block, struct bio_vec *bv);
+int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
+int openssd_read_bio_generic(struct openssd *os, struct bio *bio);
+void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
+				   sector_t p_addr, struct openssd_pool_block *p_block);
 
-/* NVM device related */
+/*   NVM device related */
 void openssd_erase_block(struct openssd_pool_block *block);
 
-/* Block maintanence */
+/*   Block maintanence */
 void openssd_pool_put_block(struct openssd_pool_block *block);
 void openssd_reset_block(struct openssd_pool_block *block);
 
-	/* dm-openssd-gc.c */
+/* dm-openssd-gc.c */
 void openssd_gc_collect(struct openssd *os);
+
+/* dm-openssd-hint.c */
+int openssd_alloc_hint(struct openssd *);
+int openssd_init_hint(struct openssd *);
+void openssd_exit_hint(struct openssd *);
+void openssd_free_hint(struct openssd *);
+
+/*   Hint core */
+int openssd_ioctl_hint(struct openssd *os, unsigned int cmd, unsigned long arg);
+
+/*   Callbacks */
+void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bio_data *pb, unsigned long *delay);
+void openssd_bio_hint(struct openssd *os, struct bio *bio);
 
 #define ssd_for_each_pool(openssd, pool, i)									\
 		for ((i) = 0, pool = &(openssd)->pools[0];							\

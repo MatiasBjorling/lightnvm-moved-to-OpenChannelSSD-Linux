@@ -775,22 +775,6 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 	struct openssd_ap *ap;
 	int i, j;
 
-	os->nr_aps_per_pool = APS_PER_POOL;
-	os->serialize_ap_access = SERIALIZE_AP_ACCESS;
-
-	// Simple round-robin strategy
-	atomic_set(&os->next_write_ap, -1);
-	if (!os->lookup_ltop)
-		os->lookup_ltop = openssd_lookup_ltop;
-	if (!os->lookup_ptol)
-		os->lookup_ptol = openssd_lookup_ptol;
-	if (!os->map_ltop)
-		os->map_ltop = openssd_map_ltop_rr;
-	if (!os->write_bio)
-		os->write_bio = openssd_write_bio_generic;
-	if (!os->read_bio)
-		os->read_bio = openssd_read_bio_generic;
-
 	spin_lock_init(&os->gc_lock);
 
 	os->nr_pools = POOL_COUNT;
@@ -912,7 +896,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	memset(os->trans_map, 0, sizeof(struct openssd_addr) * os->nr_pages);
 
 	// initial l2p is LTOP_EMPTY
-	for(i=0;i<os->nr_pages;i++) 
+	for(i = 0; i < os->nr_pages; i++) 
 		os->trans_map[i].addr = LTOP_EMPTY;
 
 	os->rev_trans_map = vmalloc(sizeof(sector_t) * os->nr_pages);
@@ -931,8 +915,20 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		goto err_per_bio_pool;
 	}
 	os->sector_size = EXPOSED_PAGE_SIZE;
+	os->nr_aps_per_pool = APS_PER_POOL;
+	os->serialize_ap_access = SERIALIZE_AP_ACCESS;
 
-	if (!openssd_alloc_hint(os)) 
+	// Simple round-robin strategy
+	atomic_set(&os->next_write_ap, -1);
+
+	os->lookup_ltop = openssd_lookup_ltop;
+	os->lookup_ptol = openssd_lookup_ptol;
+	os->map_ltop = openssd_map_ltop_rr;
+	os->write_bio = openssd_write_bio_generic;
+	os->read_bio = openssd_read_bio_generic;
+
+
+	if (openssd_alloc_hint(os)) 
 		goto err_per_bio_pool;
 
 	DMINFO("Target sector size=%d", os->sector_size);
@@ -951,7 +947,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	if (!os->kt_openssd)
 		goto err_per_bio_pool;
 
-	if (!openssd_init_hint(os))
+	if (openssd_init_hint(os))
 		goto err_per_bio_pool; // possible mem leak from pool_init.
 
 	DMINFO("allocated %lu physical pages (%lu KB)", os->nr_pages, os->nr_pages * os->sector_size / 1024);

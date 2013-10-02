@@ -483,7 +483,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	/* If there is no hint, or this is a reclaimed ltop mapping, 
 	 * use regular (single-page) map_ltop*/
 	//DMINFO("find hint");
-	if(map_alloc_data->old_p_addr != LTOP_EMPTY || (map_alloc_data->hint_info = openssd_find_hint(os, logical_addr, 1, HINT_LATENCY)) == NULL) {
+	if (map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
 		//DMINFO("hint not found. resort to regular allocation");
 		physical_addr = openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
 
@@ -537,7 +537,6 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 	struct openssd_hint_map_private *map_alloc_data = private;
 	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
-	hint_info_t* hint_info = NULL;
 	int ap_id;
 	int page_id = -1, i = 0;
 	sector_t physical_addr;
@@ -579,10 +578,10 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 	 *       openssd_find_hint(), but it would clutter its code for swap-specific stuff */
 	if(map_alloc_data->old_p_addr == LTOP_EMPTY){
 		spin_lock(&hint->hintlock);
-		if(hint_info->processed == hint_info->hint.count){
+		if(map_alloc_data->hint_info->processed == map_alloc_data->hint_info->hint.count){
 			//DMINFO("delete swap hint");
-			list_del(&hint_info->list_member);
-			kfree(hint_info);
+			list_del(&map_alloc_data->hint_info->list_member);
+			kfree(map_alloc_data->hint_info);
 		}
 		spin_unlock(&hint->hintlock);
 	}

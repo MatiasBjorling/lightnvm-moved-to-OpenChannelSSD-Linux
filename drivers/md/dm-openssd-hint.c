@@ -6,7 +6,7 @@
 
 void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bio_data *pb, unsigned long *delay)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	int page_id;
 
 	if ((hint->hint_flags & HINT_SWAP) && bio_data_dir(bio) == WRITE) {
@@ -25,7 +25,7 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bi
 // iterate hints list, and check if lba of current req is covered by some hint
 hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool is_write, int flags)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	hint_info_t *hint_info;
 	struct list_head *node;
 
@@ -87,7 +87,7 @@ fclass file_classify(struct bio_vec* bvec)
    and update ino_hint map when necessary*/
 static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	int i;
 	hint_info_t* hint_info;
 
@@ -344,7 +344,7 @@ static int openssd_write_bio_swap(struct openssd *os, struct bio *bio)
 
 static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	struct openssd_pool_block *victim_block;
 	struct bio_vec *bv;
 	sector_t logical_addr, physical_addr;
@@ -407,7 +407,7 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 
 static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logical_addr, sector_t old_p_addr)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	unsigned long flag = MAP_PRIMARY;
 
 	if(old_p_addr != LTOP_EMPTY) {
@@ -427,7 +427,7 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
 
 static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr, struct openssd_pool_block *p_block, unsigned long flags)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	struct openssd_addr *l;
 	unsigned int page_offset;
 
@@ -531,7 +531,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
  */
 static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	struct openssd_hint_map_private *map_alloc_data = private;
 	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
@@ -606,7 +606,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 //	 however, no queue maipulation impl. yet...
 static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t logical_addr)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	// TODO: during GC or w-r-w we may get a translation for an old page.
 	//       do we care enough to enforce some serializibilty in LBA accesses?
 	int ap_id = 0;
@@ -679,7 +679,7 @@ int openssd_ioctl_hint(struct openssd *os, unsigned int cmd, unsigned long arg)
 
 int openssd_init_hint(struct openssd *os)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	int i;
 
 	/* Relevant hinting */
@@ -703,10 +703,10 @@ int openssd_init_hint(struct openssd *os)
 
 int openssd_alloc_hint(struct openssd *os)
 {
-	struct hint_openssd *hint;
+	struct openssd_hint *hint;
 	int i;
 
-	hint = kmalloc(sizeof(struct hint_openssd), GFP_KERNEL);
+	hint = kmalloc(sizeof(struct openssd_hint), GFP_KERNEL);
 	if (!hint)
 		return -ENOMEM;
 	
@@ -754,7 +754,7 @@ err_shaddow_map:
 
 void openssd_free_hint(struct openssd *os)
 {
-	struct hint_openssd *hint = os->hint_private;
+	struct openssd_hint *hint = os->hint_private;
 	hint_info_t *hint_info, *next_hint_info;
 
 	spin_lock(&hint->hintlock);

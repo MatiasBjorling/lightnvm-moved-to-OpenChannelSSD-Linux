@@ -81,7 +81,7 @@
 
 enum ltop_flags {
 	MAP_PRIMARY	= 1 << 0, /* Update primary mapping (and init secondary mapping as a result) */
-	MAP_SHADDOW	= 1 << 1, /* Update only shaddow mapping */
+	MAP_SHADOW	= 1 << 1, /* Update only shaddow mapping */
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 

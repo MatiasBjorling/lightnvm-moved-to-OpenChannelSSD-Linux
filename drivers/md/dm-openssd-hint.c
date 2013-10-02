@@ -374,7 +374,7 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 		for(j = 0; j < numCopies; j++) {
 
 			if (j == 1)
-				map_alloc_data.flags = MAP_SINGLE|MAP_SHADDOW;
+				map_alloc_data.flags = MAP_SINGLE|MAP_SHADOW;
 
 			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, &map_alloc_data);
 
@@ -414,8 +414,8 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
 		flag = MAP_SINGLE;
 		if(os->trans_map[logical_addr].addr == old_p_addr)
 			flag |= MAP_PRIMARY;
-		else if(hint->shaddow_map[logical_addr].addr == old_p_addr)
-			flag |= MAP_SHADDOW;
+		else if(hint->shadow_map[logical_addr].addr == old_p_addr)
+			flag |= MAP_SHADOW;
 		else {
 			DMERR("Reclaiming a physical page %ld not mapped by any logical addr", old_p_addr);
 			WARN_ON(true);
@@ -431,11 +431,11 @@ static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, secto
 	struct openssd_addr *l;
 	unsigned int page_offset;
 
-	/* Secondary mapping. update shaddow */
-	if(flags & (MAP_SHADDOW|MAP_SINGLE)) {
-		DMINFO("update shaddow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
+	/* Secondary mapping. update shadow */
+	if(flags & (MAP_SHADOW|MAP_SINGLE)) {
+		DMINFO("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
 		
-		l = &hint->shaddow_map[l_addr];
+		l = &hint->shadow_map[l_addr];
 		if (l->block) {
 			page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
 			if(test_and_set_bit(page_offset, l->block->invalid_pages))
@@ -456,9 +456,9 @@ static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, secto
 		return;
 	}
 
-	/* Remove old shaddow mapping from shaddow map */
-	DMINFO("init shaddow");
-	l = &hint->shaddow_map[l_addr];
+	/* Remove old shadow mapping from shadow map */
+	DMINFO("init shadow");
+	l = &hint->shadow_map[l_addr];
 	l->addr = 0;
 	l->block = NULL;
 }
@@ -613,8 +613,8 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 	int pool_idx;
 	//DMINFO("latency_lookup_ltop: logical_addr=%ld", logical_addr);
 
-	// shaddow is empty
-	if(hint->shaddow_map[logical_addr].addr == LTOP_EMPTY){
+	// shadow is empty
+	if(hint->shadow_map[logical_addr].addr == LTOP_EMPTY){
 		DMINFO("no shadow. read primary");
 		return &os->trans_map[logical_addr];
 	}
@@ -622,10 +622,10 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 	// check if primary is busy
 	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / POOL_COUNT);
 	for(ap_id = pool_idx * APS_PER_POOL; ap_id < (pool_idx + 1) * APS_PER_POOL; ap_id++) {
-		// primary busy, return shaddow
+		// primary busy, return shadow
 		if(atomic_read(&os->aps[ap_id].is_active)) {
-			DMINFO("primary busy. read shaddow");
-			return &hint->shaddow_map[logical_addr];
+			DMINFO("primary busy. read shadow");
+			return &hint->shadow_map[logical_addr];
 		}
 	}
 
@@ -712,15 +712,15 @@ int openssd_alloc_hint(struct openssd *os)
 	
 	hint->hint_flags = DEPLOYED_HINTS;
 
-	// initla shaddow maps are empty
-	hint->shaddow_map = vmalloc(sizeof(struct openssd_addr) * os->nr_pages);
-	if (!hint->shaddow_map)
-		goto err_shaddow_map;
-	memset(hint->shaddow_map, 0, sizeof(struct openssd_addr) * os->nr_pages);
+	// initla shadow maps are empty
+	hint->shadow_map = vmalloc(sizeof(struct openssd_addr) * os->nr_pages);
+	if (!hint->shadow_map)
+		goto err_shadow_map;
+	memset(hint->shadow_map, 0, sizeof(struct openssd_addr) * os->nr_pages);
 
-	// initial shaddow l2p is LTOP_EMPTY
+	// initial shadow l2p is LTOP_EMPTY
 	for(i = 0; i < os->nr_pages; i++)
-		hint->shaddow_map[i].addr = LTOP_EMPTY;
+		hint->shadow_map[i].addr = LTOP_EMPTY;
 
 	spin_lock_init(&hint->hintlock);
 	INIT_LIST_HEAD(&hint->hintlist);
@@ -746,8 +746,8 @@ int openssd_alloc_hint(struct openssd *os)
 
 	return 0;
 err_hints:
-	vfree(hint->shaddow_map);
-err_shaddow_map:
+	vfree(hint->shadow_map);
+err_shadow_map:
 	kfree(hint);
 	return -ENOMEM;
 }
@@ -766,7 +766,7 @@ void openssd_free_hint(struct openssd *os)
 	spin_unlock(&hint->hintlock);
 
 	kfree(hint->ino_hints);
-	vfree(hint->shaddow_map);
+	vfree(hint->shadow_map);
 
 	kfree(os->hint_private);
 }

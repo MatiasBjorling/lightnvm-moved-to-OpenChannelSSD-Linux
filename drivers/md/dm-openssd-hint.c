@@ -670,6 +670,8 @@ int openssd_ioctl_hint(struct openssd *os, unsigned int cmd, unsigned long arg)
 			return openssd_ioctl_user_hint_cmd(os, arg);
 		case OPENSSD_IOCTL_KERNEL_HINT:
 			return openssd_ioctl_kernel_hint_cmd(os, arg);
+		default:
+			return __blkdev_driver_ioctl(os->dev->bdev, os->dev->mode, cmd, arg);
 	}
 
 	return 0;

@@ -274,17 +274,11 @@ struct openssd_hint_map_private {
 
 /*   Helpers */
 void openssd_print_total_blocks(struct openssd *os);
-int block_is_full(struct openssd_pool_block *block);
-struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block);
-sector_t block_to_addr(struct openssd_pool_block *block);
-int physical_to_slot(sector_t phys);
-
 
 void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block);
 struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool);
 sector_t openssd_get_physical_page(struct openssd_pool_block *block);
 sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_block *block);
-
 
 /*   Naive implementations */
 
@@ -337,6 +331,32 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio);
 #define pool_for_each_block(pool, block, i)									\
 		for ((i) = 0, block = &(pool)->blocks[0];							\
 			 (i) < (pool)->nr_blocks; (i)++, block = &(pool)->blocks[(i)])
+
+static inline int block_is_full(struct openssd_pool_block *block)
+{
+	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == NR_HOST_PAGES_IN_BLOCK);
+}
+
+static inline sector_t block_to_addr(struct openssd_pool_block *block)
+{
+	return (block->id * NR_HOST_PAGES_IN_BLOCK);
+}
+
+static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
+{
+	unsigned int ap_idx, div, mod;
+
+	div = block->id / POOL_BLOCK_COUNT;
+	mod = block->id % POOL_BLOCK_COUNT;
+	ap_idx = div + (mod / (POOL_BLOCK_COUNT / APS_PER_POOL));
+
+	return &os->aps[ap_idx];
+}
+
+static inline int physical_to_slot(sector_t phys) 
+{
+	return (phys % (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
+}
 
 
 #endif /* DM_OPENSSD_H_ */

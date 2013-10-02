@@ -71,32 +71,6 @@ static void free_per_bio_data(struct openssd *os, struct per_bio_data *pb)
 	mempool_free(pb, os->per_bio_pool);
 }
 
-inline int block_is_full(struct openssd_pool_block *block)
-{
-	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == NR_HOST_PAGES_IN_BLOCK);
-}
-
-inline sector_t block_to_addr(struct openssd_pool_block *block)
-{
-	return (block->id * NR_HOST_PAGES_IN_BLOCK);
-}
-
-inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
-{
-	unsigned int ap_idx, div, mod;
-
-	div = block->id / POOL_BLOCK_COUNT;
-	mod = block->id % POOL_BLOCK_COUNT;
-	ap_idx = div + (mod / (POOL_BLOCK_COUNT / APS_PER_POOL));
-
-	return &os->aps[ap_idx];
-}
-
-inline int physical_to_slot(sector_t phys) 
-{
-	return (phys % (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
-}
-
 static inline struct kref *__openssd_get_block_kref(struct openssd_pool_block *block, unsigned int cpu)
 {
 	return per_cpu_ptr(block->ref_count, cpu);
@@ -180,6 +154,26 @@ sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct op
 	return physical_addr;
 }
 
+/* requires pool->lock taken */
+inline void openssd_reset_block(struct openssd_pool_block *block)
+{
+	unsigned int order = ffs(NR_HOST_PAGES_IN_BLOCK) - 1;
+
+	BUG_ON(!block);
+
+	spin_lock(&block->lock);
+	if (block->data) {
+		WARN_ON(!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK));
+		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
+		__free_pages(block->data, order);
+	}
+	block->next_page = 0;
+	block->next_offset = 0;
+	block->nr_invalid_pages = 0;
+	atomic_set(&block->data_size, 0);
+	atomic_set(&block->data_cmnt_size, 0);
+	spin_unlock(&block->lock);
+}
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
  * Whenever a block is in used by an append point, we store it within the used_list.
@@ -221,26 +215,6 @@ struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool)
 	return block;
 }
 
-/* requires pool->lock taken */
-inline void openssd_reset_block(struct openssd_pool_block *block)
-{
-	unsigned int order = ffs(NR_HOST_PAGES_IN_BLOCK) - 1;
-
-	BUG_ON(!block);
-
-	spin_lock(&block->lock);
-	if (block->data) {
-		WARN_ON(!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK));
-		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
-		__free_pages(block->data, order);
-	}
-	block->next_page = 0;
-	block->next_offset = 0;
-	block->nr_invalid_pages = 0;
-	atomic_set(&block->data_size, 0);
-	atomic_set(&block->data_cmnt_size, 0);
-	spin_unlock(&block->lock);
-}
 
 /* We assume that all valid pages have already been moved when added back to the
  * free list. We add it last to allow round-robin use of all pages. Thereby provide

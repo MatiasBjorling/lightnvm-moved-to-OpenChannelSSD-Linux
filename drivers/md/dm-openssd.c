@@ -5,14 +5,12 @@
  *
  * Todo
  *
- * - Implement translation mapping from logical to physical flash pages
- * - Implement garbage collection
  * - Implement fetching of bad pages from flash
- * 
+ *
  * Hints
  * - configurable sector size
  * - handle case of in-page bv_offset (currently hidden assumption of offset=0, and bv_len spans entire page)
- * 
+ *
  * Optimization possibilities
  * - Move ap_next_write into a conconcurrency friendly data structure. Could be handled
  *   by more intelligent map_ltop function.

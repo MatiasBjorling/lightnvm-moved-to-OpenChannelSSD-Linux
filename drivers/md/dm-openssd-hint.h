@@ -9,6 +9,8 @@
 
 #include <linux/types.h>
 
+#include "dm-openssd.h"
+
 #define HINT_MAX_INOS       (500000)
 #define HINT_DATA_MAX_INOS  (8)
 #define HINT_DATA_SIZE (HINT_DATA_MAX_INOS*128) /* > 16 * 128 files at most */
@@ -50,6 +52,14 @@ typedef struct hint_data_s {
   uint32_t hint_payload_size;
   char hint_payload[HINT_PAYLOAD_SIZE];
 } hint_data_t;
+
+struct hint_openssd {
+	unsigned int hint_flags;
+	char* ino_hints; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
+	spinlock_t hintlock;
+	struct list_head hintlist;
+	struct openssd_addr *shaddow_map; // TODO should be hash table for efficiency? (but then we also need to use a lock...)
+};
 
 enum deploy_hint_flags {
 	HINT_NONE	= 0 << 0, /* No hints applied */

@@ -543,19 +543,19 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to openssd_map_ltop_rr */
-	if(map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
+	if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
 		DMINFO("swap_map: non-GC write");
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
 	}
+
 	/* GC write of a slow page */
-	if(map_alloc_data->old_p_addr != LTOP_EMPTY && !os->fast_page_block_map[physical_to_slot(map_alloc_data->old_p_addr)]){
+	if (map_alloc_data->old_p_addr != LTOP_EMPTY && !os->fast_page_block_map[physical_to_slot(map_alloc_data->old_p_addr)]){
 		DMINFO("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
 	}
-	
-	if(map_alloc_data->old_p_addr != LTOP_EMPTY)
-		DMINFO("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
 
+	if (map_alloc_data->old_p_addr != LTOP_EMPTY)
+		DMINFO("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
 
 	/* iterate all ap's and find fast page
 	 * TODO 1) should loop over append points (when we have more than 1 AP/pool)
@@ -576,9 +576,9 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 	/* Processed entire hint (in regular write)
 	 * Note: for swap hints we can actually avoid this lock, and free after processed++ in
 	 *       openssd_find_hint(), but it would clutter its code for swap-specific stuff */
-	if(map_alloc_data->old_p_addr == LTOP_EMPTY){
+	if (map_alloc_data->old_p_addr == LTOP_EMPTY){
 		spin_lock(&hint->hintlock);
-		if(map_alloc_data->hint_info->processed == map_alloc_data->hint_info->hint.count){
+		if (map_alloc_data->hint_info->processed == map_alloc_data->hint_info->hint.count){
 			//DMINFO("delete swap hint");
 			list_del(&map_alloc_data->hint_info->list_member);
 			kfree(map_alloc_data->hint_info);
@@ -587,7 +587,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 	}
 
 	// no fast page available, resort to openssd_map_ltop_rr
-	if(page_id < 0){
+	if (page_id < 0){
 		DMINFO("write lba %ld to (possible) SLOW page", logical_addr);
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
 	}
@@ -615,14 +615,14 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 	//DMINFO("latency_lookup_ltop: logical_addr=%ld", logical_addr);
 
 	// shadow is empty
-	if(hint->shadow_map[logical_addr].addr == LTOP_EMPTY){
+	if (hint->shadow_map[logical_addr].addr == LTOP_EMPTY){
 		DMINFO("no shadow. read primary");
 		return &os->trans_map[logical_addr];
 	}
 
 	// check if primary is busy
 	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / POOL_COUNT);
-	for(ap_id = pool_idx * APS_PER_POOL; ap_id < (pool_idx + 1) * APS_PER_POOL; ap_id++) {
+	for (ap_id = pool_idx * APS_PER_POOL; ap_id < (pool_idx + 1) * APS_PER_POOL; ap_id++) {
 		// primary busy, return shadow
 		if(atomic_read(&os->aps[ap_id].is_active)) {
 			DMINFO("primary busy. read shadow");
@@ -643,7 +643,7 @@ int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
 
 	/* allocate hint_data */
 	hint_data = kmalloc(sizeof(hint_data_t), GFP_KERNEL);
-	if (hint_data == NULL) {
+	if (!hint_data) {
 		DMERR("hint_data_t kmalloc failed");  
 		return -ENOMEM;
 	}
@@ -685,15 +685,12 @@ int openssd_init_hint(struct openssd *os)
 
 	/* Relevant hinting */
 	if (hint->hint_flags & HINT_SWAP) {
-		for(i = 0; i<BLOCK_PAGE_COUNT; i++)
-			os->fast_page_block_map[i] = 0;
-
 		// first four are fast
-		for(i = 0; i<4; i++)
+		for (i = 0; i<4; i++)
 			os->fast_page_block_map[i] = 1;
 
 		// in between, its slow-slow-fast-fast-slow-slow...
-		for(i = 6; i < BLOCK_PAGE_COUNT-4;) {
+		for (i = 6; i < BLOCK_PAGE_COUNT-4;) {
 			os->fast_page_block_map[i] = os->fast_page_block_map[i+1] = 1;
 			i+=4;
 		}

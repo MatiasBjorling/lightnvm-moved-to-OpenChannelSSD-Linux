@@ -33,7 +33,7 @@
 
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
 						  a pool is serial (NAND flash / PCM / etc.) */
-#define SERIALIZE_AP_ACCESS 0 /* If enabled, we delay bios on each ap to run serialized. */
+#define SERIALIZE_POOL_ACCESS 0 /* If enabled, we delay bios on each ap to run serialized. */
 #define LTOP_EMPTY -1
 
 /* Sleep timings before simulating device specific storage (in us)*/
@@ -146,6 +146,12 @@ struct openssd_pool {
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
 	struct openssd_pool_block *blocks;
+
+	/* Postpone issuing I/O if append point is active */
+	atomic_t is_active;
+	struct work_struct waiting_ws;
+	spinlock_t waiting_lock;
+	struct bio_list waiting_bios;
 };
 
 /*
@@ -163,12 +169,6 @@ struct openssd_ap {
 	unsigned long t_read;
 	unsigned long t_write;
 	unsigned long t_erase;
-
-	/* Postpone issuing I/O if append point is active */
-	atomic_t is_active;
-	struct work_struct waiting_ws;
-	spinlock_t waiting_lock;
-	struct bio_list waiting_bios;
 
 	unsigned long io_delayed;
 	unsigned long io_accesses[2];
@@ -231,7 +231,7 @@ struct openssd {
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
 							   to the next write append point */
 
-	bool serialize_ap_access;		/* Control accesses to append points in the host.
+	bool serialize_pool_access;		/* Control accesses to append points in the host.
 							 * Enable this for devices that doesn't have an
 							 * internal queue that only lets one command run
 							 * at a time within an append point 

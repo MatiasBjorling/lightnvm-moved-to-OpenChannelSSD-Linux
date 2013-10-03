@@ -610,7 +610,6 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 	struct openssd_hint *hint = os->hint_private;
 	// TODO: during GC or w-r-w we may get a translation for an old page.
 	//       do we care enough to enforce some serializibilty in LBA accesses?
-	int ap_id = 0;
 	int pool_idx;
 	//DMINFO("latency_lookup_ltop: logical_addr=%ld", logical_addr);
 
@@ -622,12 +621,9 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 
 	// check if primary is busy
 	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / POOL_COUNT);
-	for (ap_id = pool_idx * APS_PER_POOL; ap_id < (pool_idx + 1) * APS_PER_POOL; ap_id++) {
-		// primary busy, return shadow
-		if(atomic_read(&os->aps[ap_id].is_active)) {
-			DMINFO("primary busy. read shadow");
-			return &hint->shadow_map[logical_addr];
-		}
+	if(atomic_read(&os->pools[pool_idx].is_active)) {
+		DMINFO("primary busy. read shadow");
+		return &hint->shadow_map[logical_addr];
 	}
 
 	// primary not busy

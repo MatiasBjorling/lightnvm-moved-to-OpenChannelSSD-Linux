@@ -12,7 +12,7 @@ static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_h
 	return a->nr_invalid_pages < b->nr_invalid_pages;
 }
 
-/* Move data away from flash block to be erased. Additionally update the l to p and p to l 
+/* Move data away from flash block to be erased. Additionally update the l to p and p to l
  * mappings.
  */
 static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_block *block)
@@ -86,7 +86,7 @@ void openssd_gc_collect(struct openssd *os)
 
 			nr_blocks_need = pool->nr_blocks;
 			do_div(nr_blocks_need, GC_LIMIT_INVERSE);
-		
+
 			//DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
 			if (nr_blocks_need >= pool->nr_free_blocks) {
 				list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);

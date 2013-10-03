@@ -37,7 +37,7 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 		/* verify lba covered by hint*/
 		if (is_hint_relevant(logical_addr, hint_info, is_write, flags)) {
                         DMINFO("found hint for lba %ld",logical_addr);
-			hint_info->processed++;	
+			hint_info->processed++;
 			spin_unlock(&hint->hintlock);
 			return hint_info;
 		}
@@ -48,7 +48,7 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 	return NULL;
 }
 
-fclass file_classify(struct bio_vec* bvec) 
+fclass file_classify(struct bio_vec* bvec)
 {
 	fclass fc = FC_UNKNOWN;
 	char *sec_in_mem;
@@ -89,7 +89,7 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	int i;
 	hint_info_t* hint_info;
 
-	DMINFO("first %s hint count=%d lba=%d fc=%d", 
+	DMINFO("first %s hint count=%d lba=%d fc=%d",
 			CAST_TO_PAYLOAD(hint_data)->is_write ? "WRITE" : "READ",
 			CAST_TO_PAYLOAD(hint_data)->count,
 			INO_HINT_FROM_DATA(hint_data, 0).start_lba,
@@ -272,7 +272,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 
 					INO_HINT_FROM_DATA(hint_data, hint_idx).count +=
 							   bvec[0].bv_len / sector_size;
-					DMINFO("increase count for hint %u. new count=%u", 
+					DMINFO("increase count for hint %u. new count=%u",
 						hint_idx, INO_HINT_FROM_DATA(hint_data, hint_idx).count);
 					bio_len+= bvec[0].bv_len;
 					continue;
@@ -286,14 +286,14 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 
 				DMINFO("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u",
 					is_write ? "WRITE":"READ",
-					ino, 
+					ino,
 					lba + (bio_len / sector_size),
 					(fc == FC_VIDEO_SLOW) ? "VIDEO" : (fc == FC_EMPTY) ? "EMPTY" : "UNKNOWN",
-					bvec[0].bv_len / sector_size, 
+					bvec[0].bv_len / sector_size,
 					CAST_TO_PAYLOAD(hint_data)->count+1);
 
 				// add new hint to hint_data. lba count=bvec[0].bv_len / sector_size, will add more later on
-				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count, 
+				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count,
 					ino, lba + (bio_len / sector_size), bvec[0].bv_len / sector_size, fc);
 				CAST_TO_PAYLOAD(hint_data)->count++;
 			}
@@ -437,7 +437,7 @@ static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, secto
 	/* Secondary mapping. update shadow */
 	if(flags & (MAP_SHADOW|MAP_SINGLE)) {
 		DMINFO("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
-		
+
 		l = &hint->shadow_map[l_addr];
 		if (l->block) {
 			page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
@@ -480,7 +480,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	int ap_id, page_id;
 	sector_t physical_addr;
 
-	/* If there is no hint, or this is a reclaimed ltop mapping, 
+	/* If there is no hint, or this is a reclaimed ltop mapping,
 	 * use regular (single-page) map_ltop*/
 	//DMINFO("find hint");
 	if (map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
@@ -527,7 +527,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 
 /* Swap-proned Logical to physical address translation.
  *
- * If swap write, use simple fast page allocation - find some append point whose next page is fast. 
+ * If swap write, use simple fast page allocation - find some append point whose next page is fast.
  * Then update the ap for the next write to the disk.
  * If no reelvant ap found, or non-swap write - resort to normal allocation
  */
@@ -640,7 +640,7 @@ int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
 	/* allocate hint_data */
 	hint_data = kmalloc(sizeof(hint_data_t), GFP_KERNEL);
 	if (!hint_data) {
-		DMERR("hint_data_t kmalloc failed");  
+		DMERR("hint_data_t kmalloc failed");
 		return -ENOMEM;
 	}
 
@@ -687,7 +687,7 @@ int openssd_alloc_hint(struct openssd *os)
 	hint = kmalloc(sizeof(struct openssd_hint), GFP_KERNEL);
 	if (!hint)
 		return -ENOMEM;
-	
+
 	hint->hint_flags = DEPLOYED_HINTS;
 
 	// initla shadow maps are empty

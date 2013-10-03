@@ -21,7 +21,7 @@
 			     INO_HINT_FROM_DATA(HINT_DATA, IDX).ino = INO; \
                              INO_HINT_FROM_DATA(HINT_DATA, IDX).start_lba = START; \
                              INO_HINT_FROM_DATA(HINT_DATA, IDX).count = COUNT; \
-                             INO_HINT_FROM_DATA(HINT_DATA, IDX).fc = FC; 
+                             INO_HINT_FROM_DATA(HINT_DATA, IDX).fc = FC;
 typedef enum {
   FC_EMPTY,
   FC_UNKNOWN,
@@ -39,7 +39,7 @@ typedef struct ino_hint_s {
 
 typedef struct hint_payload_s{
    char     data[HINT_DATA_SIZE];
-   uint32_t is_write; 
+   uint32_t is_write;
    uint32_t hint_flags;
    uint32_t lba;
    uint32_t sectors_count;
@@ -63,11 +63,11 @@ struct openssd_hint {
 
 #ifdef __KERNEL__
 typedef struct hint_info_s{
-    	ino_hint_t hint; // if NULL, none
+	ino_hint_t hint; // if NULL, none
 	char is_write;
 	unsigned int hint_flags;
-    	uint32_t processed; // how many related LBAs were indeed processed
-    	struct list_head list_member;
+	uint32_t processed; // how many related LBAs were indeed processed
+	struct list_head list_member;
 }hint_info_t;
 #endif
 

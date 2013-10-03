@@ -95,12 +95,12 @@ static inline void openssd_put_block(struct openssd_pool_block *block)
 
 static void openssd_delayed_bio_submit(struct work_struct *work)
 {
-	struct openssd_ap *ap = container_of(work, struct openssd_ap, waiting_ws);
+	struct openssd_pool *pool = container_of(work, struct openssd_pool, waiting_ws);
 	struct bio *bio;
 
-	spin_lock(&ap->waiting_lock);
-	bio = bio_list_pop(&ap->waiting_bios);
-	spin_unlock(&ap->waiting_lock);
+	spin_lock(&pool->waiting_lock);
+	bio = bio_list_pop(&pool->waiting_bios);
+	spin_unlock(&pool->waiting_lock);
 
 	generic_make_request(bio);
 }
@@ -388,6 +388,7 @@ static void openssd_endio(struct bio *bio, int err)
 {
 	struct per_bio_data *pb;
 	struct openssd_ap *ap;
+	struct openssd_pool *pool;
 	struct openssd *os;
 	struct timeval end_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
@@ -396,6 +397,7 @@ static void openssd_endio(struct bio *bio, int err)
 
 	ap = pb->ap;
 	os = ap->parent;
+	pool = ap->pool;
 
 	DMINFO("openssd_endio: %s pb->physical_addr %ld bio->bi_sector %ld", (bio_data_dir(bio) == WRITE)?"WRITE":"READ",pb->physical_addr, bio->bi_sector);
 	if (pb->physical_addr == LTOP_EMPTY){
@@ -422,10 +424,10 @@ static void openssd_endio(struct bio *bio, int err)
 	}
 
 	// Remember that the IO is first officially finished from here 
-	if (bio_list_peek(&ap->waiting_bios))
-		queue_work(os->kbiod_wq, &ap->waiting_ws);
+	if (bio_list_peek(&pool->waiting_bios))
+		queue_work(os->kbiod_wq, &pool->waiting_ws);
 	else
-		atomic_set(&ap->is_active, 0);
+		atomic_set(&pool->is_active, 0);
 
 done:
 	dedecorate_bio(pb, bio);
@@ -456,6 +458,7 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, int sync)
 {
 	struct openssd *os = ap->parent;
+	struct openssd_pool *pool = ap->pool;
 	struct per_bio_data *pb;
 
 	pb = alloc_decorate_per_bio_data(os, bio);
@@ -470,13 +473,13 @@ void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, int sync
 	/* setup timings - remember overhead. */
 	do_gettimeofday(&pb->start_tv);
 
-	if (os->serialize_ap_access && atomic_read(&ap->is_active)) {
-		spin_lock(&ap->waiting_lock);
+	if (os->serialize_pool_access && atomic_read(&pool->is_active)) {
+		spin_lock(&pool->waiting_lock);
 		ap->io_delayed++;
-		bio_list_add(&ap->waiting_bios, bio);
-		spin_unlock(&ap->waiting_lock);
+		bio_list_add(&pool->waiting_bios, bio);
+		spin_unlock(&pool->waiting_lock);
 	} else {
-		atomic_inc(&ap->is_active);
+		atomic_inc(&pool->is_active);
 	}
 
 	// We allow counting to be semi-accurate as theres no locking for accounting.
@@ -767,6 +770,11 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 
 		pool->nr_free_blocks = pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
 		pool->blocks = kzalloc(sizeof(struct openssd_pool_block) * pool->nr_blocks, GFP_KERNEL);
+		spin_lock_init(&pool->waiting_lock);
+		bio_list_init(&pool->waiting_bios);
+		INIT_WORK(&pool->waiting_ws, openssd_delayed_bio_submit);
+		atomic_set(&pool->is_active, 0);
+
 		if (!pool->blocks)
 			goto err_blocks;
 
@@ -803,11 +811,6 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			ap = &os->aps[(i * os->nr_aps_per_pool) + j];
 
 			spin_lock_init(&ap->lock);
-			spin_lock_init(&ap->waiting_lock);
-			bio_list_init(&ap->waiting_bios);
-			INIT_WORK(&ap->waiting_ws, openssd_delayed_bio_submit);
-			atomic_set(&ap->is_active, 0);
-
 			ap->parent = os;
 			ap->pool = pool;
 			ap->cur = openssd_pool_get_block(pool); // No need to lock ap->cur.
@@ -889,7 +892,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 	os->sector_size = EXPOSED_PAGE_SIZE;
 	os->nr_aps_per_pool = APS_PER_POOL;
-	os->serialize_ap_access = SERIALIZE_AP_ACCESS;
+	os->serialize_pool_access = SERIALIZE_POOL_ACCESS;
 
 	// Simple round-robin strategy
 	atomic_set(&os->next_write_ap, -1);
@@ -943,13 +946,12 @@ static void openssd_dtr(struct dm_target *ti)
 	struct openssd *os = (struct openssd *) ti->private;
 	struct openssd_pool *pool;
 	struct openssd_pool_block *block;
-	struct openssd_ap *ap;
 	int i, j;
 
 	dm_put_device(ti, os->dev);
 
-	ssd_for_each_ap(os, ap, i) {
-		while (bio_list_peek(&ap->waiting_bios))
+	ssd_for_each_pool(os, pool, i) {
+		while (bio_list_peek(&pool->waiting_bios))
 			flush_scheduled_work();
 	}
 

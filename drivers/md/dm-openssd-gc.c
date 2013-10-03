@@ -1,5 +1,10 @@
 #include "dm-openssd.h"
 
+static void __erase_block(struct openssd_pool_block *block)
+{
+	// Perform device erase
+}
+
 /* the block with highest number of invalid pages, will be in the beginning of the list */
 static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_head *lh_b)
 {
@@ -41,7 +46,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 		src_bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
 		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
 
-		openssd_submit_bio(READ, src_bio, block_to_ap(os, block), 1);
+		openssd_submit_bio(os, block, READ, src_bio, 1);
 
 		// Perform write
 
@@ -55,13 +60,25 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 		/* Write using regular write machanism */
 		bio_for_each_segment(bv, src_bio, i) {
 			unsigned int size = openssd_handle_buffered_write(dest_addr, victim_block, bv);
-			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0) {
+			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
 				openssd_submit_write(os, dest_addr, victim_block, size);
-			}
 		}
 	}
 	__free_page(page);
 	bitmap_fill(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
+}
+
+/* Push erase condition to automatically be executed when block goes to zero.
+ * Only GC should do this */
+void openssd_block_release(struct percpu_ref *ref)
+{
+	struct openssd_pool_block *block;
+
+	block = container_of(ref, struct openssd_pool_block, ref_count);
+
+	DMINFO("erasing block");
+	__erase_block(block);
+	openssd_pool_put_block(block);
 }
 
 void openssd_gc_collect(struct openssd *os)
@@ -100,8 +117,10 @@ void openssd_gc_collect(struct openssd *os)
 					DMINFO("move pages");
 					openssd_move_valid_pages(os, block);
 
-					openssd_erase_block(block);
-					openssd_pool_put_block(block);
+
+					/* When block hits zero refs, its added back to 
+					 * the empty pool */
+					openssd_put_block(block);
 
 					break;
 				}

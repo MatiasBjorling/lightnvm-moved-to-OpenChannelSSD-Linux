@@ -31,7 +31,7 @@
 
 #define DM_MSG_PREFIX "openssd"
 
-#define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within 
+#define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within
 						  a pool is serial (NAND flash / PCM / etc.) */
 #define SERIALIZE_POOL_ACCESS 0 /* If enabled, we delay bios on each ap to run serialized. */
 #define LTOP_EMPTY -1
@@ -97,8 +97,8 @@ struct openssd_pool_block {
 	struct {
 		spinlock_t lock;
 		unsigned int next_page; /* points to the next writable flash page within a block */
-		unsigned char next_offset; /* if a flash page can have multiple host pages, 
-									   fill up the flash page before going to the next 
+		unsigned char next_offset; /* if a flash page can have multiple host pages,
+									   fill up the flash page before going to the next
 									   writable flash page */
 		unsigned int nr_invalid_pages; /* number of pages that are invalid, with respect to host page size */
 		unsigned long invalid_pages[NR_HOST_PAGES_IN_BLOCK / BITS_PER_LONG];
@@ -188,7 +188,7 @@ struct openssd {
 	struct dm_target *ti;
 	uint32_t sector_size;
 
-	/* Simple translation map of logical addresses to physical addresses. The 
+	/* Simple translation map of logical addresses to physical addresses. The
 	 * logical addresses is known by the host system, while the physical
 	 * addresses are used when writing to the disk block device. */
 	struct openssd_addr *trans_map;
@@ -202,7 +202,7 @@ struct openssd {
 	 * We assume that the device exposes its channels as a linear address
 	 * space. A pool therefore have a phy_addr_start and phy_addr_end that
 	 * denotes the start and end. This abstraction is used to let the openssd
-	 * (or any other device) expose its read/write/erase interface and be 
+	 * (or any other device) expose its read/write/erase interface and be
 	 * administrated by the host system.
 	 */
 	struct openssd_pool *pools;
@@ -226,7 +226,7 @@ struct openssd {
 	write_bio_fn *write_bio;
 	read_bio_fn *read_bio;
 
-	/* Write strategy variables. Move these into each for structure for each 
+	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
 							   to the next write append point */
@@ -234,7 +234,7 @@ struct openssd {
 	bool serialize_pool_access;		/* Control accesses to append points in the host.
 							 * Enable this for devices that doesn't have an
 							 * internal queue that only lets one command run
-							 * at a time within an append point 
+							 * at a time within an append point
 							*/
 	struct workqueue_struct *kbiod_wq;
 
@@ -253,7 +253,7 @@ struct per_bio_data {
 	sector_t physical_addr;
 
 	// Hook up for our overwritten bio fields
-	bio_end_io_t *bi_end_io; 
+	bio_end_io_t *bi_end_io;
 	void *bi_private;
 	struct completion event;
 	unsigned int sync;
@@ -333,14 +333,14 @@ static inline sector_t block_to_addr(struct openssd_pool_block *block)
 
 static inline int page_is_fast(unsigned int pagenr)
 {
-	/* pages: F F F F | SSFFSS | SSFFSS | ... S Slow F Fast */ 
+	/* pages: F F F F | SSFFSS | SSFFSS | ... S Slow F Fast */
 	if (pagenr < 4)
 		return 1;
 
 	pagenr -= 4;
 	pagenr %= 6;
 
-	if (pagenr == 2 || pagenr == 3) 
+	if (pagenr == 2 || pagenr == 3)
 		return 1;
 
 	return 0;
@@ -357,7 +357,7 @@ static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_
 	return &os->aps[ap_idx];
 }
 
-static inline int physical_to_slot(sector_t phys) 
+static inline int physical_to_slot(sector_t phys)
 {
 	return (phys % (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
 }

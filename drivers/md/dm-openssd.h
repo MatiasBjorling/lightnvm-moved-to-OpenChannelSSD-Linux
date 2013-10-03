@@ -86,13 +86,6 @@ enum ltop_flags {
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 
-enum block_state {
-	BLOCK_STATE_NEW		= 0,
-	BLOCK_STATE_FULL	= 1,
-	BLOCK_STATE_GC		= 2,
-	BLOCK_STATE_RELEASED= 3,
-};
-
 /* Pool descriptions */
 struct openssd_pool_block {
 	struct {
@@ -120,9 +113,6 @@ struct openssd_pool_block {
 
 	/* Block state handling */
 	spinlock_t gc_lock;
-	enum block_state state; /* BLOCK_STATE_* -> When larger than FULL, address lookups are postponed until its finished. */
-	/* some method to postpone work should be allocated here. */
-
 	struct percpu_ref ref_count; /* Outstanding IOs to be completed on block */
 };
 

@@ -283,7 +283,7 @@ sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_
 	}
 
 	/* Current page is slow */
-	if (!os->fast_page_block_map[block->next_page]){
+	if (!page_is_fast(block->next_page)) {
 		goto get_fast_done;
 	}
 
@@ -292,7 +292,7 @@ sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_
 	block->next_offset++;
 
 	/* Mark block as full (if necessary) */
-	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1){
+	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1) {
 		DMINFO("mark block as full");
 	}
 

@@ -11,11 +11,9 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bi
 
 	if ((hint->hint_flags & HINT_SWAP) && bio_data_dir(bio) == WRITE) {
 		page_id = (pb->physical_addr / NR_HOST_PAGES_IN_FLASH_PAGE) % BLOCK_PAGE_COUNT;
-		//DMINFO("pb->physical_addr %ld. page_id %d", pb->physical_addr, page_id);
-		//DMINFO("os->fast_page_block_map[%d] %ld", page_id, os->fast_page_block_map[page_id]);
 
 		// TODO: consider dev_wait to be part of per_bio_data?
-		if(os->fast_page_block_map[page_id])
+		if(page_is_fast(page_id))
 			(*delay) = TIMING_WRITE_FAST;
 		else
 			(*delay) = TIMING_WRITE_SLOW;
@@ -549,7 +547,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 	}
 
 	/* GC write of a slow page */
-	if (map_alloc_data->old_p_addr != LTOP_EMPTY && !os->fast_page_block_map[physical_to_slot(map_alloc_data->old_p_addr)]){
+	if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(map_alloc_data->old_p_addr))) {
 		DMINFO("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
 		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
 	}
@@ -680,22 +678,6 @@ int openssd_ioctl_hint(struct openssd *os, unsigned int cmd, unsigned long arg)
 
 int openssd_init_hint(struct openssd *os)
 {
-	struct openssd_hint *hint = os->hint_private;
-	int i;
-
-	/* Relevant hinting */
-	if (hint->hint_flags & HINT_SWAP) {
-		// first four are fast
-		for (i = 0; i<4; i++)
-			os->fast_page_block_map[i] = 1;
-
-		// in between, its slow-slow-fast-fast-slow-slow...
-		for (i = 6; i < BLOCK_PAGE_COUNT-4;) {
-			os->fast_page_block_map[i] = os->fast_page_block_map[i+1] = 1;
-			i+=4;
-		}
-	}
-
 	return 0;
 }
 

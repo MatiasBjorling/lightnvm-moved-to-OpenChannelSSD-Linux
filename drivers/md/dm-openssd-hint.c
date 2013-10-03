@@ -2,7 +2,7 @@
 #include "dm-openssd-hint.h"
 
 /* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS (HINT_NONE)  /* (HINT_LATENCY | HINT_IOCTL) */ /* (HINT_SWAP | HINT_IOCTL) */
+#define DEPLOYED_HINTS /* (HINT_NONE)  */ (HINT_LATENCY | HINT_IOCTL)  /* (HINT_SWAP | HINT_IOCTL) */
 
 void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bio_data *pb, unsigned long *delay)
 {
@@ -393,13 +393,15 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 	}
 
 	/* Processed entire hint */
-	spin_lock(&hint->hintlock);
-	if(map_alloc_data.hint_info->processed == map_alloc_data.hint_info->hint.count){
-		//DMINFO("delete latency hint");
-		list_del(&map_alloc_data.hint_info->list_member);
-		kfree(map_alloc_data.hint_info);
+	if (map_alloc_data.hint_info) {
+		spin_lock(&hint->hintlock);
+		if(map_alloc_data.hint_info->processed == map_alloc_data.hint_info->hint.count){
+			//DMINFO("delete latency hint");
+			list_del(&map_alloc_data.hint_info->list_member);
+			kfree(map_alloc_data.hint_info);
+		}
+		spin_unlock(&hint->hintlock);
 	}
-	spin_unlock(&hint->hintlock);
 
 	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;

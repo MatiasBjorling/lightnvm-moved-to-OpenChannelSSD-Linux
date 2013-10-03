@@ -216,10 +216,12 @@ void openssd_pool_put_block(struct openssd_pool_block *block)
 
 sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 {
-	sector_t addr;
+	sector_t addr = LTOP_EMPTY;
 
 	spin_lock(&block->lock);
 
+	if (block_is_full(block))
+		goto out;
 	/* If there is multiple host pages within a flash page, we add the
 	 * the offset to the address, instead of requesting a new page
 	 * from the physical block */
@@ -231,12 +233,8 @@ sector_t openssd_get_physical_page(struct openssd_pool_block *block)
 	addr = (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
 	block->next_offset++;
 
-	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
-		addr = -1;
-
+out:
 	spin_unlock(&block->lock);
-
-	//DMINFO("get_page() - return %ld (block->next_page %d)", addr, block->next_page);
 	return addr;
 }
 
@@ -249,9 +247,9 @@ sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_
 	//       openssd_get_page_id, is the atomic_XXX_return part redundant?
 	spin_lock(&block->lock);
 	/* Block is full */
-	if ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) {
+	if (block_is_full(block)) {
 		DMINFO("block is full. return -1");
-		goto get_fast_done;
+		goto out;
 	}
 
 	/* If there is multiple host pages within a flash page, we add the
@@ -264,17 +262,13 @@ sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_
 
 	/* Current page is slow */
 	if (!page_is_fast(block->next_page))
-		goto get_fast_done;
+		goto out;
 
 	/* Calc addr*/
 	addr = (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
 	block->next_offset++;
 
-	/* Mark block as full (if necessary) */
-	if (addr == (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE) - 1)
-		DMINFO("mark block as full");
-
-get_fast_done:
+out:
 	spin_unlock(&block->lock);
 	return addr;
 }

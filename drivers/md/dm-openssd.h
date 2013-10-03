@@ -241,9 +241,6 @@ struct openssd {
 	spinlock_t gc_lock;
 	struct task_struct *kt_openssd; /* handles gc and any other async work */
 
-	/* Fast/slow pages */
-	char fast_page_block_map[BLOCK_PAGE_COUNT];
-
 	/* Hint related*/
 	void *hint_private;
 };
@@ -332,6 +329,21 @@ static inline int block_is_full(struct openssd_pool_block *block)
 static inline sector_t block_to_addr(struct openssd_pool_block *block)
 {
 	return (block->id * NR_HOST_PAGES_IN_BLOCK);
+}
+
+static inline int page_is_fast(unsigned int pagenr)
+{
+	/* pages: F F F F | SSFFSS | SSFFSS | ... S Slow F Fast */ 
+	if (pagenr < 4)
+		return 1;
+
+	pagenr -= 4;
+	pagenr %= 6;
+
+	if (pagenr == 2 || pagenr == 3) 
+		return 1;
+
+	return 0;
 }
 
 static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)

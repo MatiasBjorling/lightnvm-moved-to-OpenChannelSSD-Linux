@@ -73,28 +73,6 @@ static void free_per_bio_data(struct openssd *os, struct per_bio_data *pb)
 	mempool_free(pb, os->per_bio_pool);
 }
 
-static inline struct kref *__openssd_get_block_kref(struct openssd_pool_block *block, unsigned int cpu)
-{
-	return per_cpu_ptr(block->ref_count, cpu);
-}
-
-/* Push erase condition to automatically be executed when block goes to zero.
- * Only GC should do this */
-static void openssd_block_release_prematurely(struct kref *ref_count)
-{
-	WARN_ON(1);
-}
-
-static inline void openssd_get_block(struct openssd_pool_block *block)
-{
-	return kref_get(__openssd_get_block_kref(block, get_cpu()));
-}
-
-static inline void openssd_put_block(struct openssd_pool_block *block)
-{
-	kref_put(__openssd_get_block_kref(block, get_cpu()), openssd_block_release_prematurely);
-}
-
 static void openssd_delayed_bio_submit(struct work_struct *work)
 {
 	struct openssd_pool *pool = container_of(work, struct openssd_pool, waiting_ws);
@@ -321,7 +299,7 @@ void openssd_print_total_blocks(struct openssd *os)
 	DMINFO("Total free blocks: %u", total);
 }
 
-static struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
+struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
 {
 	// TODO: during GC or w-r-w we may get a translation for an old page.
 	//       do we care enough to enforce some serializibilty in LBA accesses?
@@ -333,8 +311,10 @@ static struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t log
 		if (!addr->block)
 			return addr;
 
-		if (!spin_is_locked(&addr->block->gc_lock))
+		if (!spin_is_locked(&addr->block->gc_lock)) {
+			openssd_get_block(addr->block);
 			return addr;
+		}
 
 		schedule();
 	}
@@ -387,9 +367,10 @@ sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct o
 static void openssd_endio(struct bio *bio, int err)
 {
 	struct per_bio_data *pb;
+	struct openssd *os;
 	struct openssd_ap *ap;
 	struct openssd_pool *pool;
-	struct openssd *os;
+	struct openssd_pool_block *block;
 	struct timeval end_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
 
@@ -398,7 +379,8 @@ static void openssd_endio(struct bio *bio, int err)
 	ap = pb->ap;
 	os = ap->parent;
 	pool = ap->pool;
-
+	block = pb->block;
+	
 	DMINFO("openssd_endio: %s pb->physical_addr %ld bio->bi_sector %ld",
 			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ", pb->physical_addr, bio->bi_sector);
 	if (pb->physical_addr == LTOP_EMPTY) {
@@ -408,8 +390,11 @@ static void openssd_endio(struct bio *bio, int err)
 
 	if (bio_data_dir(bio) == WRITE)
 		dev_wait = ap->t_write;
-	else
+	else {
 		dev_wait = ap->t_read;
+		/* remember to change accordently every usage of lookup_ltop */
+		openssd_put_block(block);
+	}
 
 	openssd_delay_endio_hint(os, bio, pb, &dev_wait);
 
@@ -455,14 +440,15 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 	openssd_endio(bio, err);
 }
 
-void openssd_submit_bio(int rw, struct bio *bio, struct openssd_ap *ap, int sync)
+void openssd_submit_bio(struct openssd *os, struct openssd_pool_block *block, int rw, struct bio *bio, int sync)
 {
-	struct openssd *os = ap->parent;
+	struct openssd_ap *ap = block_to_ap(os, block);
 	struct openssd_pool *pool = ap->pool;
 	struct per_bio_data *pb;
 
 	pb = alloc_decorate_per_bio_data(os, bio);
 	pb->ap = ap;
+	pb->block = block;
 	pb->physical_addr = bio->bi_sector;
 
 	if (rw == WRITE)
@@ -576,7 +562,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 			// XXX buffered reads!
 
 			//printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
-			openssd_submit_bio(READ, exec_bio, block_to_ap(os, phys->block), 0);
+			openssd_submit_bio(os, phys->block, READ, exec_bio, 0);
 		}
 	} else {
 		log_addr = bio->bi_sector / NR_PHY_IN_LOG;
@@ -600,7 +586,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 		}
 
 		//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
-		openssd_submit_bio(READ, bio, block_to_ap(os, phys->block), 0);
+		openssd_submit_bio(os, phys->block, READ, bio, 0);
 	}
 
 	return DM_MAPIO_SUBMITTED;
@@ -637,7 +623,7 @@ void openssd_submit_write(struct openssd *os, sector_t physical_addr,
 		unsigned int idx_to_write = size - NR_HOST_PAGES_IN_FLASH_PAGE + bv_i;
 		bio_add_page(issue_bio, &victim_block->data[idx_to_write], PAGE_SIZE, 0);
 	}
-	openssd_submit_bio(WRITE, issue_bio, block_to_ap(os, victim_block), 0);
+	openssd_submit_bio(os, victim_block, WRITE, issue_bio, 0);
 }
 
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
@@ -782,17 +768,11 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			goto err_blocks;
 
 		pool_for_each_block(pool, block, j) {
-			unsigned int cpu;
 			spin_lock_init(&block->lock);
 			spin_lock_init(&block->gc_lock);
 
-			block->ref_count = alloc_percpu(struct kref);
-			if (!block->ref_count)
+			if (percpu_ref_init(&block->ref_count, openssd_block_release))
 				goto err_blocks;
-
-			/* TODO: Implement online/offline CPU handling */
-			for_each_online_cpu(cpu)
-				kref_init(__openssd_get_block_kref(block, cpu));
 
 			block->parent = pool;
 			block->id = (i * POOL_BLOCK_COUNT) + j;
@@ -836,8 +816,7 @@ err_blocks:
 		if (!pool->blocks)
 			break;
 		pool_for_each_block(pool, block, j) {
-			if (block->ref_count)
-				free_percpu(block->ref_count);
+			percpu_ref_cancel_init(&block->ref_count);
 		}
 		kfree(pool->blocks);
 	}
@@ -962,7 +941,7 @@ static void openssd_dtr(struct dm_target *ti)
 
 	ssd_for_each_pool(os, pool, i) {
 		pool_for_each_block(pool, block, j)
-			free_percpu(block->ref_count);
+			percpu_ref_kill(&block->ref_count);
 		kfree(pool->blocks);
 	}
 

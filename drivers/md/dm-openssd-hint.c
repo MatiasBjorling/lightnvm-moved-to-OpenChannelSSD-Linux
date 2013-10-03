@@ -616,7 +616,7 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 	// shadow is empty
 	if (hint->shadow_map[logical_addr].addr == LTOP_EMPTY){
 		DMINFO("no shadow. read primary");
-		return &os->trans_map[logical_addr];
+		return openssd_lookup_ltop(os, logical_addr);
 	}
 
 	// check if primary is busy
@@ -628,7 +628,7 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 
 	// primary not busy
 	DMINFO("primary not busy");
-	return &os->trans_map[logical_addr];
+	return openssd_lookup_ltop(os, logical_addr);
 }
 
 int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)

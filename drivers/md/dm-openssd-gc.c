@@ -117,7 +117,8 @@ void openssd_gc_collect(struct openssd *os)
 					DMINFO("move pages");
 					openssd_move_valid_pages(os, block);
 
-
+					/* We activate ref counting and make put take action. */
+					percpu_ref_kill(&block->ref_count);
 					/* When block hits zero refs, its added back to 
 					 * the empty pool */
 					openssd_put_block(block);

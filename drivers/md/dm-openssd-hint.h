@@ -73,7 +73,7 @@ typedef struct hint_info_s{
 
 struct openssd_hint_map_private {
 	sector_t old_p_addr;
-	unsigned int prev_ap;
+	struct openssd_ap *prev_ap;
 	unsigned long flags;
 	hint_info_t *hint_info;
 };

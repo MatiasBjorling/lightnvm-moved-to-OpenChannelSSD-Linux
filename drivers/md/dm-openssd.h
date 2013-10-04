@@ -263,12 +263,13 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct openssd_pool
 
 /*   Naive implementations */
 
-/* Maps a logical to physical address in round robin order. With or without updating master translation mapping*/
+/* Allocation of physical addresses from block when increasing responsibility. */
+sector_t openssd_alloc_addr_from_ap(struct openssd_ap *ap, struct openssd_pool_block **ret_victim_block);
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
-
 /* Calls map_ltop_rr with a specified number of retries. Returns LTOP_EMPTY if failed */
 sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
 struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
 

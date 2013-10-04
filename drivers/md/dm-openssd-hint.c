@@ -442,16 +442,20 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	struct openssd_ap *ap;
 	sector_t physical_addr;
 
-	if (map_alloc_data->flags & MAP_PRIMARY)
-		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+	if (map_alloc_data->flags & MAP_PRIMARY) {
+		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+		map_alloc_data->prev_ap = block_to_ap(os, (*ret_victim_block));
+		return physical_addr;
+	}
 
-	physical_addr = openssd_alloc_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
+	do {
+		ap = get_next_ap(os);
+	} while (map_alloc_data->prev_ap == ap);
+
+	physical_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
 	openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block));
 
-	DMINFO("written shadow page");
-//	do {
-//		ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
-//	} while (map_alloc_data->prev_ap / APS_PER_POOL == ap_id / APS_PER_POOL);
+	DMINFO("retrieved addrs of shadow page");
 
 	return physical_addr;
 }

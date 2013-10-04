@@ -319,6 +319,26 @@ static sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)
 	return os->rev_trans_map[physical_addr];
 }
 
+sector_t openssd_alloc_addr_from_ap(struct openssd_ap *ap,
+					struct openssd_pool_block **ret_victim_block)
+{
+	struct openssd_pool_block *block = ap->cur;
+	sector_t p_addr = openssd_alloc_phys_addr(block);
+
+	while (p_addr == LTOP_EMPTY) {
+		block = openssd_pool_get_block(block->parent);
+
+		if (!block)
+			return LTOP_EMPTY;
+
+		openssd_set_ap_cur(ap, block);
+		p_addr = openssd_alloc_phys_addr(block);
+	}
+
+	(*ret_victim_block) = block;
+
+	return p_addr;
+}
 /* Simple round-robin Logical to physical address translation.
  *
  * Retrieve the mapping using the active append point. Then update the ap for the
@@ -329,29 +349,18 @@ static sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr,
 					struct openssd_pool_block **ret_victim_block, void *private)
 {
-	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
-	sector_t physical_addr;
+	sector_t p_addr;
 
 	ap = get_next_ap(os);
-	block = ap->cur;
-	physical_addr = openssd_alloc_phys_addr(block);
 
-	while (physical_addr == LTOP_EMPTY) {
-		block = openssd_pool_get_block(block->parent);
+	p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
 
-		if (!block)
-			return LTOP_EMPTY;
+	if (p_addr != LTOP_EMPTY)
+		DMINFO("logical_addr=%ld new physical_addr[0]=%ld (blkid=%u)", 
+				logical_addr, p_addr, (*ret_victim_block)->id);
 
-		openssd_set_ap_cur(ap, block);
-		physical_addr = openssd_alloc_phys_addr(block);
-	}
-
-	DMINFO("logical_addr=%ld new physical_addr[0]=%ld (blkid=%u)", logical_addr,
-			physical_addr, block->id);
-
-	(*ret_victim_block) = block;
-	return physical_addr;
+	return p_addr;
 }
 
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,

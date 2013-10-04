@@ -258,15 +258,17 @@ void openssd_print_total_blocks(struct openssd *os);
 
 void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block);
 struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool);
-sector_t openssd_get_physical_page(struct openssd_pool_block *block);
-sector_t openssd_get_physical_fast_page(struct openssd *os, struct openssd_pool_block *block);
+sector_t openssd_alloc_phys_addr(struct openssd_pool_block *block);
+sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct openssd_pool_block **ret_victim_block);
 
 /*   Naive implementations */
 
-/* Maps a logical to physical address in round robin order. */
-sector_t openssd_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+/* Maps a logical to physical address in round robin order. With or without updating master translation mapping*/
+sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+
 /* Calls map_ltop_rr with a specified number of retries. Returns LTOP_EMPTY if failed */
-sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
 struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
 
@@ -317,6 +319,11 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio);
 #define pool_for_each_block(pool, block, i)									\
 		for ((i) = 0, block = &(pool)->blocks[0];							\
 			 (i) < (pool)->nr_blocks; (i)++, block = &(pool)->blocks[(i)])
+
+static inline struct openssd_ap *get_next_ap(struct openssd *os)
+{
+	return &os->aps[atomic_inc_return(&os->next_write_ap) % os->nr_aps];
+}
 
 static inline int block_is_full(struct openssd_pool_block *block)
 {

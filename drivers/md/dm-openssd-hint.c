@@ -357,7 +357,6 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 	/* do hint */
 	openssd_bio_hint(os, bio);
 
-
 	if (hint->hint_flags & HINT_LATENCY)
 		numCopies = 2;
 
@@ -375,9 +374,9 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 		for(j = 0; j < numCopies; j++) {
 
 			if (j == 1)
-				map_alloc_data.flags = (MAP_SINGLE|MAP_SHADOW);
+				map_alloc_data.flags = MAP_SHADOW;
 
-			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, &map_alloc_data);
+			physical_addr = openssd_alloc_addr_retries(os, logical_addr, &victim_block, &map_alloc_data);
 
 			if (physical_addr == LTOP_EMPTY) {
 				DMERR("Out of physical addresses. Retry");
@@ -405,65 +404,29 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 
 	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
-
 }
 
-static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logical_addr, sector_t old_p_addr)
-{
-	struct openssd_hint *hint = os->hint_private;
-	unsigned long flag = MAP_PRIMARY;
-
-	if(old_p_addr != LTOP_EMPTY) {
-		flag = MAP_SINGLE;
-		if(os->trans_map[logical_addr].addr == old_p_addr)
-			flag |= MAP_PRIMARY;
-		else if(hint->shadow_map[logical_addr].addr == old_p_addr)
-			flag |= MAP_SHADOW;
-		else {
-			DMERR("Reclaiming a physical page %ld not mapped by any logical addr", old_p_addr);
-			WARN_ON(true);
-		}
-	}
-
-	return flag;
-}
-
-static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr, struct openssd_pool_block *p_block, unsigned long flags)
+static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr, struct openssd_pool_block *p_block)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct openssd_addr *l;
 	unsigned int page_offset;
 
 	/* Secondary mapping. update shadow */
-	if(flags & (MAP_SHADOW|MAP_SINGLE)) {
-		DMINFO("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
+	DMINFO("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
 
-		l = &hint->shadow_map[l_addr];
-		if (l->block) {
-			page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
-			if(test_and_set_bit(page_offset, l->block->invalid_pages))
-				WARN_ON(true);
-			l->block->nr_invalid_pages++;
-		}
-
-		l->addr = p_addr;
-		l->block = p_block;
-
-		os->rev_trans_map[p_addr] = l_addr;
-
-		return;
-	}
-
-	if(flags & (MAP_PRIMARY|MAP_SINGLE)) {
-		DMINFO("update primary only");
-		return;
-	}
-
-	/* Remove old shadow mapping from shadow map */
-	DMINFO("init shadow");
 	l = &hint->shadow_map[l_addr];
-	l->addr = 0;
-	l->block = NULL;
+	if (l->block) {
+		page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
+		if(test_and_set_bit(page_offset, l->block->invalid_pages))
+			WARN_ON(true);
+		l->block->nr_invalid_pages++;
+	}
+
+	l->addr = p_addr;
+	l->block = p_block;
+
+	os->rev_trans_map[p_addr] = l_addr;
 }
 
 /* Latency-proned Logical to physical address translation.
@@ -477,51 +440,19 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	struct openssd_hint_map_private *map_alloc_data = private;
 	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
-	int ap_id, page_id;
 	sector_t physical_addr;
 
-	/* If there is no hint, or this is a reclaimed ltop mapping,
-	 * use regular (single-page) map_ltop*/
-	//DMINFO("find hint");
-	if (map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
-		//DMINFO("hint not found. resort to regular allocation");
-		physical_addr = openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
+	if (map_alloc_data->flags & MAP_PRIMARY)
+		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
 
-		map_alloc_data->flags = openssd_get_mapping_flag(os, logical_addr, map_alloc_data->old_p_addr);
-		openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block), map_alloc_data->flags);
+	physical_addr = openssd_alloc_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
+	openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block));
 
-		return physical_addr;
-	}
-	//DMINFO("latency_ltop: found hint");
+	DMINFO("written shadow page");
+//	do {
+//		ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
+//	} while (map_alloc_data->prev_ap / APS_PER_POOL == ap_id / APS_PER_POOL);
 
-	do {
-		ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
-	} while (map_alloc_data->prev_ap / APS_PER_POOL == ap_id / APS_PER_POOL);
-
-	/* ------
-	 * this part can be unified with a new function in dm-openssd */
-	ap = &os->aps[ap_id];
-	block = ap->cur;
-
-	page_id = openssd_get_physical_page(block);
-	while (page_id < 0) {
-		block = openssd_pool_get_block(block->parent);
-		if (!block)
-			return LTOP_EMPTY;
-
-		openssd_set_ap_cur(ap, block);
-		page_id = openssd_get_physical_page(block);
-	}
-
-	physical_addr = block_to_addr(block) + page_id;
-
-	openssd_update_map_generic(os, logical_addr, physical_addr, block);
-	/*-----*/
-
-	map_alloc_data->flags = openssd_get_mapping_flag(os, logical_addr, map_alloc_data->old_p_addr);
-	openssd_update_map_shadow(os, logical_addr, physical_addr, block, map_alloc_data->flags);
-
-	(*ret_victim_block) = block;
 	return physical_addr;
 }
 
@@ -535,43 +466,24 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct openssd_hint_map_private *map_alloc_data = private;
-	struct openssd_pool_block *block;
-	struct openssd_ap *ap;
-	int ap_id;
-	int page_id = -1, i = 0;
+	struct openssd_pool_block *block = NULL;
 	sector_t physical_addr;
 
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to openssd_map_ltop_rr */
 	if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
 		DMINFO("swap_map: non-GC write");
-		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
+		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
 	}
 
 	/* GC write of a slow page */
 	if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(map_alloc_data->old_p_addr))) {
 		DMINFO("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
-		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
+		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
 	}
 
 	if (map_alloc_data->old_p_addr != LTOP_EMPTY)
 		DMINFO("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
-
-	/* iterate all ap's and find fast page
-	 * TODO 1) should loop over append points (when we have more than 1 AP/pool)
-	 *      2) is it really safe iterating pools like this? do we need to lock anything else?
-	 *      3) add test for active_ap->is_active? or do we not care?
-	 */
-	//DMINFO("find fast page for hinted swap write");
-	while (page_id < 0 && i < POOL_COUNT) {
-		ap_id = atomic_inc_return(&os->next_write_ap) % os->nr_aps;
-		//DMINFO("%d) ap_id %d", i,  ap_id);
-		ap = &os->aps[ap_id];
-		block = ap->cur;
-
-		page_id = openssd_get_physical_fast_page(os, block);
-		i++;
-	}
 
 	/* Processed entire hint (in regular write)
 	 * Note: for swap hints we can actually avoid this lock, and free after processed++ in
@@ -586,15 +498,9 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 		spin_unlock(&hint->hintlock);
 	}
 
-	// no fast page available, resort to openssd_map_ltop_rr
-	if (page_id < 0){
-		DMINFO("write lba %ld to (possible) SLOW page", logical_addr);
-		return openssd_map_ltop_rr(os, logical_addr, ret_victim_block, map_alloc_data);
-	}
-
-	physical_addr = block_to_addr(block) + page_id;
+	physical_addr = openssd_alloc_phys_fastest_addr(os, ret_victim_block);
 	//DMINFO("logical_addr=%ld physical_addr[0]=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr[0], page_id, block->id);
-	openssd_update_map_generic(os, logical_addr, physical_addr, block);
+	openssd_update_map_generic(os, logical_addr, physical_addr, (*ret_victim_block));
 
 	// TODO: Update shadows maps too
 	(*ret_victim_block) = block;

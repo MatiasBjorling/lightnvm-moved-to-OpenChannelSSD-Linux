@@ -51,7 +51,6 @@ static struct per_bio_data *alloc_decorate_per_bio_data(struct openssd *os, stru
 	if (!pb) {
 		DMERR("Couldn't allocate per_bio_data");
 		return NULL;
-
 	}
 
 	pb->bi_end_io = bio->bi_end_io;
@@ -92,14 +91,14 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 	unsigned int page_offset;
 
 	if (l_addr >= os->nr_pages || p_addr >= os->nr_pages) {
-		DMERR("update_mapping: illegal address l_addr %ld p_addr %ld", l_addr, p_addr);
+		DMERR("Update_mapping: Illegal address l_addr %ld p_addr %ld", l_addr, p_addr);
 		return;
 	}
 	BUG_ON(l_addr >= os->nr_pages);
 	BUG_ON(p_addr >= os->nr_pages);
 
 	/* Primary mapping */
-	DMINFO("update primary mapping l_addr %ld p_addr %ld", l_addr, p_addr);
+	DMDEBUG("Update primary map l_addr %ld p_addr %ld", l_addr, p_addr);
 
 	l = &os->trans_map[l_addr];
 	if (l->block) {
@@ -113,9 +112,6 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 	l->block = p_block;
 
 	os->rev_trans_map[p_addr] = l_addr;
-
-	/*DMINFO("update_mapping(): l_addr %lu now points to p_addr %lu", l_addr,
-	 * p_addr);*/
 }
 
 sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **victim_block, void *private)
@@ -264,10 +260,8 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 		addr = __openssd_alloc_phys_addr(block, 1);
 	}
 
-	if (addr == LTOP_EMPTY) {
-		DMINFO("no fast page found");
+	if (addr == LTOP_EMPTY)
 		addr = openssd_alloc_phys_addr(block);
-	}
 
 	(*ret_victim_block) = block;
 	return addr;
@@ -277,7 +271,7 @@ void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block)
 {
 	spin_lock(&ap->lock);
 	ap->cur = block;
-	DMINFO("set ap->cur with block in addr %ld", block_to_addr(block));
+	DMDEBUG("Set ap->cur with block in addr %ld", block_to_addr(block));
 	spin_unlock(&ap->lock);
 }
 
@@ -346,7 +340,7 @@ sector_t openssd_alloc_addr_from_ap(struct openssd_ap *ap,
  *
  * Returns the physical mapped address.
  */
-sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr,
+sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 					struct openssd_pool_block **ret_victim_block, void *private)
 {
 	struct openssd_ap *ap;
@@ -357,8 +351,8 @@ sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr,
 	p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
 
 	if (p_addr != LTOP_EMPTY)
-		DMINFO("logical_addr=%ld new physical_addr[0]=%ld (blkid=%u)", 
-				logical_addr, p_addr, (*ret_victim_block)->id);
+		DMDEBUG("l_addr=%ld new p_addr=%ld (blkid=%u)", 
+				l_addr, p_addr, (*ret_victim_block)->id);
 
 	return p_addr;
 }
@@ -392,10 +386,11 @@ static void openssd_endio(struct bio *bio, int err)
 	pool = ap->pool;
 	block = pb->block;
 	
-	DMINFO("openssd_endio: %s pb->physical_addr %ld bio->bi_sector %ld",
+	DMDEBUG("openssd_endio: %s pb->physical_addr %ld bio->bi_sector %ld",
 			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ", pb->physical_addr, bio->bi_sector);
+
 	if (pb->physical_addr == LTOP_EMPTY) {
-		DMINFO("openssd_endio: no real IO performed. goto done");
+		DMDEBUG("openssd_endio: no real IO performed. goto done");
 		goto done;
 	}
 
@@ -515,13 +510,11 @@ static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, str
 	struct bio_vec *bv;
 	int idx = phys->addr % (NR_HOST_PAGES_IN_BLOCK);
 
-	//DMINFO("chekc for buffered read");
 	for (i = 0; i < os->nr_aps_per_pool; i++) {
 		ap = &os->aps[(pool_idx * os->nr_aps_per_pool) + i];
 		addr = block_to_addr(ap->cur) + ap->cur->next_page * NR_HOST_PAGES_IN_FLASH_PAGE;
 
 		// if this is the first page in a the ap buffer
-		//DMINFO("pool_idx=%d pool_ap=%d addr=%ld phys->addr=%ld", pool_idx, j, addr, phys->addr);
 		if (addr == phys->addr) {
 			printk("buffered data\n");
 			bio_for_each_segment(bv, bio, j) {
@@ -529,7 +522,6 @@ static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, str
 				src_p = kmap_atomic(&ap->cur->data[idx]);
 
 				memcpy(dst_p, src_p, bv->bv_len);
-				//DMINFO("dst_p[0]=%d", ((int*)dst_p)[0]);
 				kunmap_atomic(dst_p);
 				kunmap_atomic(src_p);
 				break;
@@ -549,7 +541,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 	struct bio_pair *bp;
 	struct bio_vec *bv;
 	struct openssd_addr *phys;
-	sector_t log_addr;
+	sector_t l_addr;
 	int i;
 
 	if (bio_sectors(bio) > NR_PHY_IN_LOG) {
@@ -560,9 +552,11 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 			exec_bio = &bp->bio1;
 			split_bio = &bp->bio2;
 
-			log_addr = exec_bio->bi_sector / NR_PHY_IN_LOG;
-			phys = os->lookup_ltop(os, log_addr);
-			DMINFO("handle_read: read log_addr %ld from phys %ld", log_addr, phys->addr);
+			l_addr = exec_bio->bi_sector / NR_PHY_IN_LOG;
+			phys = os->lookup_ltop(os, l_addr);
+
+			DMDEBUG("handle_read: read l_addr %ld from phys %ld", l_addr, phys->addr);
+
 			if (!phys->block) {
 				openssd_fill_bio_and_end(bio);
 				return DM_MAPIO_SUBMITTED;
@@ -576,8 +570,8 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 			openssd_submit_bio(os, phys->block, READ, exec_bio, 0);
 		}
 	} else {
-		log_addr = bio->bi_sector / NR_PHY_IN_LOG;
-		phys = os->lookup_ltop(os, log_addr);
+		l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+		phys = os->lookup_ltop(os, l_addr);
 
 		bio->bi_sector = phys->addr * NR_PHY_IN_LOG;
 
@@ -585,13 +579,14 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 			openssd_fill_bio_and_end(bio);
 			return DM_MAPIO_SUBMITTED;
 		}
-		DMINFO("handle_read: read log_addr %ld from phys %ld", log_addr,
+
+		DMDEBUG("handle_read: read l_addr %ld from phys %ld", l_addr,
 				phys->addr);
+
 		/* When physical page contains several logical pages, we may need to
 		 * read from buffer. Check if so, and if page is cached in ap, read from
 		 * there */
 		if (NR_HOST_PAGES_IN_FLASH_PAGE > 1) {
-			//DMINFO("handle buffered read");
 			if (openssd_handle_buffered_read(os, bio, phys) == 0)
 				return DM_MAPIO_SUBMITTED;
 		}
@@ -653,7 +648,6 @@ int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 		logical_addr = (bio->bi_sector / NR_PHY_IN_LOG) + i;
 
 		physical_addr = openssd_alloc_addr_retries(os, logical_addr, &victim_block, NULL);
-		//DMINFO("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr[0], bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
 		if (physical_addr == LTOP_EMPTY) {
 			DMERR("Out of physical addresses. Retry");
@@ -713,13 +707,14 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 	int ret;
 	bio->bi_bdev = os->dev->bdev;
 
-	//DMINFO("openssd_map: %s log_addr %ld, call handler", (bio_data_dir(bio) == WRITE)?"WRITE":"READ", bio->bi_sector/8);
 	if (bio_data_dir(bio) == WRITE)
 		ret = os->write_bio(os, bio);
 	else
 		ret = os->read_bio(os, bio);
-	DMINFO("openssd_map: %s log_addr %ld, handler done!!", (bio_data_dir(bio) ==
+
+	DMDEBUG("openssd_map: %s l_addr %ld, map done", (bio_data_dir(bio) ==
 				WRITE) ? "WRITE" : "READ", bio->bi_sector/8);
+
 	return ret;
 }
 

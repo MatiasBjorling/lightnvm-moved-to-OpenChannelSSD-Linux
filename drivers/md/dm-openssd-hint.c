@@ -350,7 +350,7 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 	unsigned int numCopies = 1;
 	struct openssd_hint_map_private map_alloc_data;
 
-	map_alloc_data.prev_ap = -1;
+	map_alloc_data.prev_ap = NULL;
 	map_alloc_data.old_p_addr = LTOP_EMPTY;
 	map_alloc_data.flags = MAP_PRIMARY;
 

@@ -23,34 +23,34 @@
                              INO_HINT_FROM_DATA(HINT_DATA, IDX).count = COUNT; \
                              INO_HINT_FROM_DATA(HINT_DATA, IDX).fc = FC;
 typedef enum {
-  FC_EMPTY,
-  FC_UNKNOWN,
-  FC_VIDEO_SLOW,
-  FC_IMAGE_SLOW,
-  FC_DB_INDEX
+	FC_EMPTY,
+	FC_UNKNOWN,
+	FC_VIDEO_SLOW,
+	FC_IMAGE_SLOW,
+	FC_DB_INDEX
 } fclass;
 
 typedef struct ino_hint_s {
-  unsigned long ino; // inode number
-  uint32_t start_lba; // start lba relevant in sc
-  uint32_t count; //number of sequential lba's related to ino (starting from start_lba)
-  fclass fc;
+	unsigned long ino; // inode number
+	uint32_t start_lba; // start lba relevant in sc
+	uint32_t count; //number of sequential lba's related to ino (starting from start_lba)
+	fclass fc;
 } ino_hint_t;
 
-typedef struct hint_payload_s{
-   char     data[HINT_DATA_SIZE];
-   uint32_t is_write;
-   uint32_t hint_flags;
-   uint32_t lba;
-   uint32_t sectors_count;
-   uint32_t count; // number of ino_hint_t in data
-}hint_payload_t;
+typedef struct hint_payload_s {
+	char     data[HINT_DATA_SIZE];
+	uint32_t is_write;
+	uint32_t hint_flags;
+	uint32_t lba;
+	uint32_t sectors_count;
+	uint32_t count; // number of ino_hint_t in data
+} hint_payload_t;
 
 #define HINT_PAYLOAD_SIZE sizeof(hint_payload_t)
 
 typedef struct hint_data_s {
-  uint32_t hint_payload_size;
-  char hint_payload[HINT_PAYLOAD_SIZE];
+	uint32_t hint_payload_size;
+	char hint_payload[HINT_PAYLOAD_SIZE];
 } hint_data_t;
 
 struct openssd_hint {
@@ -62,13 +62,13 @@ struct openssd_hint {
 };
 
 #ifdef __KERNEL__
-typedef struct hint_info_s{
+typedef struct hint_info_s {
 	ino_hint_t hint; // if NULL, none
 	char is_write;
 	unsigned int hint_flags;
 	uint32_t processed; // how many related LBAs were indeed processed
 	struct list_head list_member;
-}hint_info_t;
+} hint_info_t;
 #endif
 
 struct openssd_hint_map_private {

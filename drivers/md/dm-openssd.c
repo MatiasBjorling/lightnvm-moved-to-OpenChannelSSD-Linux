@@ -23,22 +23,6 @@
 
 #include "dm-openssd.h"
 
-#include <linux/device-mapper.h>
-#include <linux/dm-io.h>
-#include <linux/dm-kcopyd.h>
-#include <linux/blkdev.h>
-#include <linux/list.h>
-#include <linux/list_sort.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/slab.h>
-#include <linux/atomic.h>
-#include <linux/delay.h>
-#include <linux/time.h>
-#include <linux/workqueue.h>
-#include <linux/kthread.h>
-#include <linux/mempool.h>
-
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
 	return (struct per_bio_data *) bio->bi_private;

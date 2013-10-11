@@ -1,3 +1,5 @@
+#include <linux/percpu-refcount.h>
+
 #include "dm-openssd.h"
 
 static void __erase_block(struct openssd_pool_block *block)
@@ -88,7 +90,6 @@ void openssd_gc_collect(struct openssd *os)
 	unsigned int nr_blocks_need;
 	int pid, pid_start;
 	int max_collect = round_up(os->nr_pools, 2);
-	openssd_print_total_blocks(os);
 
 	if (!spin_trylock(&os->gc_lock))
 		return;

@@ -430,10 +430,10 @@ config DM_OPENSSD
 	tristate "OpenSSD translation layer support (EXPERIMENTAL)"
 	depends on BLK_DEV_DM
 	---help---
-		A target that implement the Flash Translation Layer above a bare
-		FTL on the OpenSSD device. The device mapper is used together with 
+		A target that implements a Flash Translation Layer above a bare
+		FTL on an OpenSSD device. The device mapper is used together with
 		the OpenSSD "bare" firmware, that exposes direct access to the flash
-		chips and only perform few low-level tasks. 
+		chips and only perform few low-level tasks.
 		
 		To compile this code as a module, choose M here: the module will
 		be called dm-openssd.

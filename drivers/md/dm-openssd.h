@@ -262,6 +262,7 @@ sector_t openssd_alloc_phys_addr(struct openssd_pool_block *block);
 sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct openssd_pool_block **ret_victim_block);
 
 /*   Naive implementations */
+void openssd_delayed_bio_submit(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
 sector_t openssd_alloc_addr_from_ap(struct openssd_ap *ap, struct openssd_pool_block **ret_victim_block);
@@ -272,6 +273,7 @@ sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, s
 
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
 struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
+sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
 
 /*   I/O bio related */
 void openssd_submit_bio(struct openssd *os, struct openssd_pool_block *block, int rw, struct bio *bio, int sync);

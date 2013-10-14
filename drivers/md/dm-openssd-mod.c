@@ -327,7 +327,7 @@ static void openssd_dtr(struct dm_target *ti)
 
 static struct target_type openssd_target = {
 	.name = "openssd",
-	.version = {0, 0, 1},
+	.version = {1, 0, 0},
 	.module	= THIS_MODULE,
 	.ctr = openssd_ctr,
 	.dtr = openssd_dtr,
@@ -338,15 +338,22 @@ static struct target_type openssd_target = {
 
 static int __init dm_openssd_init(void)
 {
+	int ret = -ENOMEM;
+
 	_per_bio_cache = kmem_cache_create("openssd_per_bio_cache",
 				sizeof(struct per_bio_data), 0, 0, NULL);
 	if (!_per_bio_cache)
-		return -ENOMEM;
+		return ret;
 
-	return dm_register_target(&openssd_target);
+	ret = dm_register_target(&openssd_target);
+	if (ret < 0) {
+		DMERR("register failed %d", ret);
+	}
+
+	return ret;
 }
 
-static void dm_openssd_exit(void)
+static void __exit dm_openssd_exit(void)
 {
 	kmem_cache_destroy(_per_bio_cache);
 	dm_unregister_target(&openssd_target);
@@ -355,6 +362,6 @@ static void dm_openssd_exit(void)
 module_init(dm_openssd_init);
 module_exit(dm_openssd_exit);
 
-MODULE_DESCRIPTION(DM_NAME "device-mapper openssd target");
-MODULE_AUTHOR("Matias Bjørling <mb@silverwolf.dk>");
+MODULE_DESCRIPTION(DM_NAME " target");
+MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");
 MODULE_LICENSE("GPL");

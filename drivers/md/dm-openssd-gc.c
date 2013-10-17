@@ -1,6 +1,7 @@
 #include <linux/percpu-refcount.h>
 
 #include "dm-openssd.h"
+#include "dm-openssd-hint.h"
 
 static void __erase_block(struct openssd_pool_block *block)
 {
@@ -32,6 +33,10 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 	int i;
 	struct bio_vec *bv;
 
+	/* for shaddow addresses */
+	struct openssd_hint_map_private map_alloc_data;
+	map_alloc_data.prev_ap = NULL;
+
 	if (bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK))
 		return;
 
@@ -56,8 +61,10 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 		// to its new place.
 		logical_addr = os->lookup_ptol(os, physical_addr);
 		DMINFO("move page physical_addr=%ld logical_addr=%ld (trans_map[%ld]=%ld)", physical_addr, logical_addr, logical_addr, os->trans_map[logical_addr].addr);
-		// Doesn't handle shadow addresses yet.
-		dest_addr = os->map_ltop(os, logical_addr, &victim_block, (void*)NULL);
+
+		// handles shadow addresses as well
+		map_alloc_data.old_p_addr = physical_addr;		
+		dest_addr = os->map_ltop(os, logical_addr, &victim_block, &map_alloc_data);
 
 		/* Write using regular write machanism */
 		bio_for_each_segment(bv, src_bio, i) {
@@ -119,7 +126,9 @@ void openssd_gc_collect(struct openssd *os)
 					openssd_move_valid_pages(os, block);
 
 					/* We activate ref counting and make put take action. */
-					percpu_ref_kill(&block->ref_count);
+					//percpu_ref_kill(&block->ref_count);
+					openssd_pool_put_block(block);
+
 					/* When block hits zero refs, its added back to 
 					 * the empty pool */
 					openssd_put_block(block);

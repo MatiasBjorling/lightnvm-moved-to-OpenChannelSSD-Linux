@@ -6,7 +6,7 @@
 
 #ifndef DM_OPENSSD_H_
 #define DM_OPENSSD_H_
-
+#ifdef __KERNEL__
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
@@ -23,13 +23,14 @@
 #include <linux/kthread.h>
 #include <linux/mempool.h>
 #include <linux/percpu-refcount.h>
-
+#endif
 #define OPENSSD_IOC_MAGIC 'O'
 
 #define OPENSSD_IOCTL_ID          _IO(OPENSSD_IOC_MAGIC, 0x40)
 #define OPENSSD_IOCTL_SUBMIT_HINT _IOW(OPENSSD_IOC_MAGIC, 0x41, hint_data_t)
 #define OPENSSD_IOCTL_KERNEL_HINT _IOW(OPENSSD_IOC_MAGIC, 0x42, hint_data_t)
 
+#ifdef __KERNEL__
 #define DM_MSG_PREFIX "openssd"
 
 #define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within
@@ -378,5 +379,6 @@ static inline void openssd_put_block(struct openssd_pool_block *block)
 {
 	percpu_ref_put(&block->ref_count);
 }
+#endif
 
 #endif /* DM_OPENSSD_H_ */

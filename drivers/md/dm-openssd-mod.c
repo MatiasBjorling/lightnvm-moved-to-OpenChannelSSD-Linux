@@ -304,8 +304,11 @@ static void openssd_dtr(struct dm_target *ti)
 	kthread_stop(os->kt_openssd);
 
 	ssd_for_each_pool(os, pool, i) {
-		pool_for_each_block(pool, block, j)
+#if 0
+		pool_for_each_block(pool, block, j){			
 			percpu_ref_kill(&block->ref_count);
+		}
+#endif
 		kfree(pool->blocks);
 	}
 
@@ -344,18 +347,20 @@ static int __init dm_openssd_init(void)
 				sizeof(struct per_bio_data), 0, 0, NULL);
 	if (!_per_bio_cache)
 		return ret;
-
+	
 	ret = dm_register_target(&openssd_target);
 	if (ret < 0) {
 		DMERR("register failed %d", ret);
 	}
 
+	DMINFO("openssd created");
 	return ret;
 }
 
 static void __exit dm_openssd_exit(void)
 {
 	kmem_cache_destroy(_per_bio_cache);
+	DMINFO("openssd destroyed");
 	dm_unregister_target(&openssd_target);
 }
 

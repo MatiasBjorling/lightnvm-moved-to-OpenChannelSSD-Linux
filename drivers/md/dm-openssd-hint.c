@@ -2,7 +2,10 @@
 #include "dm-openssd-hint.h"
 
 /* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS /* (HINT_NONE)  */ (HINT_LATENCY | HINT_IOCTL)  /* (HINT_SWAP | HINT_IOCTL) */
+#define DEPLOYED_HINTS /* (HINT_NONE) */ /* (HINT_LATENCY | HINT_IOCTL) */ (HINT_SWAP | HINT_IOCTL) 
+
+#define VERIFY_HINT(HINT_FLAGS, HINT_TYPE)  (((HINT_FLAGS) & HINT_TYPE) && (DEPLOYED_HINTS & HINT_TYPE))
+#define IS_HINT_DEPLOYED(HINT_FLAGS) (VERIFY_HINT(HINT_FLAGS, HINT_SWAP) || VERIFY_HINT(HINT_FLAGS, HINT_LATENCY))
 
 void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bio_data *pb, unsigned long *delay)
 {
@@ -21,7 +24,7 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bi
 }
 
 // iterate hints list, and check if lba of current req is covered by some hint
-hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool is_write, int flags)
+hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool is_write)
 {
 	struct openssd_hint *hint = os->hint_private;
 	hint_info_t *hint_info;
@@ -35,7 +38,7 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 		//DMINFO("hint start_lba=%d count=%d", hint_info->hint.start_lba, hint_info->hint.count);
 		//continue;
 		/* verify lba covered by hint*/
-		if (is_hint_relevant(logical_addr, hint_info, is_write, flags)) {
+		if (is_hint_relevant(logical_addr, hint_info, is_write, DEPLOYED_HINTS)) {
 			DMINFO("found hint for lba %ld",logical_addr);
 			hint_info->processed++;
 			spin_unlock(&hint->hintlock);
@@ -98,6 +101,11 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	// assert hint support
 	if (!hint->hint_flags)
 		goto send_done;
+
+	if(!IS_HINT_DEPLOYED(hint->hint_flags)){
+		DMINFO("got hint of type %d unsupported ", hint->hint_flags);
+		goto send_done;
+	}
 
 	// assert relevant hint support
 	if (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(hint->hint_flags & HINT_SWAP)) {
@@ -333,14 +341,9 @@ static int openssd_read_bio_hint(struct openssd *os, struct bio *bio)
 	return openssd_read_bio_generic(os, bio);
 }
 
-static int openssd_write_bio_swap(struct openssd *os, struct bio *bio)
-{
-	openssd_bio_hint(os, bio);
+static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr);
 
-	return openssd_write_bio_generic(os, bio);
-}
-
-static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
+static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct openssd_pool_block *victim_block;
@@ -357,9 +360,6 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 	/* do hint */
 	openssd_bio_hint(os, bio);
 
-	if (hint->hint_flags & HINT_LATENCY)
-		numCopies = 2;
-
 	bio_for_each_segment(bv, bio, i) {
 		if (bv->bv_len != PAGE_SIZE && bv->bv_offset != 0) {
 			printk("Doesn't yet support IO sizes other than system page size. (bv_len %u bv_offset %u)", bv->bv_len, bv->bv_offset);
@@ -368,9 +368,13 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 
 		logical_addr = (bio->bi_sector / NR_PHY_IN_LOG) + i;
 
-		map_alloc_data.hint_info = openssd_find_hint(os, logical_addr, 1, HINT_LATENCY);
+		map_alloc_data.hint_info = openssd_find_hint(os, logical_addr, 1);
+
+		if (map_alloc_data.hint_info && map_alloc_data.hint_info->hint_flags & HINT_LATENCY)
+			numCopies = 2;
 
 		/* Submit bio for all physical addresses*/
+		DMDEBUG("numCopies=%d", numCopies);
 		for(j = 0; j < numCopies; j++) {
 
 			if (j == 1)
@@ -389,6 +393,10 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
 				openssd_submit_write(os, physical_addr, victim_block, size);
 		}
+
+		/* trim old shadow when necessary (currently no support for multiple hint types at once) */
+		if(DEPLOYED_HINTS & HINT_LATENCY && numCopies==1)
+			openssd_trim_map_shadow(os, logical_addr, physical_addr);
 	}
 
 	/* Processed entire hint */
@@ -406,28 +414,46 @@ static int openssd_write_bio_latency(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
-static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr, struct openssd_pool_block *p_block)
+// do any shadow address updating required (real, none, or trim of old one)
+static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr, struct openssd_pool_block *p_block, unsigned long flags)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct openssd_addr *l;
 	unsigned int page_offset;
 
+	DMDEBUG("flags=%x", flags);
 	/* Secondary mapping. update shadow */
-	DMINFO("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
+	if(flags & MAP_SHADOW) {
+		DMDEBUG("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
 
-	l = &hint->shadow_map[l_addr];
-	if (l->block) {
-		page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
-		if (test_and_set_bit(page_offset, l->block->invalid_pages))
-			WARN_ON(true);
-		l->block->nr_invalid_pages++;
+		l = &hint->shadow_map[l_addr];
+		if (l->block) {
+			page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
+			if(test_and_set_bit(page_offset, l->block->invalid_pages))
+				WARN_ON(true);
+			l->block->nr_invalid_pages++;
+		}
+
+		l->addr = p_addr;
+		l->block = p_block;
+
+		os->rev_trans_map[p_addr] = l_addr;
+
+		return;
+	}
+	else if (flags & MAP_PRIMARY) {
+		DMERR("should update primary only");
+		return;
 	}
 
-	l->addr = p_addr;
-	l->block = p_block;
-
-	os->rev_trans_map[p_addr] = l_addr;
+	/* Remove old shadow mapping from shadow map */
+	DMDEBUG("init shadow");
+	l = &hint->shadow_map[l_addr];
+	l->addr = 0;
+	l->block = NULL;
 }
+
+static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logical_addr, sector_t old_p_addr);
 
 /* Latency-proned Logical to physical address translation.
  *
@@ -442,6 +468,25 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	struct openssd_ap *ap;
 	sector_t physical_addr;
 
+	/* If there is no hint, or this is a reclaimed ltop mapping,
+	 * use regular (single-page) map_ltop. handle both primary and shadow cases*/
+	DMINFO("map_alloc_data %p", map_alloc_data);
+	if (map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
+		DMDEBUG("reclaimed or regular allocation");
+		// dont pass map_alloc_data for primary
+		map_alloc_data->flags = openssd_get_mapping_flag(os, logical_addr, map_alloc_data->old_p_addr);
+		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block,
+						    (map_alloc_data->flags & (MAP_SHADOW))?map_alloc_data:(void*)NULL);
+
+		// will do nothing if primary
+		DMDEBUG("update_map_shaddow");
+		openssd_update_map_shadow(os, logical_addr, physical_addr,
+					(*ret_victim_block), map_alloc_data->flags);
+
+		return physical_addr;
+	}
+	DMDEBUG("latency_ltop: allocate page");
+
 	if (map_alloc_data->flags & MAP_PRIMARY) {
 		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
 		map_alloc_data->prev_ap = block_to_ap(os, (*ret_victim_block));
@@ -453,9 +498,9 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	} while (map_alloc_data->prev_ap == ap);
 
 	physical_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
-	openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block));
+	openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block), map_alloc_data->flags);
 
-	DMINFO("retrieved addrs of shadow page");
+	DMDEBUG("retrieved addrs of shadow page");
 
 	return physical_addr;
 }
@@ -475,43 +520,37 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to openssd_map_ltop_rr */
-	if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
-		DMINFO("swap_map: non-GC write");
-		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
-	}
-
-	/* GC write of a slow page */
-	if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(map_alloc_data->old_p_addr))) {
-		DMINFO("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
-		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
-	}
-
-	if (map_alloc_data->old_p_addr != LTOP_EMPTY)
-		DMINFO("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
-
-	/* Processed entire hint (in regular write)
-	 * Note: for swap hints we can actually avoid this lock, and free after processed++ in
-	 *       openssd_find_hint(), but it would clutter its code for swap-specific stuff */
-	if (map_alloc_data->old_p_addr == LTOP_EMPTY) {
-		spin_lock(&hint->hintlock);
-		if (map_alloc_data->hint_info->processed == map_alloc_data->hint_info->hint.count) {
-			//DMINFO("delete swap hint");
-			list_del(&map_alloc_data->hint_info->list_member);
-			kfree(map_alloc_data->hint_info);
+	if(map_alloc_data){
+		if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
+			DMDEBUG("swap_map: non-GC non-hinted write");
+			return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
 		}
-		spin_unlock(&hint->hintlock);
+
+		/* GC write of a slow page */
+		if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(map_alloc_data->old_p_addr))) {
+			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
+			return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+		}
+
+		/*if (map_alloc_data->old_p_addr != LTOP_EMPTY)
+			DMDEBUG("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));*/
 	}
 
+	/* hinted write, or GC of FAST page*/
 	physical_addr = openssd_alloc_phys_fastest_addr(os, ret_victim_block);
-	//DMINFO("logical_addr=%ld physical_addr[0]=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr[0], page_id, block->id);
+
+	/* no FAST page found. restort to regular allocation */
+	if(physical_addr == LTOP_EMPTY){
+		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+	}
+
+	//DMINFO("swap_rr: logical_addr=%ld physical_addr[0]=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr[0], page_id, block->id);
+	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
 	openssd_update_map_generic(os, logical_addr, physical_addr, (*ret_victim_block));
 
-	// TODO: Update shadows maps too
-	(*ret_victim_block) = block;
-	DMINFO("write lba %ld to FAST page %ld", logical_addr, physical_addr);
+	DMDEBUG("write lba %ld to FAST page %ld (*ret_victim_block=%p)", logical_addr, physical_addr, (*ret_victim_block));
 	return physical_addr;
 }
-
 
 // TODO: actually finding a non-busy pool is not enough. read should be moved up the request queue.
 //	 however, no queue maipulation impl. yet...
@@ -538,6 +577,50 @@ static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sect
 	// primary not busy
 	DMINFO("primary not busy");
 	return openssd_lookup_ltop(os, logical_addr);
+}
+
+static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logical_addr, sector_t old_p_addr)
+{
+	struct openssd_hint *hint = os->hint_private;
+	unsigned long flag = MAP_PRIMARY;
+
+	//DMINFO("os->trans_map[%ld].addr %ld hint->shadow_map[%ld].addr", logical_addr, os->trans_map[logical_addr].addr, logical_addr, hint->shadow_map[logical_addr].addr);
+	if(old_p_addr != LTOP_EMPTY) {
+		flag = MAP_SINGLE;
+		if(os->trans_map[logical_addr].addr == old_p_addr)
+			flag |= MAP_PRIMARY;
+		else if(hint->shadow_map[logical_addr].addr == old_p_addr)
+			flag |= MAP_SHADOW;
+		else {
+			DMERR("Reclaiming a physical page %ld not mapped by any logical addr", old_p_addr);
+			WARN_ON(true);
+		}
+	}
+
+	return flag;
+}
+
+
+// if we ever support trim, this may be unified with some generic function
+static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr)
+{
+	struct openssd_hint *hint = os->hint_private;
+	struct openssd_addr *l;
+	unsigned int page_offset;
+
+	DMINFO("trim old shaddow");
+	l = &hint->shadow_map[l_addr];
+	if (l->block) {
+		page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
+		if(test_and_set_bit(page_offset, l->block->invalid_pages))
+			WARN_ON(true);
+		l->block->nr_invalid_pages++;
+	}
+
+	l->addr = 0;
+	l->block = 0;
+
+	os->rev_trans_map[p_addr] = l_addr;
 }
 
 int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
@@ -577,7 +660,8 @@ int openssd_ioctl_hint(struct openssd *os, unsigned int cmd, unsigned long arg)
 	case OPENSSD_IOCTL_KERNEL_HINT:
 		return openssd_ioctl_kernel_hint_cmd(os, arg);
 	default:
-		return __blkdev_driver_ioctl(os->dev->bdev, os->dev->mode, cmd, arg);
+		return 0;
+		//return __blkdev_driver_ioctl(os->dev->bdev, os->dev->mode, cmd, arg);
 	}
 
 	return 0;
@@ -619,13 +703,13 @@ int openssd_alloc_hint(struct openssd *os)
 	if (hint->hint_flags & HINT_SWAP) {
 		DMINFO("Swap hint support");
 		os->map_ltop = openssd_map_swap_hint_ltop_rr;
-		os->write_bio = openssd_write_bio_swap;
+		os->write_bio = openssd_write_bio_hint;
 		os->read_bio = openssd_read_bio_hint;
 	} else if (hint->hint_flags & HINT_LATENCY) {
 		DMINFO("Latency hint support");
 		os->map_ltop = openssd_map_latency_hint_ltop_rr;
 		os->lookup_ltop = openssd_latency_lookup_ltop;
-		os->write_bio = openssd_write_bio_latency;
+		os->write_bio = openssd_write_bio_hint;
 		os->read_bio = openssd_read_bio_hint;
 	}
 

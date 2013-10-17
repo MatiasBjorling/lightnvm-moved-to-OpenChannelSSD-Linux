@@ -161,6 +161,7 @@ static sector_t __openssd_alloc_phys_addr(struct openssd_pool_block *block, int
 {
 	sector_t addr = LTOP_EMPTY;
 
+	DMDEBUG("alloc_phys_addr: block %p req_fast %d",block, req_fast);
 	spin_lock(&block->lock);
 
 	if (block_is_full(block))
@@ -169,8 +170,10 @@ static sector_t __openssd_alloc_phys_addr(struct openssd_pool_block *block, int
 	 * the offset to the address, instead of requesting a new page
 	 * from the physical block */
 	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
-		if (req_fast && !page_is_fast(block->next_page + 1))
+		if (req_fast && !page_is_fast(block->next_page + 1)){
+			DMDEBUG("alloc_phys_addr: no fast page avaialble");
 			goto out;
+		}
 		
 		block->next_offset = 0;
 		block->next_page++;
@@ -182,6 +185,7 @@ static sector_t __openssd_alloc_phys_addr(struct openssd_pool_block *block, int
 
 out:
 	spin_unlock(&block->lock);
+	DMDEBUG("alloc_phys_addr: return %d", addr);
 	return addr;
 }
 
@@ -524,6 +528,7 @@ int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_bl
 	unsigned int idx;
 	void *src_p, *dst_p;
 
+	DMDEBUG("physical_addr %d victim_block %p bv %p", physical_addr, victim_block, bv);
 	idx = physical_addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
 	src_p = kmap_atomic(bv->bv_page);
 	dst_p = kmap_atomic(&victim_block->data[idx]);

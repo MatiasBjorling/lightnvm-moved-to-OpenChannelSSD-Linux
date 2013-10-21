@@ -29,48 +29,50 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
 	struct page *page;
 	struct openssd_pool_block* victim_block;
 	int slot = -1;
-	sector_t physical_addr, logical_addr, dest_addr;
+	sector_t p_addr, l_addr, dst_addr;
 	int i;
 	struct bio_vec *bv;
-
-	/* for shaddow addresses */
-	struct openssd_hint_map_private map_alloc_data;
-	map_alloc_data.prev_ap = NULL;
+	void *gc_private = NULL;
 
 	if (bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK))
 		return;
 
 	page = alloc_page(GFP_NOIO);
 	while ((slot = find_next_zero_bit(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK, slot + 1)) < NR_HOST_PAGES_IN_BLOCK) {
-		// Perform read
-		physical_addr = block_to_addr(block) + slot;
-		DMDEBUG("move page physical_addr=%ld", physical_addr);
-		src_bio = bio_alloc(GFP_NOIO, 1); // handle mem error
+		/* Perform read */
+		p_addr = block_to_addr(block) + slot;
+		src_bio = bio_alloc(GFP_NOIO, 1);
 
 		bio_get(src_bio);
 
 		src_bio->bi_bdev = os->dev->bdev;
-		src_bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
+		src_bio->bi_sector = p_addr * NR_PHY_IN_LOG;
 		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
 
 		openssd_submit_bio(os, block, READ, src_bio, 1);
 
-		// Perform write
+		/* Perform write */
 
-		// We use the physical address to go to the logical page addr, and then update its mapping
-		// to its new place.
-		logical_addr = os->lookup_ptol(os, physical_addr);
-		DMDEBUG("move page physical_addr=%ld logical_addr=%ld (trans_map[%ld]=%ld)", physical_addr, logical_addr, logical_addr, os->trans_map[logical_addr].addr);
+		/* We use the physical address to go to the logical page addr,
+		 * and then update its mapping to its new place. */
+		l_addr = os->lookup_ptol(os, p_addr);
+		DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", p_addr, l_addr, l_addr, os->trans_map[l_addr].addr);
 
-		// handles shadow addresses as well
-		map_alloc_data.old_p_addr = physical_addr;		
-		dest_addr = os->map_ltop(os, logical_addr, &victim_block, &map_alloc_data);
+		if (os->begin_gc_private)
+			gc_private = os->begin_gc_private(l_addr,
+					p_addr, block);
+
+		dst_addr = os->map_ltop(os, l_addr, &victim_block,
+				gc_private);
+
+		if (os->end_gc_private)
+			os->end_gc_private(gc_private);
 
 		/* Write using regular write machanism */
 		bio_for_each_segment(bv, src_bio, i) {
-			unsigned int size = openssd_handle_buffered_write(dest_addr, victim_block, bv);
+			unsigned int size = openssd_handle_buffered_write(dst_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-				openssd_submit_write(os, dest_addr, victim_block, size);
+				openssd_submit_write(os, dst_addr, victim_block, size);
 		}
 	}
 	__free_page(page);

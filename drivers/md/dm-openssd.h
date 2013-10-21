@@ -173,6 +173,8 @@ typedef struct openssd_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
 typedef int (write_bio_fn)(struct openssd *, struct bio *);
 typedef int (read_bio_fn)(struct openssd *, struct bio *);
+typedef void *(begin_gc_private_fn)(sector_t, sector_t, struct openssd_pool_block *);
+typedef void (end_gc_private_fn)(void *);
 
 /* Main structure */
 struct openssd {
@@ -217,6 +219,8 @@ struct openssd {
 	lookup_ptol_fn *lookup_ptol;
 	write_bio_fn *write_bio;
 	read_bio_fn *read_bio;
+	begin_gc_private_fn *begin_gc_private;
+	end_gc_private_fn *end_gc_private;
 
 	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */

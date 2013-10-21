@@ -372,7 +372,7 @@ static inline int physical_to_slot(sector_t phys)
 
 static inline void openssd_get_block(struct openssd_pool_block *block)
 {
-	return percpu_ref_get(&block->ref_count);
+	percpu_ref_get(&block->ref_count);
 }
 
 static inline void openssd_put_block(struct openssd_pool_block *block)

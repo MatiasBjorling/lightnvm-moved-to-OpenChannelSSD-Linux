@@ -2,7 +2,7 @@
 #include "dm-openssd-hint.h"
 
 /* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS /* (HINT_NONE) */ /* (HINT_LATENCY | HINT_IOCTL) */ (HINT_SWAP | HINT_IOCTL) 
+#define DEPLOYED_HINTS (HINT_NONE) /* (HINT_LATENCY | HINT_IOCTL) */ /* (HINT_SWAP | HINT_IOCTL) */
 
 #define VERIFY_HINT(HINT_FLAGS, HINT_TYPE)  (((HINT_FLAGS) & HINT_TYPE) && (DEPLOYED_HINTS & HINT_TYPE))
 #define IS_HINT_DEPLOYED(HINT_FLAGS) (VERIFY_HINT(HINT_FLAGS, HINT_SWAP) || VERIFY_HINT(HINT_FLAGS, HINT_LATENCY))

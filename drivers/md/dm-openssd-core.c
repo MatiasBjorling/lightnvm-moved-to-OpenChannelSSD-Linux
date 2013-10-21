@@ -187,7 +187,7 @@ static sector_t __openssd_alloc_phys_addr(struct openssd_pool_block *block, int
 
 out:
 	spin_unlock(&block->lock);
-	DMDEBUG("alloc_phys_addr: return %d", addr);
+	DMDEBUG("alloc_phys_addr: return %llu", (unsigned long long)addr);
 	return addr;
 }
 
@@ -312,7 +312,7 @@ struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_ad
  * Returns the physical mapped address.
  */
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
-					struct openssd_pool_block **ret_victim_block, void *private)
+		struct openssd_pool_block **ret_victim_block, void *private)
 {
 	struct openssd_ap *ap;
 	sector_t p_addr;
@@ -329,7 +329,7 @@ sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 }
 
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
-					struct openssd_pool_block **ret_victim_block, void *private)
+		struct openssd_pool_block **ret_victim_block, void *private)
 {
 	sector_t p_addr;
 
@@ -535,7 +535,8 @@ int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_bl
 	unsigned int idx;
 	void *src_p, *dst_p;
 
-	DMDEBUG("physical_addr %d victim_block %p bv %p", physical_addr, victim_block, bv);
+	DMDEBUG("physical_addr %llu victim_block %p bv %p",
+			(unsigned long long)physical_addr, victim_block, bv);
 	idx = physical_addr % (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT);
 	src_p = kmap_atomic(bv->bv_page);
 	dst_p = kmap_atomic(&victim_block->data[idx]);

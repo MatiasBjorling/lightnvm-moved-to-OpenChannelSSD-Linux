@@ -2,7 +2,7 @@
 #include "dm-openssd-hint.h"
 
 /* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS (HINT_NONE) /* (HINT_LATENCY | HINT_IOCTL) */ /* (HINT_SWAP | HINT_IOCTL) */
+#define DEPLOYED_HINTS /*(HINT_NONE) */ (HINT_LATENCY | HINT_IOCTL) /* (HINT_SWAP | HINT_IOCTL) */
 
 #define VERIFY_HINT(HINT_FLAGS, HINT_TYPE)  (((HINT_FLAGS) & HINT_TYPE) && (DEPLOYED_HINTS & HINT_TYPE))
 #define IS_HINT_DEPLOYED(HINT_FLAGS) (VERIFY_HINT(HINT_FLAGS, HINT_SWAP) || VERIFY_HINT(HINT_FLAGS, HINT_LATENCY))
@@ -21,6 +21,22 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bi
 		else
 			(*delay) = TIMING_WRITE_SLOW;
 	}
+}
+
+void *openssd_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct
+		openssd_pool_block *block)
+{
+	struct openssd_hint_map_private *private =
+		kzalloc(sizeof(struct openssd_hint_map_private), GFP_NOIO);
+
+	private->old_p_addr = p_addr;
+
+	return private;
+}
+
+void openssd_end_gc_hint(void *private)
+{
+	kfree(private);
 }
 
 // iterate hints list, and check if lba of current req is covered by some hint
@@ -415,13 +431,15 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 }
 
 // do any shadow address updating required (real, none, or trim of old one)
-static void openssd_update_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr, struct openssd_pool_block *p_block, unsigned long flags)
+static void openssd_update_map_shadow(struct openssd *os,
+			sector_t l_addr, sector_t p_addr,
+			struct openssd_pool_block *p_block, unsigned long flags)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct openssd_addr *l;
 	unsigned int page_offset;
 
-	DMDEBUG("flags=%x", flags);
+	DMDEBUG("flags=%lu", flags);
 	/* Secondary mapping. update shadow */
 	if(flags & MAP_SHADOW) {
 		DMDEBUG("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
@@ -464,7 +482,6 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
 static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
-	struct openssd_pool_block *block;
 	struct openssd_ap *ap;
 	sector_t physical_addr;
 
@@ -513,9 +530,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
  */
 static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private)
 {
-	struct openssd_hint *hint = os->hint_private;
 	struct openssd_hint_map_private *map_alloc_data = private;
-	struct openssd_pool_block *block = NULL;
 	sector_t physical_addr;
 
 	/* Check if there is a hint for relevant sector
@@ -705,12 +720,16 @@ int openssd_alloc_hint(struct openssd *os)
 		os->map_ltop = openssd_map_swap_hint_ltop_rr;
 		os->write_bio = openssd_write_bio_hint;
 		os->read_bio = openssd_read_bio_hint;
+		os->begin_gc_private = openssd_begin_gc_hint;
+		os->end_gc_private = openssd_end_gc_hint;
 	} else if (hint->hint_flags & HINT_LATENCY) {
 		DMINFO("Latency hint support");
 		os->map_ltop = openssd_map_latency_hint_ltop_rr;
 		os->lookup_ltop = openssd_latency_lookup_ltop;
 		os->write_bio = openssd_write_bio_hint;
 		os->read_bio = openssd_read_bio_hint;
+		os->begin_gc_private = openssd_begin_gc_hint;
+		os->end_gc_private = openssd_end_gc_hint;
 	}
 
 	os->hint_private = hint;

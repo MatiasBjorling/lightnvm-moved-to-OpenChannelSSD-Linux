@@ -304,11 +304,8 @@ static void openssd_dtr(struct dm_target *ti)
 	kthread_stop(os->kt_openssd);
 
 	ssd_for_each_pool(os, pool, i) {
-#if 0
-		pool_for_each_block(pool, block, j){			
+		pool_for_each_block(pool, block, j)
 			percpu_ref_kill(&block->ref_count);
-		}
-#endif
 		kfree(pool->blocks);
 	}
 

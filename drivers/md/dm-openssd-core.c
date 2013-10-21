@@ -84,11 +84,13 @@ inline void openssd_reset_block(struct openssd_pool_block *block)
 	BUG_ON(!block);
 
 	spin_lock(&block->lock);
+
 	if (block->data) {
 		WARN_ON(!bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK));
 		bitmap_zero(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
 		__free_pages(block->data, order);
 	}
+
 	block->next_page = 0;
 	block->next_offset = 0;
 	block->nr_invalid_pages = 0;
@@ -146,9 +148,9 @@ void openssd_pool_put_block(struct openssd_pool_block *block)
 {
 	struct openssd_pool *pool = block->parent;
 
-	openssd_reset_block(block);
-
 	spin_lock(&pool->lock);
+
+	openssd_reset_block(block);
 
 	list_move_tail(&block->list, &pool->free_list);
 
@@ -276,6 +278,8 @@ static void openssd_fill_bio_and_end(struct bio *bio)
 	bio_endio(bio, 0);
 }
 
+/* lookup the primary translation table. If there isn't an associated block to
+ * the addr. We shall assume that there is no data and doesn't take a ref */
 struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
 {
 	// TODO: during GC or w-r-w we may get a translation for an old page.
@@ -288,6 +292,9 @@ struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_ad
 		if (!addr->block)
 			return addr;
 
+		/* during gc, the mapping will be updated accordently. We
+		 * therefore stop submitting new reads to the address, until it
+		 * is copied to the new place. */
 		if (!spin_is_locked(&addr->block->gc_lock)) {
 			openssd_get_block(addr->block);
 			return addr;
@@ -343,12 +350,15 @@ static void openssd_endio(struct bio *bio, int err)
 	unsigned long diff, dev_wait, total_wait = 0;
 
 	pb = get_per_bio_data(bio);
-
+	block = pb->block;
 	ap = pb->ap;
+
 	os = ap->parent;
 	pool = ap->pool;
-	block = pb->block;
-	
+
+	/* TODO: This can be optimized to only account on read */
+	openssd_put_block(block);
+
 	DMDEBUG("openssd_endio: %s pb->physical_addr %ld bio->bi_sector %ld",
 			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ", pb->physical_addr, bio->bi_sector);
 
@@ -359,11 +369,8 @@ static void openssd_endio(struct bio *bio, int err)
 
 	if (bio_data_dir(bio) == WRITE)
 		dev_wait = ap->t_write;
-	else {
+	else
 		dev_wait = ap->t_read;
-		/* remember to change accordently every usage of lookup_ltop */
-		openssd_put_block(block);
-	}
 
 	openssd_delay_endio_hint(os, bio, pb, &dev_wait);
 

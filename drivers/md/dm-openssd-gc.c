@@ -3,7 +3,7 @@
 #include "dm-openssd.h"
 #include "dm-openssd-hint.h"
 
-static void __erase_block(struct openssd_pool_block *block)
+static void __erase_block(struct nvm_block *block)
 {
 	// Perform device erase
 }
@@ -11,8 +11,8 @@ static void __erase_block(struct openssd_pool_block *block)
 /* the block with highest number of invalid pages, will be in the beginning of the list */
 static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_head *lh_b)
 {
-	struct openssd_pool_block *a = list_entry(lh_a, struct openssd_pool_block, prio);
-	struct openssd_pool_block *b = list_entry(lh_b, struct openssd_pool_block, prio);
+	struct nvm_block *a = list_entry(lh_a, struct nvm_block, prio);
+	struct nvm_block *b = list_entry(lh_b, struct nvm_block, prio);
 
 	if (a->nr_invalid_pages == b->nr_invalid_pages)
 		return 0;
@@ -23,11 +23,11 @@ static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_h
 /* Move data away from flash block to be erased. Additionally update the l to p and p to l
  * mappings.
  */
-static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_block *block)
+static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block)
 {
 	struct bio *src_bio;
 	struct page *page;
-	struct openssd_pool_block* victim_block;
+	struct nvm_block* victim_block;
 	int slot = -1;
 	sector_t p_addr, l_addr, dst_addr;
 	int i;
@@ -83,9 +83,9 @@ static void openssd_move_valid_pages(struct openssd *os, struct openssd_pool_blo
  * Only GC should do this */
 void openssd_block_release(struct percpu_ref *ref)
 {
-	struct openssd_pool_block *block;
+	struct nvm_block *block;
 
-	block = container_of(ref, struct openssd_pool_block, ref_count);
+	block = container_of(ref, struct nvm_block, ref_count);
 
 	DMDEBUG("erasing block %u", block->id);
 	__erase_block(block);
@@ -93,13 +93,13 @@ void openssd_block_release(struct percpu_ref *ref)
 	/* lock taken in openssd_gc_collect */
 	spin_unlock(&block->gc_lock);
 
-	openssd_pool_put_block(block);
+	nvm_pool_put_block(block);
 }
 
 void openssd_gc_collect(struct openssd *os)
 {
-	struct openssd_pool *pool;
-	struct openssd_pool_block *block;
+	struct nvm_pool *pool;
+	struct nvm_block *block;
 	unsigned int nr_blocks_need;
 	int pid, pid_start;
 	int max_collect = round_up(os->nr_pools, 2);
@@ -124,7 +124,7 @@ void openssd_gc_collect(struct openssd *os)
 
 			list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
 			block = list_first_entry(&pool->prio_list, struct
-					openssd_pool_block, prio);
+					nvm_block, prio);
 
 			/* lock is released in openssd_block_release */
 			if (!spin_trylock(&block->gc_lock))

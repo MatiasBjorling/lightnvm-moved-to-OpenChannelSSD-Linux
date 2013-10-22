@@ -24,7 +24,7 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bi
 }
 
 void *openssd_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct
-		openssd_pool_block *block)
+		nvm_block *block)
 {
 	struct openssd_hint_map_private *private =
 		kzalloc(sizeof(struct openssd_hint_map_private), GFP_NOIO);
@@ -362,7 +362,7 @@ static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_
 static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 {
 	struct openssd_hint *hint = os->hint_private;
-	struct openssd_pool_block *victim_block;
+	struct nvm_block *victim_block;
 	struct bio_vec *bv;
 	sector_t logical_addr, physical_addr;
 	int i, j, size;
@@ -433,10 +433,10 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 // do any shadow address updating required (real, none, or trim of old one)
 static void openssd_update_map_shadow(struct openssd *os,
 			sector_t l_addr, sector_t p_addr,
-			struct openssd_pool_block *p_block, unsigned long flags)
+			struct nvm_block *p_block, unsigned long flags)
 {
 	struct openssd_hint *hint = os->hint_private;
-	struct openssd_addr *l;
+	struct nvm_addr *l;
 	unsigned int page_offset;
 
 	DMDEBUG("flags=%lu", flags);
@@ -479,10 +479,10 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
  * If non-hinted write - resort to normal allocation
  * if GC write - no hint, but we use regular map_ltop() with GC addr
  */
-static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private)
+static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
-	struct openssd_ap *ap;
+	struct nvm_ap *ap;
 	sector_t physical_addr;
 
 	/* If there is no hint, or this is a reclaimed ltop mapping,
@@ -528,7 +528,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
  * Then update the ap for the next write to the disk.
  * If no reelvant ap found, or non-swap write - resort to normal allocation
  */
-static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private)
+static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
 	sector_t physical_addr;
@@ -569,7 +569,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logic
 
 // TODO: actually finding a non-busy pool is not enough. read should be moved up the request queue.
 //	 however, no queue maipulation impl. yet...
-static struct openssd_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t logical_addr) {
+static struct nvm_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t logical_addr) {
 	struct openssd_hint *hint = os->hint_private;
 	// TODO: during GC or w-r-w we may get a translation for an old page.
 	//       do we care enough to enforce some serializibilty in LBA accesses?
@@ -620,7 +620,7 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
 static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr)
 {
 	struct openssd_hint *hint = os->hint_private;
-	struct openssd_addr *l;
+	struct nvm_addr *l;
 	unsigned int page_offset;
 
 	DMINFO("trim old shaddow");
@@ -699,10 +699,10 @@ int openssd_alloc_hint(struct openssd *os)
 	hint->hint_flags = DEPLOYED_HINTS;
 
 	// initla shadow maps are empty
-	hint->shadow_map = vmalloc(sizeof(struct openssd_addr) * os->nr_pages);
+	hint->shadow_map = vmalloc(sizeof(struct nvm_addr) * os->nr_pages);
 	if (!hint->shadow_map)
 		goto err_shadow_map;
-	memset(hint->shadow_map, 0, sizeof(struct openssd_addr) * os->nr_pages);
+	memset(hint->shadow_map, 0, sizeof(struct nvm_addr) * os->nr_pages);
 
 	// initial shadow l2p is LTOP_EMPTY
 	for(i = 0; i < os->nr_pages; i++)

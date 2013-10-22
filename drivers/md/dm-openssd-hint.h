@@ -59,7 +59,7 @@ struct openssd_hint {
 	char* ino_hints; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
 	spinlock_t hintlock;
 	struct list_head hintlist;
-	struct openssd_addr *shadow_map; // TODO should be hash table for efficiency? (but then we also need to use a lock...)
+	struct nvm_addr *shadow_map; // TODO should be hash table for efficiency? (but then we also need to use a lock...)
 };
 
 typedef struct hint_info_s {
@@ -72,7 +72,7 @@ typedef struct hint_info_s {
 
 struct openssd_hint_map_private {
 	sector_t old_p_addr;
-	struct openssd_ap *prev_ap;
+	struct nvm_ap *prev_ap;
 	unsigned long flags;
 	hint_info_t *hint_info;
 };

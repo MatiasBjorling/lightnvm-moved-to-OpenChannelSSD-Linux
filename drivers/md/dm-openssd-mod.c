@@ -15,10 +15,10 @@
  * Optimization possibilities
  * - Move ap_next_write into a conconcurrency friendly data structure. Could be
  *   handled by more intelligent map_ltop function.
- * - Implement per-cpu openssd_pool_block data structure ownership. Removes need
+ * - Implement per-cpu nvm_block data structure ownership. Removes need
  *   for taking lock on block next_write_id function. I.e. page allocation
  *   becomes nearly lockless, with occasionally movement of blocks on
- *   openssd_pool_block lists.
+ *   nvm_block lists.
  */
 
 #include "dm-openssd.h"
@@ -80,7 +80,7 @@ static void openssd_status(struct dm_target *ti, status_type_t type,
 			 unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct openssd *os = ti->private;
-	struct openssd_ap *ap;
+	struct nvm_ap *ap;
 	int i, sz = 0;
 
 	switch(type) {
@@ -97,17 +97,17 @@ static void openssd_status(struct dm_target *ti, status_type_t type,
 	}
 }
 
-static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
+static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 {
-	struct openssd_pool *pool;
-	struct openssd_pool_block *block;
-	struct openssd_ap *ap;
+	struct nvm_pool *pool;
+	struct nvm_block *block;
+	struct nvm_ap *ap;
 	int i, j;
 
 	spin_lock_init(&os->gc_lock);
 
 	os->nr_pools = POOL_COUNT;
-	os->pools = kzalloc(sizeof(struct openssd_pool) * os->nr_pools, GFP_KERNEL);
+	os->pools = kzalloc(sizeof(struct nvm_pool) * os->nr_pools, GFP_KERNEL);
 	if (!os->pools)
 		goto err_pool;
 
@@ -122,7 +122,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 		pool->phy_addr_end = (i + 1) * POOL_BLOCK_COUNT - 1;
 
 		pool->nr_free_blocks = pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
-		pool->blocks = kzalloc(sizeof(struct openssd_pool_block) * pool->nr_blocks, GFP_KERNEL);
+		pool->blocks = kzalloc(sizeof(struct nvm_block) * pool->nr_blocks, GFP_KERNEL);
 		spin_lock_init(&pool->waiting_lock);
 		bio_list_init(&pool->waiting_bios);
 		INIT_WORK(&pool->waiting_ws, openssd_delayed_bio_submit);
@@ -149,7 +149,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 	}
 
 	os->nr_aps = os->nr_aps_per_pool * os->nr_pools;
-	os->aps = kmalloc(sizeof(struct openssd_ap) * os->nr_pools * os->nr_aps, GFP_KERNEL);
+	os->aps = kmalloc(sizeof(struct nvm_ap) * os->nr_pools * os->nr_aps, GFP_KERNEL);
 	if (!os->aps)
 		goto err_blocks;
 
@@ -160,7 +160,7 @@ static int openssd_pool_init(struct openssd *os, struct dm_target *ti)
 			spin_lock_init(&ap->lock);
 			ap->parent = os;
 			ap->pool = pool;
-			ap->cur = openssd_pool_get_block(pool); // No need to lock ap->cur.
+			ap->cur = nvm_pool_get_block(pool); // No need to lock ap->cur.
 
 			ap->t_read = TIMING_READ;
 			ap->t_write = TIMING_WRITE;
@@ -212,10 +212,10 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	os->nr_pages = POOL_COUNT * POOL_BLOCK_COUNT * NR_HOST_PAGES_IN_BLOCK;
 
-	os->trans_map = vmalloc(sizeof(struct openssd_addr) * os->nr_pages);
+	os->trans_map = vmalloc(sizeof(struct nvm_addr) * os->nr_pages);
 	if (!os->trans_map)
 		goto err_trans_map;
-	memset(os->trans_map, 0, sizeof(struct openssd_addr) * os->nr_pages);
+	memset(os->trans_map, 0, sizeof(struct nvm_addr) * os->nr_pages);
 
 	// initial l2p is LTOP_EMPTY
 	for (i = 0; i < os->nr_pages; i++)
@@ -261,7 +261,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	ti->private = os;
 
 	/* Initialize pools. */
-	openssd_pool_init(os, ti);
+	nvm_pool_init(os, ti);
 
 	// FIXME: Clean up pool init on failure.
 	os->kt_openssd = kthread_run(openssd_kthread, os, "kopenssd");
@@ -290,8 +290,8 @@ err_trans_map:
 static void openssd_dtr(struct dm_target *ti)
 {
 	struct openssd *os = (struct openssd *) ti->private;
-	struct openssd_pool *pool;
-	struct openssd_pool_block *block;
+	struct nvm_pool *pool;
+	struct nvm_block *block;
 	int i, j;
 
 	dm_put_device(ti, os->dev);

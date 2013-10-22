@@ -291,8 +291,7 @@ static void openssd_dtr(struct dm_target *ti)
 {
 	struct openssd *os = (struct openssd *) ti->private;
 	struct nvm_pool *pool;
-	struct nvm_block *block;
-	int i, j;
+	int i;
 
 	dm_put_device(ti, os->dev);
 
@@ -303,11 +302,9 @@ static void openssd_dtr(struct dm_target *ti)
 
 	kthread_stop(os->kt_openssd);
 
-	ssd_for_each_pool(os, pool, i) {
-		pool_for_each_block(pool, block, j)
-			percpu_ref_kill(&block->ref_count);
+	/* TODO: remember outstanding block refs, waiting to be erased... */
+	ssd_for_each_pool(os, pool, i)
 		kfree(pool->blocks);
-	}
 
 	kfree(os->pools);
 	kfree(os->aps);

@@ -241,8 +241,6 @@ struct openssd {
 	void *hint_private;
 };
 
-static struct kmem_cache *_per_bio_cache;
-
 struct per_bio_data {
 	struct nvm_ap *ap;
 	struct nvm_block *block;

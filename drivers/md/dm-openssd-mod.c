@@ -24,6 +24,8 @@
 #include "dm-openssd.h"
 #include "dm-openssd-hint.h"
 
+static struct kmem_cache *_per_bio_cache;
+
 static int openssd_kthread(void *data)
 {
 	struct openssd *os = (struct openssd *)data;

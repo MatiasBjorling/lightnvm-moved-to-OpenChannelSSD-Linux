@@ -36,7 +36,7 @@ static void free_per_bio_data(struct openssd *os, struct per_bio_data *pb)
 
 void openssd_delayed_bio_submit(struct work_struct *work)
 {
-	struct openssd_pool *pool = container_of(work, struct openssd_pool, waiting_ws);
+	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
 
 	spin_lock(&pool->waiting_lock);
@@ -47,9 +47,9 @@ void openssd_delayed_bio_submit(struct work_struct *work)
 }
 
 void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
-				   sector_t p_addr, struct openssd_pool_block *p_block)
+				   sector_t p_addr, struct nvm_block *p_block)
 {
-	struct openssd_addr *l;
+	struct nvm_addr *l;
 	unsigned int page_offset;
 
 	if (l_addr >= os->nr_pages || p_addr >= os->nr_pages) {
@@ -77,7 +77,7 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 }
 
 /* requires pool->lock taken */
-inline void openssd_reset_block(struct openssd_pool_block *block)
+inline void openssd_reset_block(struct nvm_block *block)
 {
 	unsigned int order = ffs(NR_HOST_PAGES_IN_BLOCK) - 1;
 
@@ -108,9 +108,9 @@ inline void openssd_reset_block(struct openssd_pool_block *block)
  * that the start of used list is the oldest block, and therefore higher probability
  * of invalidated pages.
  */
-struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool)
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool)
 {
-	struct openssd_pool_block *block = NULL;
+	struct nvm_block *block = NULL;
 	struct page *data;
 	unsigned int order = ffs(NR_HOST_PAGES_IN_BLOCK) - 1;
 
@@ -127,7 +127,7 @@ struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool)
 		return NULL;
 	}
 
-	block = list_first_entry(&pool->free_list, struct openssd_pool_block, list);
+	block = list_first_entry(&pool->free_list, struct nvm_block, list);
 	list_move_tail(&block->list, &pool->used_list);
 
 	pool->nr_free_blocks--;
@@ -144,9 +144,9 @@ struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool)
  * free list. We add it last to allow round-robin use of all pages. Thereby provide
  * simple (naive) wear-leveling.
  */
-void openssd_pool_put_block(struct openssd_pool_block *block)
+void nvm_pool_put_block(struct nvm_block *block)
 {
-	struct openssd_pool *pool = block->parent;
+	struct nvm_pool *pool = block->parent;
 
 	spin_lock(&pool->lock);
 
@@ -158,7 +158,7 @@ void openssd_pool_put_block(struct openssd_pool_block *block)
 	spin_unlock(&pool->lock);
 }
 
-static sector_t __openssd_alloc_phys_addr(struct openssd_pool_block *block, int
+static sector_t __openssd_alloc_phys_addr(struct nvm_block *block, int
 		req_fast)
 {
 	sector_t addr = LTOP_EMPTY;
@@ -191,16 +191,16 @@ out:
 	return addr;
 }
 
-sector_t openssd_alloc_phys_addr(struct openssd_pool_block *block)
+sector_t openssd_alloc_phys_addr(struct nvm_block *block)
 {
 	return __openssd_alloc_phys_addr(block, 0);
 }
 
 sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
-		openssd_pool_block **ret_victim_block)
+		nvm_block **ret_victim_block)
 {
-	struct openssd_ap *ap;
-	struct openssd_pool_block *block = NULL;
+	struct nvm_ap *ap;
+	struct nvm_block *block = NULL;
 	sector_t addr = LTOP_EMPTY;
 	int i;
 	
@@ -218,7 +218,7 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 	return addr;
 }
 
-void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block)
+void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
 	spin_lock(&ap->lock);
 	ap->cur = block;
@@ -228,7 +228,7 @@ void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block)
 
 void openssd_print_total_blocks(struct openssd *os)
 {
-	struct openssd_pool *pool;
+	struct nvm_pool *pool;
 	unsigned int total = 0;
 	int i;
 
@@ -243,14 +243,14 @@ sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)
 	return os->rev_trans_map[physical_addr];
 }
 
-sector_t openssd_alloc_addr_from_ap(struct openssd_ap *ap,
-					struct openssd_pool_block **ret_victim_block)
+sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
+					struct nvm_block **ret_victim_block)
 {
-	struct openssd_pool_block *block = ap->cur;
+	struct nvm_block *block = ap->cur;
 	sector_t p_addr = openssd_alloc_phys_addr(block);
 
 	while (p_addr == LTOP_EMPTY) {
-		block = openssd_pool_get_block(block->parent);
+		block = nvm_pool_get_block(block->parent);
 
 		if (!block)
 			return LTOP_EMPTY;
@@ -264,7 +264,7 @@ sector_t openssd_alloc_addr_from_ap(struct openssd_ap *ap,
 	return p_addr;
 }
 
-void openssd_erase_block(struct openssd_pool_block *block)
+void openssd_erase_block(struct nvm_block *block)
 {
 	/* Send erase command to device. */
 }
@@ -280,11 +280,11 @@ static void openssd_fill_bio_and_end(struct bio *bio)
 
 /* lookup the primary translation table. If there isn't an associated block to
  * the addr. We shall assume that there is no data and doesn't take a ref */
-struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
+struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr)
 {
 	// TODO: during GC or w-r-w we may get a translation for an old page.
 	//       do we care enough to enforce some serializibilty in LBA accesses?
-	struct openssd_addr *addr;
+	struct nvm_addr *addr;
 
 	while (1) {
 		addr = &os->trans_map[logical_addr];
@@ -312,9 +312,9 @@ struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_ad
  * Returns the physical mapped address.
  */
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
-		struct openssd_pool_block **ret_victim_block, void *private)
+		struct nvm_block **ret_victim_block, void *private)
 {
-	struct openssd_ap *ap;
+	struct nvm_ap *ap;
 	sector_t p_addr;
 
 	ap = get_next_ap(os);
@@ -329,7 +329,7 @@ sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 }
 
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
-		struct openssd_pool_block **ret_victim_block, void *private)
+		struct nvm_block **ret_victim_block, void *private)
 {
 	sector_t p_addr;
 
@@ -343,9 +343,9 @@ static void openssd_endio(struct bio *bio, int err)
 {
 	struct per_bio_data *pb;
 	struct openssd *os;
-	struct openssd_ap *ap;
-	struct openssd_pool *pool;
-	struct openssd_pool_block *block;
+	struct nvm_ap *ap;
+	struct nvm_pool *pool;
+	struct nvm_block *block;
 	struct timeval end_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
 
@@ -416,7 +416,7 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 	openssd_endio(bio, err);
 }
 
-sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **victim_block, void *private)
+sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct nvm_block **victim_block, void *private)
 {
 	unsigned int retries;
 	sector_t physical_addr = LTOP_EMPTY;
@@ -433,12 +433,12 @@ sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, s
 	return physical_addr;
 }
 
-static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, struct openssd_addr *phys)
+static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, struct nvm_addr *phys)
 {
 	int i, j, pool_idx = phys->addr / (os->nr_pages / POOL_COUNT);
 	sector_t addr;
 	void *src_p, *dst_p;
-	struct openssd_ap *ap;
+	struct nvm_ap *ap;
 	struct bio_vec *bv;
 	int idx = phys->addr % (NR_HOST_PAGES_IN_BLOCK);
 
@@ -472,7 +472,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 	struct bio *exec_bio, *split_bio;
 	struct bio_pair *bp;
 	struct bio_vec *bv;
-	struct openssd_addr *phys;
+	struct nvm_addr *phys;
 	sector_t l_addr;
 	int i;
 
@@ -530,7 +530,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
-int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block *victim_block, struct bio_vec *bv)
+int openssd_handle_buffered_write(sector_t physical_addr, struct nvm_block *victim_block, struct bio_vec *bv)
 {
 	unsigned int idx;
 	void *src_p, *dst_p;
@@ -549,7 +549,7 @@ int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_bl
 }
 
 void openssd_submit_write(struct openssd *os, sector_t physical_addr,
-				 struct openssd_pool_block* victim_block, int size)
+				 struct nvm_block* victim_block, int size)
 {
 	struct bio *issue_bio;
 	int bv_i;
@@ -568,7 +568,7 @@ void openssd_submit_write(struct openssd *os, sector_t physical_addr,
 
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 {
-	struct openssd_pool_block *victim_block;
+	struct nvm_block *victim_block;
 	struct bio_vec *bv;
 	sector_t logical_addr, physical_addr;
 	int i, size;
@@ -600,10 +600,10 @@ int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
-void openssd_submit_bio(struct openssd *os, struct openssd_pool_block *block, int rw, struct bio *bio, int sync)
+void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, struct bio *bio, int sync)
 {
-	struct openssd_ap *ap = block_to_ap(os, block);
-	struct openssd_pool *pool = ap->pool;
+	struct nvm_ap *ap = block_to_ap(os, block);
+	struct nvm_pool *pool = ap->pool;
 	struct per_bio_data *pb;
 
 	pb = alloc_decorate_per_bio_data(os, bio);

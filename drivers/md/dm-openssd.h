@@ -88,7 +88,7 @@ enum ltop_flags {
 };
 
 /* Pool descriptions */
-struct openssd_pool_block {
+struct nvm_block {
 	struct {
 		spinlock_t lock;
 		unsigned int next_page; /* points to the next writable flash page within a block */
@@ -99,7 +99,7 @@ struct openssd_pool_block {
 		unsigned long invalid_pages[NR_HOST_PAGES_IN_BLOCK / BITS_PER_LONG];
 
 		/* no need to sync. Move down if it overflow the cacheline */
-		struct openssd_pool *parent;
+		struct nvm_pool *parent;
 		unsigned int id;
 	} ____cacheline_aligned_in_smp;
 
@@ -117,12 +117,12 @@ struct openssd_pool_block {
 	struct percpu_ref ref_count; /* Outstanding IOs to be completed on block */
 };
 
-struct openssd_addr {
+struct nvm_addr {
 	sector_t addr;
-	struct openssd_pool_block *block;
+	struct nvm_block *block;
 };
 
-struct openssd_pool {
+struct nvm_pool {
 	/* Pool block lists */
 	struct {
 		spinlock_t lock;
@@ -137,7 +137,7 @@ struct openssd_pool {
 	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
-	struct openssd_pool_block *blocks;
+	struct nvm_block *blocks;
 
 	/* Postpone issuing I/O if append point is active */
 	atomic_t is_active;
@@ -147,15 +147,15 @@ struct openssd_pool {
 };
 
 /*
- * openssd_ap. ap is an append point. A pool can have 1..X append points attached.
+ * nvm_ap. ap is an append point. A pool can have 1..X append points attached.
  * An append point has a current block, that it writes to, and when its full, it requests
  * a new block, of which it continues its writes.
  */
-struct openssd_ap {
+struct nvm_ap {
 	spinlock_t lock;
 	struct openssd *parent;
-	struct openssd_pool *pool;
-	struct openssd_pool_block *cur;
+	struct nvm_pool *pool;
+	struct nvm_block *cur;
 
 	/* Timings used for end_io waiting */
 	unsigned long t_read;
@@ -168,12 +168,12 @@ struct openssd_ap {
 
 struct openssd;
 
-typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct openssd_pool_block **, void *);
-typedef struct openssd_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
+typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct nvm_block **, void *);
+typedef struct nvm_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
 typedef int (write_bio_fn)(struct openssd *, struct bio *);
 typedef int (read_bio_fn)(struct openssd *, struct bio *);
-typedef void *(begin_gc_private_fn)(sector_t, sector_t, struct openssd_pool_block *);
+typedef void *(begin_gc_private_fn)(sector_t, sector_t, struct nvm_block *);
 typedef void (end_gc_private_fn)(void *);
 
 /* Main structure */
@@ -185,7 +185,7 @@ struct openssd {
 	/* Simple translation map of logical addresses to physical addresses. The
 	 * logical addresses is known by the host system, while the physical
 	 * addresses are used when writing to the disk block device. */
-	struct openssd_addr *trans_map;
+	struct nvm_addr *trans_map;
 	/* also store a reverse map for garbage collection */
 	sector_t *rev_trans_map;
 
@@ -199,10 +199,10 @@ struct openssd {
 	 * (or any other device) expose its read/write/erase interface and be
 	 * administrated by the host system.
 	 */
-	struct openssd_pool *pools;
+	struct nvm_pool *pools;
 
 	/* Append points */
-	struct openssd_ap *aps;
+	struct nvm_ap *aps;
 
 	mempool_t *per_bio_pool;
 
@@ -244,8 +244,8 @@ struct openssd {
 static struct kmem_cache *_per_bio_cache;
 
 struct per_bio_data {
-	struct openssd_ap *ap;
-	struct openssd_pool_block *block;
+	struct nvm_ap *ap;
+	struct nvm_block *block;
 	struct timeval start_tv;
 	sector_t physical_addr;
 
@@ -261,42 +261,42 @@ struct per_bio_data {
 /*   Helpers */
 void openssd_print_total_blocks(struct openssd *os);
 
-void openssd_set_ap_cur(struct openssd_ap *ap, struct openssd_pool_block *block);
-struct openssd_pool_block *openssd_pool_get_block(struct openssd_pool *pool);
-sector_t openssd_alloc_phys_addr(struct openssd_pool_block *block);
-sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct openssd_pool_block **ret_victim_block);
+void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block);
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool);
+sector_t openssd_alloc_phys_addr(struct nvm_block *block);
+sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct nvm_block **ret_victim_block);
 
 /*   Naive implementations */
 void openssd_delayed_bio_submit(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
-sector_t openssd_alloc_addr_from_ap(struct openssd_ap *ap, struct openssd_pool_block **ret_victim_block);
-sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
-sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block);
+sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
+sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
 /* Calls map_ltop_rr with a specified number of retries. Returns LTOP_EMPTY if failed */
-sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct openssd_pool_block **ret_victim_block, void *private);
+sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
 
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
-struct openssd_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
+struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
 sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
 
 /*   I/O bio related */
-void openssd_submit_bio(struct openssd *os, struct openssd_pool_block *block, int rw, struct bio *bio, int sync);
+void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, struct bio *bio, int sync);
 void openssd_submit_write(struct openssd *os, sector_t physical_addr,
-				 struct openssd_pool_block* victim_block, int size);
-int openssd_handle_buffered_write(sector_t physical_addr, struct openssd_pool_block *victim_block, struct bio_vec *bv);
+				 struct nvm_block* victim_block, int size);
+int openssd_handle_buffered_write(sector_t physical_addr, struct nvm_block *victim_block, struct bio_vec *bv);
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
 int openssd_read_bio_generic(struct openssd *os, struct bio *bio);
 void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
-				   sector_t p_addr, struct openssd_pool_block *p_block);
+				   sector_t p_addr, struct nvm_block *p_block);
 
 /*   NVM device related */
 void openssd_block_release(struct percpu_ref *);
 
 /*   Block maintanence */
 
-void openssd_pool_put_block(struct openssd_pool_block *block);
-void openssd_reset_block(struct openssd_pool_block *block);
+void nvm_pool_put_block(struct nvm_block *block);
+void openssd_reset_block(struct nvm_block *block);
 
 /* dm-openssd-gc.c */
 void openssd_block_erase(struct kref *);
@@ -328,17 +328,17 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio);
 		for ((i) = 0, block = &(pool)->blocks[0];							\
 			 (i) < (pool)->nr_blocks; (i)++, block = &(pool)->blocks[(i)])
 
-static inline struct openssd_ap *get_next_ap(struct openssd *os)
+static inline struct nvm_ap *get_next_ap(struct openssd *os)
 {
 	return &os->aps[atomic_inc_return(&os->next_write_ap) % os->nr_aps];
 }
 
-static inline int block_is_full(struct openssd_pool_block *block)
+static inline int block_is_full(struct nvm_block *block)
 {
 	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == NR_HOST_PAGES_IN_BLOCK);
 }
 
-static inline sector_t block_to_addr(struct openssd_pool_block *block)
+static inline sector_t block_to_addr(struct nvm_block *block)
 {
 	return (block->id * NR_HOST_PAGES_IN_BLOCK);
 }
@@ -358,7 +358,7 @@ static inline int page_is_fast(unsigned int pagenr)
 	return 0;
 }
 
-static inline struct openssd_ap *block_to_ap(struct openssd *os, struct openssd_pool_block *block)
+static inline struct nvm_ap *block_to_ap(struct openssd *os, struct nvm_block *block)
 {
 	unsigned int ap_idx, div, mod;
 
@@ -374,12 +374,12 @@ static inline int physical_to_slot(sector_t phys)
 	return (phys % (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
-static inline void openssd_get_block(struct openssd_pool_block *block)
+static inline void openssd_get_block(struct nvm_block *block)
 {
 	percpu_ref_get(&block->ref_count);
 }
 
-static inline void openssd_put_block(struct openssd_pool_block *block)
+static inline void openssd_put_block(struct nvm_block *block)
 {
 	percpu_ref_put(&block->ref_count);
 }

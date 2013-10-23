@@ -25,11 +25,13 @@
 #include "dm-openssd-hint.h"
 
 /* Defaults */
-#define APS_PER_POOL 1		/* Number of append points per pool. We assume
-that accesses within a pool is serial (NAND
-                                       flash / PCM / etc.) */
-#define SERIALIZE_POOL_ACCESS 0 /* If enabled, we delay bios on each ap to run
-serialized. */
+
+/* Number of append points per pool. We assume that accesses within a pool is
+ * serial (NAND flash/PCM/etc.) */
+#define APS_PER_POOL 1
+
+/* If enabled, we delay bios on each ap to run serialized. */
+#define SERIALIZE_POOL_ACCESS 0
 
 /* Sleep timings before simulating device specific storage (in us)*/
 #define TIMING_READ 25

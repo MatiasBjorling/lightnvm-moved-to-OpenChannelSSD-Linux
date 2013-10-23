@@ -52,7 +52,7 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 	struct nvm_addr *l;
 	unsigned int page_offset;
 
-	if (l_addr >= os->nr_pages || p_addr >= os->nr_pages) 
+	if (l_addr >= os->nr_pages || p_addr >= os->nr_pages)
 		return;
 
 	BUG_ON(l_addr >= os->nr_pages);
@@ -605,7 +605,7 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 	/* setup timings - remember overhead. */
 	do_gettimeofday(&pb->start_tv);
 
-	if (os->config.serialize && atomic_read(&pool->is_active)) {
+	if (os->config.flags & NVM_OPT_POOL_SERIALIZE && atomic_read(&pool->is_active)) {
 		spin_lock(&pool->waiting_lock);
 		ap->io_delayed++;
 		bio_list_add(&pool->waiting_bios, bio);

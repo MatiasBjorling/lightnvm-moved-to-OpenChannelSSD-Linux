@@ -1,26 +1,27 @@
 #include "dm-openssd.h"
 #include "dm-openssd-hint.h"
 
-/* Configuration of hints that are deployed within the openssd instance */
-#define DEPLOYED_HINTS /*(HINT_NONE) */ (HINT_LATENCY | HINT_IOCTL) /* (HINT_SWAP | HINT_IOCTL) */
-
-#define VERIFY_HINT(HINT_FLAGS, HINT_TYPE)  (((HINT_FLAGS) & HINT_TYPE) && (DEPLOYED_HINTS & HINT_TYPE))
-#define IS_HINT_DEPLOYED(HINT_FLAGS) (VERIFY_HINT(HINT_FLAGS, HINT_SWAP) || VERIFY_HINT(HINT_FLAGS, HINT_LATENCY))
-
-void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bio_data *pb, unsigned long *delay)
+void openssd_delay_endio_hint(struct openssd *os, struct bio *bio,
+				struct per_bio_data *pb, unsigned long *delay)
 {
-	struct openssd_hint *hint = os->hint_private;
 	int page_id;
 
-	if ((hint->hint_flags & HINT_SWAP) && bio_data_dir(bio) == WRITE) {
-		page_id = (pb->physical_addr / NR_HOST_PAGES_IN_FLASH_PAGE) % BLOCK_PAGE_COUNT;
+	if (!(os->config.flags & NVM_OPT_ENGINE_SWAP))
+		return;
 
-		// TODO: consider dev_wait to be part of per_bio_data?
-		if (page_is_fast(page_id))
-			(*delay) = TIMING_WRITE_FAST;
-		else
-			(*delay) = TIMING_WRITE_SLOW;
-	}
+	if (bio_data_dir(bio) != WRITE)
+		return;
+
+	page_id = (pb->physical_addr / NR_HOST_PAGES_IN_FLASH_PAGE)
+							% os->nr_pages_per_blk;
+
+	/* different timings, roughly based on "Harey Tortoise" paper
+	 * TODO: ratio is actually 4.8 on average
+	 * TODO: consider dev_wait to be part of per_bio_data? */
+	if (page_is_fast(page_id))
+		(*delay) = os->config.timing_write / 2;
+	else
+		(*delay) = os->config.timing_write * 2;
 }
 
 void *openssd_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct
@@ -54,7 +55,7 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 		//DMINFO("hint start_lba=%d count=%d", hint_info->hint.start_lba, hint_info->hint.count);
 		//continue;
 		/* verify lba covered by hint*/
-		if (is_hint_relevant(logical_addr, hint_info, is_write, DEPLOYED_HINTS)) {
+		if (is_hint_relevant(logical_addr, hint_info, is_write, os->config.flags)) {
 			DMINFO("found hint for lba %ld",logical_addr);
 			hint_info->processed++;
 			spin_unlock(&hint->hintlock);
@@ -108,20 +109,15 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	int i;
 	hint_info_t* hint_info;
 
+	if (!(os->config.flags &
+			(NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP)))
+		goto send_done;
+
 	DMINFO("first %s hint count=%d lba=%d fc=%d",
 	       CAST_TO_PAYLOAD(hint_data)->is_write ? "WRITE" : "READ",
 	       CAST_TO_PAYLOAD(hint_data)->count,
 	       INO_HINT_FROM_DATA(hint_data, 0).start_lba,
 	       INO_HINT_FROM_DATA(hint_data, 0).fc);
-
-	// assert hint support
-	if (!hint->hint_flags)
-		goto send_done;
-
-	if(!IS_HINT_DEPLOYED(hint->hint_flags)){
-		DMINFO("got hint of type %d unsupported ", hint->hint_flags);
-		goto send_done;
-	}
 
 	// assert relevant hint support
 	if (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(hint->hint_flags & HINT_SWAP)) {
@@ -138,7 +134,7 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 		// handle file type  for
 		// 1) identified latency writes
 		// 2) TODO
-		if (hint->hint_flags & HINT_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc != FC_EMPTY) {
+		if (os->config.flags & NVM_OPT_ENGINE_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc != FC_EMPTY) {
 			DMINFO("ino %lu got new fc %d", INO_HINT_FROM_DATA(hint_data, i).ino,
 			       INO_HINT_FROM_DATA(hint_data, i).fc);
 			hint->ino_hints[INO_HINT_FROM_DATA(hint_data, i).ino] = INO_HINT_FROM_DATA(hint_data, 0).fc;
@@ -410,8 +406,9 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 				openssd_submit_write(os, physical_addr, victim_block, size);
 		}
 
-		/* trim old shadow when necessary (currently no support for multiple hint types at once) */
-		if(DEPLOYED_HINTS & HINT_LATENCY && numCopies==1)
+		/* trim old shadow when necessary (currently no support for
+		 * multiple hint types at once) */
+		if(os->config.flags & NVM_OPT_ENGINE_LATENCY && numCopies == 1)
 			openssd_trim_map_shadow(os, logical_addr, physical_addr);
 	}
 
@@ -419,7 +416,6 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	if (map_alloc_data.hint_info) {
 		spin_lock(&hint->hintlock);
 		if (map_alloc_data.hint_info->processed == map_alloc_data.hint_info->hint.count) {
-			//DMINFO("delete latency hint");
 			list_del(&map_alloc_data.hint_info->list_member);
 			kfree(map_alloc_data.hint_info);
 		}
@@ -446,7 +442,7 @@ static void openssd_update_map_shadow(struct openssd *os,
 
 		l = &hint->shadow_map[l_addr];
 		if (l->block) {
-			page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
+			page_offset = l->addr % os->nr_host_pages_in_blk;
 			if(test_and_set_bit(page_offset, l->block->invalid_pages))
 				WARN_ON(true);
 			l->block->nr_invalid_pages++;
@@ -528,43 +524,44 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
  * Then update the ap for the next write to the disk.
  * If no reelvant ap found, or non-swap write - resort to normal allocation
  */
-static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private)
+static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
+		sector_t l_addr, struct nvm_block **ret_block, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
-	sector_t physical_addr;
+	sector_t p_addr;
 
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to openssd_map_ltop_rr */
-	if(map_alloc_data){
+	if (map_alloc_data) {
 		if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
 			DMDEBUG("swap_map: non-GC non-hinted write");
-			return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 		}
 
 		/* GC write of a slow page */
-		if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(map_alloc_data->old_p_addr))) {
-			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));
-			return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+		if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(os, map_alloc_data->old_p_addr))) {
+			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(os, map_alloc_data->old_p_addr));
+			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 		}
 
 		/*if (map_alloc_data->old_p_addr != LTOP_EMPTY)
-			DMDEBUG("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(map_alloc_data->old_p_addr));*/
+			DMDEBUG("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(os, map_alloc_data->old_p_addr));*/
 	}
 
 	/* hinted write, or GC of FAST page*/
-	physical_addr = openssd_alloc_phys_fastest_addr(os, ret_victim_block);
+	p_addr = openssd_alloc_phys_fastest_addr(os, ret_block);
 
 	/* no FAST page found. restort to regular allocation */
-	if(physical_addr == LTOP_EMPTY){
-		return openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+	if(p_addr == LTOP_EMPTY){
+		return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 	}
 
 	//DMINFO("swap_rr: logical_addr=%ld physical_addr[0]=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr[0], page_id, block->id);
 	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
-	openssd_update_map_generic(os, logical_addr, physical_addr, (*ret_victim_block));
+	openssd_update_map_generic(os, l_addr, p_addr, (*ret_block));
 
-	DMDEBUG("write lba %ld to FAST page %ld (*ret_victim_block=%p)", logical_addr, physical_addr, (*ret_victim_block));
-	return physical_addr;
+	DMDEBUG("write lba %ld to FAST page %ld (*ret_victim_block=%p)", l_addr, p_addr, (*ret_block));
+	return p_addr;
 }
 
 // TODO: actually finding a non-busy pool is not enough. read should be moved up the request queue.
@@ -583,7 +580,7 @@ static struct nvm_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t
 	}
 
 	// check if primary is busy
-	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / POOL_COUNT);
+	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / os->nr_pools);
 	if (atomic_read(&os->pools[pool_idx].is_active)) {
 		DMINFO("primary busy. read shadow");
 		return &hint->shadow_map[logical_addr];
@@ -626,7 +623,7 @@ static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_
 	DMINFO("trim old shaddow");
 	l = &hint->shadow_map[l_addr];
 	if (l->block) {
-		page_offset = l->addr % (NR_HOST_PAGES_IN_BLOCK);
+		page_offset = l->addr % os->nr_host_pages_in_blk;
 		if(test_and_set_bit(page_offset, l->block->invalid_pages))
 			WARN_ON(true);
 		l->block->nr_invalid_pages++;
@@ -696,8 +693,6 @@ int openssd_alloc_hint(struct openssd *os)
 	if (!hint)
 		return -ENOMEM;
 
-	hint->hint_flags = DEPLOYED_HINTS;
-
 	// initla shadow maps are empty
 	hint->shadow_map = vmalloc(sizeof(struct nvm_addr) * os->nr_pages);
 	if (!hint->shadow_map)
@@ -715,14 +710,14 @@ int openssd_alloc_hint(struct openssd *os)
 	if (!hint->ino_hints)
 		goto err_hints;
 
-	if (hint->hint_flags & HINT_SWAP) {
+	if (os->config.flags & NVM_OPT_ENGINE_SWAP) {
 		DMINFO("Swap hint support");
 		os->map_ltop = openssd_map_swap_hint_ltop_rr;
 		os->write_bio = openssd_write_bio_hint;
 		os->read_bio = openssd_read_bio_hint;
 		os->begin_gc_private = openssd_begin_gc_hint;
 		os->end_gc_private = openssd_end_gc_hint;
-	} else if (hint->hint_flags & HINT_LATENCY) {
+	} else if (os->config.flags & NVM_OPT_ENGINE_LATENCY) {
 		DMINFO("Latency hint support");
 		os->map_ltop = openssd_map_latency_hint_ltop_rr;
 		os->lookup_ltop = openssd_latency_lookup_ltop;

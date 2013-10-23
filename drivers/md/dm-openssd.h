@@ -6,6 +6,10 @@
 
 #ifndef DM_OPENSSD_H_
 #define DM_OPENSSD_H_
+
+#define OPENSSD_IOC_MAGIC 'O'
+#define OPENSSD_IOCTL_ID          _IO(OPENSSD_IOC_MAGIC, 0x40)
+
 #ifdef __KERNEL__
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
@@ -23,30 +27,9 @@
 #include <linux/kthread.h>
 #include <linux/mempool.h>
 #include <linux/percpu-refcount.h>
-#endif
-#define OPENSSD_IOC_MAGIC 'O'
 
-#define OPENSSD_IOCTL_ID          _IO(OPENSSD_IOC_MAGIC, 0x40)
-#define OPENSSD_IOCTL_SUBMIT_HINT _IOW(OPENSSD_IOC_MAGIC, 0x41, hint_data_t)
-#define OPENSSD_IOCTL_KERNEL_HINT _IOW(OPENSSD_IOC_MAGIC, 0x42, hint_data_t)
-
-#ifdef __KERNEL__
 #define DM_MSG_PREFIX "openssd"
-
-#define APS_PER_POOL 1 /* Number of append points per pool. We assume that accesses within
-						  a pool is serial (NAND flash / PCM / etc.) */
-#define SERIALIZE_POOL_ACCESS 0 /* If enabled, we delay bios on each ap to run serialized. */
 #define LTOP_EMPTY -1
-
-/* Sleep timings before simulating device specific storage (in us)*/
-#define TIMING_READ 25
-#define TIMING_WRITE 500
-#define TIMING_ERASE 1500
-
-/* Run GC every X seconds */
-#define GC_TIME 10
-/* Run only GC is less than 1/X blocks are free */
-#define GC_LIMIT_INVERSE 2
 
 /*
  * For now we hardcode the configuration for the OpenSSD unit that we own. In
@@ -61,25 +44,11 @@
  * BLOCK_PAGE_COUNT must be a power of two.
  */
 
-#define DEVICE_PAGE_SIZE 512	/* The minimum page size we communicate with to the physical disk */
 #define EXPOSED_PAGE_SIZE 4096	/* The page size that we expose to the operating system */
 #define FLASH_PAGE_SIZE 8196	/* The size of the physical flash page */
 
-#define POOL_COUNT 8
-#define POOL_BLOCK_COUNT 4
-#define BLOCK_PAGE_COUNT 64
-
-/*---------------------
- * Swap hints. TODO: all this should move to configuration files, etc.
- *
- * different timings, roughly based on "Harey Tortoise" paper (TODO: ratio is actually 4.8 on average)
- *------------------- */
-#define TIMING_WRITE_FAST (TIMING_WRITE / 2)
-#define TIMING_WRITE_SLOW (TIMING_WRITE * 2)
-
 #define NR_HOST_PAGES_IN_FLASH_PAGE (FLASH_PAGE_SIZE / EXPOSED_PAGE_SIZE)
 #define NR_PHY_IN_LOG (EXPOSED_PAGE_SIZE / 512)
-#define NR_HOST_PAGES_IN_BLOCK (NR_HOST_PAGES_IN_FLASH_PAGE * BLOCK_PAGE_COUNT)
 
 enum ltop_flags {
 	MAP_PRIMARY	= 1 << 0, /* Update primary mapping (and init secondary mapping as a result) */
@@ -87,19 +56,34 @@ enum ltop_flags {
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 
+enum target_flags {
+	NVM_OPT_ENGINE_NONE		= 0 <<  0, /* No hints applied */
+	NVM_OPT_ENGINE_SWAP		= 1 <<  0, /* Swap aware hints. Detected from block request type */
+	NVM_OPT_ENGINE_IOCTL	= 1 <<  1, /* IOCTL aware hints. Applications may submit direct hints */
+	NVM_OPT_ENGINE_LATENCY	= 1 <<  2, /* Latency aware hints. Detected from file type or durectly from app */
+
+	NVM_OPT_POOL_SERIALIZE	= 1 << 15, /* Serialize pool accesses */
+	NVM_OPT_FAST_SLOW_PAGES	= 1 << 16, /* Use fast/slow page access pattern */
+};
+
 /* Pool descriptions */
 struct nvm_block {
 	struct {
 		spinlock_t lock;
-		unsigned int next_page; /* points to the next writable flash page within a block */
-		unsigned char next_offset; /* if a flash page can have multiple host pages,
-									   fill up the flash page before going to the next
-									   writable flash page */
-		unsigned int nr_invalid_pages; /* number of pages that are invalid, with respect to host page size */
-		unsigned long invalid_pages[NR_HOST_PAGES_IN_BLOCK / BITS_PER_LONG];
+		/* points to the next writable flash page within a block */
+		unsigned int next_page;
+		/* if a flash page can have multiple host pages,
+		   fill up the flash page before going to the next
+		   writable flash page */
+		unsigned char next_offset;
+		/* number of pages that are invalid, with respect to host page size */
+		unsigned int nr_invalid_pages;
+#define MAX_INVALID_PAGES_STORAGE 8
+		/* Bitmap for invalid page intries */
+		unsigned long invalid_pages[MAX_INVALID_PAGES_STORAGE];
 
 		/* no need to sync. Move down if it overflow the cacheline */
-		struct nvm_pool *parent;
+		struct nvm_pool *pool;
 		unsigned int id;
 	} ____cacheline_aligned_in_smp;
 
@@ -138,6 +122,7 @@ struct nvm_pool {
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
 	struct nvm_block *blocks;
+	struct openssd *os;
 
 	/* Postpone issuing I/O if append point is active */
 	atomic_t is_active;
@@ -164,6 +149,21 @@ struct nvm_ap {
 
 	unsigned long io_delayed;
 	unsigned long io_accesses[2];
+};
+
+struct nvm_config {
+	unsigned long flags;
+
+	unsigned int gc_time;		/* GC every X seconds */
+
+	unsigned int timing_read;
+	unsigned int timing_write;
+	unsigned int timing_erase;
+
+	bool serialize;	/* Control accesses to append points in the host.
+			 * Enable this for devices that doesn't have an
+			 * internal queue that only lets one command run
+			 * at a time within an append point */
 };
 
 struct openssd;
@@ -206,14 +206,20 @@ struct openssd {
 
 	mempool_t *per_bio_pool;
 
+	/* Frequently used config variables */
 	int nr_pools;
+	int nr_blks_per_pool;
+	int nr_pages_per_blk;
 	int nr_aps;
 	int nr_aps_per_pool;
 
+	/* Calculated values */
+	unsigned int nr_host_pages_in_blk;
 	unsigned long nr_pages;
 
 	unsigned int next_collect_pool;
-	/* FTL interface */
+
+	/* Engine interface */
 	map_ltop_fn *map_ltop;
 	lookup_ltop_fn *lookup_ltop;
 	lookup_ptol_fn *lookup_ptol;
@@ -227,11 +233,6 @@ struct openssd {
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
 							   to the next write append point */
 
-	bool serialize_pool_access;		/* Control accesses to append points in the host.
-							 * Enable this for devices that doesn't have an
-							 * internal queue that only lets one command run
-							 * at a time within an append point
-							*/
 	struct workqueue_struct *kbiod_wq;
 
 	spinlock_t gc_lock;
@@ -239,6 +240,9 @@ struct openssd {
 
 	/* Hint related*/
 	void *hint_private;
+
+	/* Configuration */
+	struct nvm_config config;
 };
 
 struct per_bio_data {
@@ -333,12 +337,14 @@ static inline struct nvm_ap *get_next_ap(struct openssd *os)
 
 static inline int block_is_full(struct nvm_block *block)
 {
-	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == NR_HOST_PAGES_IN_BLOCK);
+	struct openssd *os = block->pool->os;
+	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == os->nr_host_pages_in_blk);
 }
 
 static inline sector_t block_to_addr(struct nvm_block *block)
 {
-	return (block->id * NR_HOST_PAGES_IN_BLOCK);
+	struct openssd *os = block->pool->os;
+	return block->id * os->nr_host_pages_in_blk;
 }
 
 static inline int page_is_fast(unsigned int pagenr)
@@ -360,16 +366,16 @@ static inline struct nvm_ap *block_to_ap(struct openssd *os, struct nvm_block *b
 {
 	unsigned int ap_idx, div, mod;
 
-	div = block->id / POOL_BLOCK_COUNT;
-	mod = block->id % POOL_BLOCK_COUNT;
-	ap_idx = div + (mod / (POOL_BLOCK_COUNT / APS_PER_POOL));
+	div = block->id / os->nr_blks_per_pool;
+	mod = block->id % os->nr_blks_per_pool;
+	ap_idx = div + (mod / (os->nr_blks_per_pool / os->nr_aps_per_pool));
 
 	return &os->aps[ap_idx];
 }
 
-static inline int physical_to_slot(sector_t phys)
+static inline int physical_to_slot(struct openssd *os, sector_t phys)
 {
-	return (phys % (BLOCK_PAGE_COUNT * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
+	return (phys % (os->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
 static inline void openssd_get_block(struct nvm_block *block)
@@ -384,3 +390,4 @@ static inline void openssd_put_block(struct nvm_block *block)
 #endif
 
 #endif /* DM_OPENSSD_H_ */
+

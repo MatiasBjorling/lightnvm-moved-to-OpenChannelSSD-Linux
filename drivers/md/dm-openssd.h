@@ -57,13 +57,21 @@ enum ltop_flags {
 };
 
 enum target_flags {
-	NVM_OPT_ENGINE_NONE		= 0 <<  0, /* No hints applied */
-	NVM_OPT_ENGINE_SWAP		= 1 <<  0, /* Swap aware hints. Detected from block request type */
-	NVM_OPT_ENGINE_IOCTL	= 1 <<  1, /* IOCTL aware hints. Applications may submit direct hints */
-	NVM_OPT_ENGINE_LATENCY	= 1 <<  2, /* Latency aware hints. Detected from file type or durectly from app */
+	/* No hints applied */
+	NVM_OPT_ENGINE_NONE		= 0 <<  0,
+	/* Swap aware hints. Detected from block request type */
+	NVM_OPT_ENGINE_SWAP		= 1 <<  0,
+	/* IOCTL aware hints. Applications may submit direct hints */
+	NVM_OPT_ENGINE_IOCTL	= 1 <<  1,
+	/* Latency aware hints. Detected from file type or durectly from app */
+	NVM_OPT_ENGINE_LATENCY	= 1 <<  2,
 
-	NVM_OPT_POOL_SERIALIZE	= 1 << 15, /* Serialize pool accesses */
-	NVM_OPT_FAST_SLOW_PAGES	= 1 << 16, /* Use fast/slow page access pattern */
+	/* Control accesses to append points in the host. Enable this for
+	 * devices that doesn't have an internal queue that only lets one
+	 * command run at a time within an append point */
+	NVM_OPT_POOL_SERIALIZE	= 1 << 15,
+	/* Use fast/slow page access pattern */
+	NVM_OPT_FAST_SLOW_PAGES	= 1 << 16,
 };
 
 /* Pool descriptions */
@@ -81,11 +89,10 @@ struct nvm_block {
 #define MAX_INVALID_PAGES_STORAGE 8
 		/* Bitmap for invalid page intries */
 		unsigned long invalid_pages[MAX_INVALID_PAGES_STORAGE];
-
-		/* no need to sync. Move down if it overflow the cacheline */
-		struct nvm_pool *pool;
-		unsigned int id;
 	} ____cacheline_aligned_in_smp;
+
+	unsigned int id;
+	struct nvm_pool *pool;
 
 	// Management and GC structures
 	struct list_head list;
@@ -159,11 +166,6 @@ struct nvm_config {
 	unsigned int timing_read;
 	unsigned int timing_write;
 	unsigned int timing_erase;
-
-	bool serialize;	/* Control accesses to append points in the host.
-			 * Enable this for devices that doesn't have an
-			 * internal queue that only lets one command run
-			 * at a time within an append point */
 };
 
 struct openssd;

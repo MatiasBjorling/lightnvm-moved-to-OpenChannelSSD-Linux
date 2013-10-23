@@ -8,8 +8,10 @@
 #define DM_OPENSSD_HINT_H_
 
 #include <linux/types.h>
-
 #include "dm-openssd.h"
+
+#define OPENSSD_IOCTL_SUBMIT_HINT _IOW(OPENSSD_IOC_MAGIC, 0x41, hint_data_t)
+#define OPENSSD_IOCTL_KERNEL_HINT _IOW(OPENSSD_IOC_MAGIC, 0x42, hint_data_t)
 
 #define HINT_MAX_INOS       (500000)
 #define HINT_DATA_MAX_INOS  (8)

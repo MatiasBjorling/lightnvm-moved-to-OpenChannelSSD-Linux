@@ -3,6 +3,9 @@
 #include "dm-openssd.h"
 #include "dm-openssd-hint.h"
 
+/* Run only GC if less than 1/X blocks are free */
+#define GC_LIMIT_INVERSE 2
+
 static void __erase_block(struct nvm_block *block)
 {
 	// Perform device erase
@@ -34,11 +37,11 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 	struct bio_vec *bv;
 	void *gc_private = NULL;
 
-	if (bitmap_full(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK))
+	if (bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk))
 		return;
 
 	page = alloc_page(GFP_NOIO);
-	while ((slot = find_next_zero_bit(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK, slot + 1)) < NR_HOST_PAGES_IN_BLOCK) {
+	while ((slot = find_next_zero_bit(block->invalid_pages, os->nr_host_pages_in_blk, slot + 1)) < os->nr_host_pages_in_blk) {
 		/* Perform read */
 		p_addr = block_to_addr(block) + slot;
 		src_bio = bio_alloc(GFP_NOIO, 1);
@@ -76,7 +79,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		}
 	}
 	__free_page(page);
-	bitmap_fill(block->invalid_pages, NR_HOST_PAGES_IN_BLOCK);
+	bitmap_fill(block->invalid_pages, os->nr_host_pages_in_blk);
 }
 
 /* Push erase condition to automatically be executed when block goes to zero.

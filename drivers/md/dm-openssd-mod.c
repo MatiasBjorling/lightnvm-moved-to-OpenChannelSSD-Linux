@@ -179,9 +179,9 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 			ap->pool = pool;
 			ap->cur = nvm_pool_get_block(pool); // No need to lock ap->cur.
 
-			ap->t_read = os->config.timing_read;
-			ap->t_write = os->config.timing_write;
-			ap->t_erase = os->config.timing_erase;
+			ap->t_read = os->config.t_read;
+			ap->t_write = os->config.t_write;
+			ap->t_erase = os->config.t_erase;
 		}
 	}
 
@@ -355,30 +355,30 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		}
 	}
 
-	os->config.timing_read = TIMING_READ;
+	os->config.t_read = TIMING_READ;
 	if (argc > 8) {
 		if (sscanf(argv[8], "%u%c", &tmp, &dummy) == 1) {
-			os->config.timing_read = tmp;
+			os->config.t_read = tmp;
 		} else {
 			ti->error = "Cannot read read access timing";
 			goto err_map;
 		}
 	}
 
-	os->config.timing_write = TIMING_WRITE;
+	os->config.t_write = TIMING_WRITE;
 	if (argc > 9) {
 		if (sscanf(argv[9], "%u%c", &tmp, &dummy) == 1) {
-			os->config.timing_write = tmp;
+			os->config.t_write = tmp;
 		} else {
 			ti->error = "Cannot read write access timing";
 			goto err_map;
 		}
 	}
 
-	os->config.timing_erase = TIMING_ERASE;
+	os->config.t_erase = TIMING_ERASE;
 	if (argc > 10) {
 		if (sscanf(argv[10], "%u%c", &tmp, &dummy) == 1) {
-			os->config.timing_erase = tmp;
+			os->config.t_erase = tmp;
 		} else {
 			ti->error = "Cannot read erase access timing";
 			goto err_map;

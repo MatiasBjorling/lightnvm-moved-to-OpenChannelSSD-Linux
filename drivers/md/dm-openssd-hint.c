@@ -19,9 +19,9 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio,
 	 * TODO: ratio is actually 4.8 on average
 	 * TODO: consider dev_wait to be part of per_bio_data? */
 	if (page_is_fast(page_id))
-		(*delay) = os->config.timing_write / 2;
+		(*delay) = os->config.t_write / 2;
 	else
-		(*delay) = os->config.timing_write * 2;
+		(*delay) = os->config.t_write * 2;
 }
 
 void *openssd_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct

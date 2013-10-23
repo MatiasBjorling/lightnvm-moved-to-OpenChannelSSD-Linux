@@ -163,9 +163,9 @@ struct nvm_config {
 
 	unsigned int gc_time;		/* GC every X seconds */
 
-	unsigned int timing_read;
-	unsigned int timing_write;
-	unsigned int timing_erase;
+	unsigned int t_read;
+	unsigned int t_write;
+	unsigned int t_erase;
 };
 
 struct openssd;

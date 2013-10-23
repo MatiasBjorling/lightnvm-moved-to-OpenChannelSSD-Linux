@@ -287,12 +287,12 @@ sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
 /*   I/O bio related */
 void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, struct bio *bio, int sync);
 void openssd_submit_write(struct openssd *os, sector_t physical_addr,
-				 struct nvm_block* victim_block, int size);
+                          struct nvm_block* victim_block, int size);
 int openssd_handle_buffered_write(sector_t physical_addr, struct nvm_block *victim_block, struct bio_vec *bv);
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
 int openssd_read_bio_generic(struct openssd *os, struct bio *bio);
 void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
-				   sector_t p_addr, struct nvm_block *p_block);
+                                sector_t p_addr, struct nvm_block *p_block);
 
 /*   NVM device related */
 void openssd_block_release(struct percpu_ref *);
@@ -332,8 +332,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio);
 		for ((i) = 0, block = &(pool)->blocks[0];							\
 			 (i) < (pool)->nr_blocks; (i)++, block = &(pool)->blocks[(i)])
 
-static inline struct nvm_ap *get_next_ap(struct openssd *os)
-{
+static inline struct nvm_ap *get_next_ap(struct openssd *os) {
 	return &os->aps[atomic_inc_return(&os->next_write_ap) % os->nr_aps];
 }
 
@@ -364,8 +363,7 @@ static inline int page_is_fast(unsigned int pagenr)
 	return 0;
 }
 
-static inline struct nvm_ap *block_to_ap(struct openssd *os, struct nvm_block *block)
-{
+static inline struct nvm_ap *block_to_ap(struct openssd *os, struct nvm_block *block) {
 	unsigned int ap_idx, div, mod;
 
 	div = block->id / os->nr_blks_per_pool;

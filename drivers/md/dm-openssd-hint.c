@@ -2,7 +2,7 @@
 #include "dm-openssd-hint.h"
 
 void openssd_delay_endio_hint(struct openssd *os, struct bio *bio,
-				struct per_bio_data *pb, unsigned long *delay)
+                              struct per_bio_data *pb, unsigned long *delay)
 {
 	int page_id;
 
@@ -13,7 +13,7 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio,
 		return;
 
 	page_id = (pb->physical_addr / NR_HOST_PAGES_IN_FLASH_PAGE)
-							% os->nr_pages_per_blk;
+	          % os->nr_pages_per_blk;
 
 	/* different timings, roughly based on "Harey Tortoise" paper
 	 * TODO: ratio is actually 4.8 on average
@@ -25,10 +25,10 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio,
 }
 
 void *openssd_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct
-		nvm_block *block)
+                            nvm_block *block)
 {
 	struct openssd_hint_map_private *private =
-		kzalloc(sizeof(struct openssd_hint_map_private), GFP_NOIO);
+	        kzalloc(sizeof(struct openssd_hint_map_private), GFP_NOIO);
 
 	private->old_p_addr = p_addr;
 
@@ -110,7 +110,7 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	hint_info_t* hint_info;
 
 	if (!(os->config.flags &
-			(NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP)))
+	      (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP)))
 		goto send_done;
 
 	DMINFO("first %s hint count=%d lba=%d fc=%d",
@@ -428,8 +428,8 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 
 // do any shadow address updating required (real, none, or trim of old one)
 static void openssd_update_map_shadow(struct openssd *os,
-			sector_t l_addr, sector_t p_addr,
-			struct nvm_block *p_block, unsigned long flags)
+                                      sector_t l_addr, sector_t p_addr,
+                                      struct nvm_block *p_block, unsigned long flags)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct nvm_addr *l;
@@ -454,8 +454,7 @@ static void openssd_update_map_shadow(struct openssd *os,
 		os->rev_trans_map[p_addr] = l_addr;
 
 		return;
-	}
-	else if (flags & MAP_PRIMARY) {
+	} else if (flags & MAP_PRIMARY) {
 		DMERR("should update primary only");
 		return;
 	}
@@ -489,12 +488,12 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 		// dont pass map_alloc_data for primary
 		map_alloc_data->flags = openssd_get_mapping_flag(os, logical_addr, map_alloc_data->old_p_addr);
 		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block,
-						    (map_alloc_data->flags & (MAP_SHADOW))?map_alloc_data:(void*)NULL);
+		                (map_alloc_data->flags & (MAP_SHADOW))?map_alloc_data:(void*)NULL);
 
 		// will do nothing if primary
 		DMDEBUG("update_map_shaddow");
 		openssd_update_map_shadow(os, logical_addr, physical_addr,
-					(*ret_victim_block), map_alloc_data->flags);
+		                          (*ret_victim_block), map_alloc_data->flags);
 
 		return physical_addr;
 	}
@@ -525,7 +524,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
  * If no reelvant ap found, or non-swap write - resort to normal allocation
  */
 static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
-		sector_t l_addr, struct nvm_block **ret_block, void *private)
+                sector_t l_addr, struct nvm_block **ret_block, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
 	sector_t p_addr;
@@ -552,7 +551,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 	p_addr = openssd_alloc_phys_fastest_addr(os, ret_block);
 
 	/* no FAST page found. restort to regular allocation */
-	if(p_addr == LTOP_EMPTY){
+	if(p_addr == LTOP_EMPTY) {
 		return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 	}
 

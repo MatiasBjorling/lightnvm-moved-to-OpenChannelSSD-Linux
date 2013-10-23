@@ -63,10 +63,10 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 
 		if (os->begin_gc_private)
 			gc_private = os->begin_gc_private(l_addr,
-					p_addr, block);
+			                                  p_addr, block);
 
 		dst_addr = os->map_ltop(os, l_addr, &victim_block,
-				gc_private);
+		                        gc_private);
 
 		if (os->end_gc_private)
 			os->end_gc_private(gc_private);
@@ -127,7 +127,7 @@ void openssd_gc_collect(struct openssd *os)
 
 			list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
 			block = list_first_entry(&pool->prio_list, struct
-					nvm_block, prio);
+			                         nvm_block, prio);
 
 			/* lock is released in openssd_block_release */
 			if (!spin_trylock(&block->gc_lock))
@@ -153,7 +153,7 @@ void openssd_gc_collect(struct openssd *os)
 			 * count to let it take action. i.e. perform physical
 			 * erase if needed and return to the pool free list.*/
 			percpu_ref_kill_and_confirm(&block->ref_count,
-					openssd_block_release);
+			                            openssd_block_release);
 finished:
 			pid++;
 			pid %= os->nr_pools;

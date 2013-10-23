@@ -26,10 +26,10 @@
 
 /* Defaults */
 #define APS_PER_POOL 1		/* Number of append points per pool. We assume
-				   that accesses within a pool is serial (NAND
-				   flash / PCM / etc.) */
+that accesses within a pool is serial (NAND
+                                       flash / PCM / etc.) */
 #define SERIALIZE_POOL_ACCESS 0 /* If enabled, we delay bios on each ap to run
-				   serialized. */
+serialized. */
 
 /* Sleep timings before simulating device specific storage (in us)*/
 #define TIMING_READ 25
@@ -57,7 +57,7 @@ static int openssd_kthread(void *data)
 }
 
 static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
-					unsigned long arg)
+                         unsigned long arg)
 {
 	struct openssd *os;
 	struct dm_dev *dev;
@@ -88,13 +88,13 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 		ret = os->read_bio(os, bio);
 
 	DMDEBUG("openssd_map: %s l_addr %ld, map done", (bio_data_dir(bio) ==
-				WRITE) ? "WRITE" : "READ", bio->bi_sector/8);
+	                WRITE) ? "WRITE" : "READ", bio->bi_sector/8);
 
 	return ret;
 }
 
 static void openssd_status(struct dm_target *ti, status_type_t type,
-			 unsigned status_flags, char *result, unsigned maxlen)
+                           unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct openssd *os = ti->private;
 	struct nvm_ap *ap;
@@ -107,8 +107,8 @@ static void openssd_status(struct dm_target *ti, status_type_t type,
 	case STATUSTYPE_TABLE:
 		ssd_for_each_ap(os, ap, i) {
 			DMEMIT("Reads: %lu Writes: %lu Delayed: %lu",
-					ap->io_accesses[0], ap->io_accesses[1],
-					ap->io_delayed);
+			       ap->io_accesses[0], ap->io_accesses[1],
+			       ap->io_delayed);
 		}
 		break;
 	}
@@ -305,7 +305,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		os->config.flags |= NVM_OPT_ENGINE_SWAP;
 	else if (!strcmp(argv[1], "hint"))
 		os->config.flags |=
-				(NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_IOCTL);
+		        (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_IOCTL);
 
 	if (sscanf(argv[2], "%u%c", &tmp, &dummy) != 1) {
 		ti->error = "Cannot read number of pools";
@@ -393,20 +393,20 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	DMINFO("Configured with");
 	DMINFO("Pools: %u Blocks: %u Pages: %u Host Pages: %u \
 			Aps: %u Aps Pool: %u",
-						os->nr_pools,
-						os->nr_blks_per_pool,
-						os->nr_pages_per_blk,
-						os->nr_host_pages_in_blk,
-						os->nr_aps,
-						os->nr_aps_per_pool);
+	       os->nr_pools,
+	       os->nr_blks_per_pool,
+	       os->nr_pages_per_blk,
+	       os->nr_host_pages_in_blk,
+	       os->nr_aps,
+	       os->nr_aps_per_pool);
 	DMINFO("Target sector size=%d", os->sector_size);
 	DMINFO("Disk logical sector size=%d",
-					bdev_logical_block_size(os->dev->bdev));
+	       bdev_logical_block_size(os->dev->bdev));
 	DMINFO("Disk physical sector size=%d",
-					bdev_physical_block_size(os->dev->bdev));
+	       bdev_physical_block_size(os->dev->bdev));
 	DMINFO("Disk flash page size=%d", FLASH_PAGE_SIZE);
 	DMINFO("Allocated %lu physical pages (%lu KB)",
-			os->nr_pages, os->nr_pages * os->sector_size / 1024);
+	       os->nr_pages, os->nr_pages * os->sector_size / 1024);
 
 	return 0;
 err_map:
@@ -431,7 +431,7 @@ static void openssd_dtr(struct dm_target *ti)
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */
 	ssd_for_each_pool(os, pool, i)
-		kfree(pool->blocks);
+	kfree(pool->blocks);
 
 	kfree(os->pools);
 	kfree(os->aps);
@@ -465,7 +465,7 @@ static int __init dm_openssd_init(void)
 	int ret = -ENOMEM;
 
 	_per_bio_cache = kmem_cache_create("openssd_per_bio_cache",
-				sizeof(struct per_bio_data), 0, 0, NULL);
+	                                   sizeof(struct per_bio_data), 0, 0, NULL);
 	if (!_per_bio_cache)
 		return ret;
 

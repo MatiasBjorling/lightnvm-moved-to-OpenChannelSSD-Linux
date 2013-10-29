@@ -340,7 +340,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (argc > 6) {
 		if (sscanf(argv[6], "%u%c", &tmp, &dummy) == 1) {
-			os->config.flags = tmp;
+			os->config.flags = tmp << 15;
 		} else {
 			ti->error = "Cannot read flags";
 			goto err_map;

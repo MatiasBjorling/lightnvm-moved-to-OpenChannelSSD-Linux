@@ -162,6 +162,8 @@ static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
 {
 	sector_t addr = LTOP_EMPTY;
 
+	BUG_ON(!block);
+
 	spin_lock(&block->lock);
 
 	if (block_is_full(block))
@@ -207,11 +209,14 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 	sector_t addr = LTOP_EMPTY;
 	int i;
 
-	for (i = 0; addr == LTOP_EMPTY && i < os->nr_pools; i++) {
+	for (i = 0; i < os->nr_pools; i++) {
 		ap = get_next_ap(os);
 		block = ap->cur;
 
 		addr = __openssd_alloc_phys_addr(block, 1);
+
+		if (addr != LTOP_EMPTY)
+			break;
 	}
 
 	if (addr == LTOP_EMPTY)

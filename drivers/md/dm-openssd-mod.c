@@ -172,9 +172,9 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 			spin_lock_init(&ap->lock);
 			ap->parent = os;
 			ap->pool = pool;
-			ap->cur = NULL;
-			openssd_set_ap_cur(ap, nvm_pool_get_block(pool)); // need to call, for pack support
-			//ap->cur = nvm_pool_get_block(pool); // No need to lock ap->cur.
+
+			block = nvm_pool_get_block(pool);
+			openssd_set_ap_cur(ap, block);
 
 			ap->t_read = os->config.t_read;
 			ap->t_write = os->config.t_write;

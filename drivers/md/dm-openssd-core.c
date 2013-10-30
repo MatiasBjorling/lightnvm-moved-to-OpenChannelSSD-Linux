@@ -93,7 +93,7 @@ inline void openssd_reset_block(struct nvm_block *block)
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
 	percpu_ref_init(&block->ref_count, openssd_block_release);
-	block->parent_ap = NULL;
+	block->ap = NULL;
 	spin_unlock(&block->lock);
 }
 
@@ -183,11 +183,11 @@ static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
 
 	/* pack ap's need an ap not related to any inode*/ 
 	if (block_is_full(block)){
-		DMDEBUG("__openssd_alloc_phys_addr - block is full. init ap_hint. block->parent_ap %p", block->parent_ap);
-		BUG_ON(!block->parent_ap);
-		if(block->parent_ap->hint_private)
-			init_ap_hint(block->parent_ap);
-		block->parent_ap = NULL;
+		DMDEBUG("__openssd_alloc_phys_addr - block is full. init ap_hint. block->ap %p", block->ap);
+		BUG_ON(!block->ap);
+		if(block->ap->hint_private)
+			init_ap_hint(block->ap);
+		block->ap = NULL;
 	}
 out:
 	spin_unlock(&block->lock);
@@ -225,9 +225,9 @@ void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
 	spin_lock(&ap->lock);
 	if(ap->cur)
-		ap->cur->parent_ap = NULL;
+		ap->cur->ap = NULL;
 	ap->cur = block;
-	ap->cur->parent_ap = ap;
+	ap->cur->ap = ap;
 	DMINFO("Set ap->cur with block in addr %ld", block_to_addr(block));
 	spin_unlock(&ap->lock);
 }

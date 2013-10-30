@@ -97,7 +97,7 @@ struct nvm_block {
 
 	unsigned int id;
 	struct nvm_pool *pool;
-	struct nvm_ap *parent_ap;
+	struct nvm_ap *ap;
 
 	// Management and GC structures
 	struct list_head list;

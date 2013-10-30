@@ -254,11 +254,7 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
                                     struct nvm_block **ret_victim_block)
 {
 	struct nvm_block *block = ap->cur;
-	sector_t p_addr;
-
-	//DMINFO("openssd_alloc_addr_from_ap - call openssd_alloc_phys_addr");
-	p_addr = openssd_alloc_phys_addr(block);
-	DMINFO("openssd_alloc_addr_from_ap - got p_addr %ld", p_addr);
+	sector_t p_addr = openssd_alloc_phys_addr(block);
 
 	while (p_addr == LTOP_EMPTY) {
 		block = nvm_pool_get_block(block->pool);

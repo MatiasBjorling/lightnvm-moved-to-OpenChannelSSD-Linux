@@ -88,7 +88,8 @@ struct openssd_ap_hint {
 
 static inline void init_ap_hint(struct nvm_ap *ap)
 {
-	((struct openssd_ap_hint*)ap->hint_private)->ino = INODE_EMPTY;
+	struct openssd_ap_hint *ap_hint = ap->hint_private;
+	ap_hint->ino = INODE_EMPTY;
 }
 #endif
 

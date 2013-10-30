@@ -87,13 +87,13 @@ inline void openssd_reset_block(struct nvm_block *block)
 		__free_pages(block->data, order);
 	}
 
+	block->ap = NULL;
 	block->next_page = 0;
 	block->next_offset = 0;
 	block->nr_invalid_pages = 0;
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
 	percpu_ref_init(&block->ref_count, openssd_block_release);
-	block->ap = NULL;
 	spin_unlock(&block->lock);
 }
 

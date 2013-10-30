@@ -142,7 +142,6 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool) {
 	spin_unlock(&pool->lock);
 
 	openssd_reset_block(block);
-
 	block->data = data;
 
 	return block;

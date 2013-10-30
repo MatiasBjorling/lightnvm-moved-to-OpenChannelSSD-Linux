@@ -1,5 +1,4 @@
 #include "dm-openssd.h"
-#include "dm-openssd-hint.h"
 #include <linux/percpu-refcount.h>
 
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio) {

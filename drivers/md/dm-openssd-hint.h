@@ -58,7 +58,7 @@ typedef struct hint_data_s {
 #ifdef __KERNEL__
 struct openssd_hint {
 	unsigned int hint_flags;
-	char* ino_hints; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
+	char* ino2fc; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
 	spinlock_t hintlock;
 	struct list_head hintlist;
 	struct nvm_addr *shadow_map; // TODO should be hash table for efficiency? (but then we also need to use a lock...)
@@ -78,6 +78,18 @@ struct openssd_hint_map_private {
 	unsigned long flags;
 	hint_info_t *hint_info;
 };
+struct openssd_ap_hint {
+	unsigned int ino;
+	struct timeval tv; // time of last allocation in this ap
+};
+
+#define AP_DISASSOCIATE_TIME 10000 // permit disassociation of ap to inode after X us. XXX is 10ms right?
+#define INODE_EMPTY -1
+
+static inline void init_ap_hint(struct nvm_ap *ap)
+{
+	((struct openssd_ap_hint*)ap->hint_private)->ino = INODE_EMPTY;
+}
 #endif
 
 enum deploy_hint_flags {
@@ -85,6 +97,7 @@ enum deploy_hint_flags {
 	HINT_SWAP	= 1 << 0, /* Swap aware hints. Detected from block request type */
 	HINT_IOCTL	= 1 << 1, /* IOCTL aware hints. Applications may submit direct hints */
 	HINT_LATENCY	= 1 << 2, /* Latency aware hints. Detected from file type or durectly from app */
+	HINT_PACK	= 1 << 3, /* Acess pattern aware hints for slow sequential files. Detected from file type or directly from app */
 };
 
 // r/w matches, and LBA is in lba range of hint
@@ -93,7 +106,5 @@ enum deploy_hint_flags {
 	 (LBA) >= (HINT_INFO)->hint.start_lba && \
 	 (LBA) <  ((HINT_INFO)->hint.start_lba+(HINT_INFO)->hint.count) && \
 	 ((HINT_INFO)->hint_flags & FLAGS))
-//#define is_write_hint_relevant(LBA, HINT_INFO)  is_hint_relevant(LBA, HINT_INFO, 1)
-//#define is_read_hint_relevant(LBA, HINT_INFO)   is_hint_relevant(LBA, HINT_INFO, 0)
 
 #endif /* DM_OPENSSD_HINT_H_ */

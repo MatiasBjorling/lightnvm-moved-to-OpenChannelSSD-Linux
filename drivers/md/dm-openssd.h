@@ -56,6 +56,8 @@ enum ltop_flags {
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 
+#define NVM_OPT_MISC_OFFSET 15
+
 enum target_flags {
 	/* No hints applied */
 	NVM_OPT_ENGINE_NONE		= 0 <<  0,
@@ -63,15 +65,17 @@ enum target_flags {
 	NVM_OPT_ENGINE_SWAP		= 1 <<  0,
 	/* IOCTL aware hints. Applications may submit direct hints */
 	NVM_OPT_ENGINE_IOCTL	= 1 <<  1,
-	/* Latency aware hints. Detected from file type or durectly from app */
+	/* Latency aware hints. Detected from file type or directly from app */
 	NVM_OPT_ENGINE_LATENCY	= 1 <<  2,
+	/* Pack aware hints. Detected from file type or directly from app */
+	NVM_OPT_ENGINE_PACK	= 1 <<  3,
 
 	/* Control accesses to append points in the host. Enable this for
 	 * devices that doesn't have an internal queue that only lets one
 	 * command run at a time within an append point */
-	NVM_OPT_POOL_SERIALIZE	= 1 << 15,
+	NVM_OPT_POOL_SERIALIZE	= 1 << NVM_OPT_MISC_OFFSET,
 	/* Use fast/slow page access pattern */
-	NVM_OPT_FAST_SLOW_PAGES	= 1 << 16,
+	NVM_OPT_FAST_SLOW_PAGES	= 1 << (NVM_OPT_MISC_OFFSET+1),
 };
 
 /* Pool descriptions */
@@ -93,6 +97,7 @@ struct nvm_block {
 
 	unsigned int id;
 	struct nvm_pool *pool;
+	struct nvm_ap *parent_ap;
 
 	// Management and GC structures
 	struct list_head list;
@@ -142,6 +147,9 @@ struct nvm_pool {
  * nvm_ap. ap is an append point. A pool can have 1..X append points attached.
  * An append point has a current block, that it writes to, and when its full, it requests
  * a new block, of which it continues its writes.
+ *
+ * one ap per pool may be reserved for pack-hints related writes. 
+ * In those that are not not, hint_private is NULL.
  */
 struct nvm_ap {
 	spinlock_t lock;
@@ -156,6 +164,9 @@ struct nvm_ap {
 
 	unsigned long io_delayed;
 	unsigned long io_accesses[2];
+
+	/* Hint related*/
+	void *hint_private;
 };
 
 struct nvm_config {
@@ -269,6 +280,9 @@ void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block);
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool);
 sector_t openssd_alloc_phys_addr(struct nvm_block *block);
 sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct nvm_block **ret_victim_block);
+struct openssd_hint_map_private;
+sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
+		nvm_block **ret_victim_block, struct openssd_hint_map_private *map_alloc_data);
 
 /*   Naive implementations */
 void openssd_delayed_bio_submit(struct work_struct *work);

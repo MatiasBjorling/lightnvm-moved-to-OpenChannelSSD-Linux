@@ -1,5 +1,15 @@
 #include "dm-openssd.h"
+#include "dm-openssd-hint.h"
 #include <linux/percpu-refcount.h>
+
+// TODO make inline?
+static unsigned long diff_tv(struct timeval *curr_tv, struct timeval *ap_tv)
+{
+	if(curr_tv->tv_sec == ap_tv->tv_sec)
+		return curr_tv->tv_usec - ap_tv->tv_usec;
+
+	return (curr_tv->tv_sec - ap_tv->tv_sec -1) * 1000000 + (1000000-ap_tv->tv_usec) + curr_tv->tv_usec;
+}
 
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio) {
 	return (struct per_bio_data *) bio->bi_private;
@@ -92,6 +102,7 @@ inline void openssd_reset_block(struct nvm_block *block)
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
 	percpu_ref_init(&block->ref_count, openssd_block_release);
+	block->parent_ap = NULL;
 	spin_unlock(&block->lock);
 }
 
@@ -125,6 +136,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool) {
 	block = list_first_entry(&pool->free_list, struct nvm_block, list);
 	list_move_tail(&block->list, &pool->used_list);
 
+	DMINFO("dec nr_free_blocks");
 	pool->nr_free_blocks--;
 
 	spin_unlock(&pool->lock);
@@ -177,6 +189,14 @@ static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
 	       (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
 	block->next_offset++;
 
+	/* pack ap's need an ap not related to any inode*/ 
+	if (block_is_full(block)){
+		DMDEBUG("__openssd_alloc_phys_addr - block is full. init ap_hint. block->parent_ap %p", block->parent_ap);
+		BUG_ON(!block->parent_ap);
+		if(block->parent_ap->hint_private)
+			init_ap_hint(block->parent_ap);
+		block->parent_ap = NULL;
+	}
 out:
 	spin_unlock(&block->lock);
 	return addr;
@@ -186,6 +206,90 @@ sector_t openssd_alloc_phys_addr(struct nvm_block *block)
 {
 	return __openssd_alloc_phys_addr(block, 0);
 }
+
+sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
+		nvm_block **ret_victim_block, struct openssd_hint_map_private *map_alloc_data)
+{
+	struct nvm_ap *ap;
+	sector_t addr = LTOP_EMPTY;
+	struct openssd_ap_hint* ap_pack_data = NULL;
+	struct timeval curr_tv;
+	unsigned long diff;
+	int i;
+
+	/* find open ap for requested inode number*/
+	for (i = 0, ap = &os->aps[0]; i < os->nr_pools; i++, ap = &os->aps[i]){
+		/* not hint related */
+		if(!ap->hint_private) 
+			continue;
+		ap_pack_data = (struct openssd_ap_hint*)ap->hint_private;
+
+		/* got it */
+		if(ap_pack_data->ino == map_alloc_data->hint_info->hint.ino){
+			DMINFO("ap with block_addr %ld associated to requested inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
+			addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+			break;
+		}
+	}
+
+	if (addr != LTOP_EMPTY){
+		DMINFO("allocated addr %ld from PREVIOUS associated ap ", addr);
+		goto pack_alloc_done;
+	}
+
+	/* no ap associated to requested inode.
+	   find some empty pack ap, and use it*/
+	DMDEBUG("no ap associated to inode %u", map_alloc_data->hint_info->hint.ino);
+	for (i = 0; addr == LTOP_EMPTY && i < os->nr_pools; i++) {
+		ap = get_next_ap(os);
+
+		/* not hint associated */
+		if(!ap->hint_private)
+			continue;
+
+		ap_pack_data = (struct openssd_ap_hint*)ap->hint_private;
+
+		/* associated to an other inode */
+		if(ap_pack_data->ino != INODE_EMPTY && 
+		   ap_pack_data->ino != map_alloc_data->hint_info->hint.ino){
+			/* check threshold and decide whether to replace associated inode */
+			do_gettimeofday(&curr_tv);
+			diff = diff_tv(&curr_tv, &ap_pack_data->tv);
+			if(AP_DISASSOCIATE_TIME > diff)
+				continue;
+			DMINFO("ap association timeout expired");
+			/* proceed to associate with some other inode*/			
+		}
+
+		/* got it - empty ap not associated to any inode */
+		ap_pack_data->ino = map_alloc_data->hint_info->hint.ino; // do this before alloc_addr
+		addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+		DMINFO("re-associated ap with block_addr %ld to new inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
+
+		break;
+	}
+
+	if (addr != LTOP_EMPTY){
+		DMDEBUG("allocated addr %ld from NEW associated ap ", addr);
+		goto pack_alloc_done;
+	}
+
+	DMDEBUG("no new/previous ap associated to inode. do regular allocation");
+	/* haven't found any relevant/empty pack ap. resort to regular allocation
+	   (from non-packed ap)*/
+	/* TODO: overtake "regular" ap? return error? */
+	do{
+		ap = get_next_ap(os);
+	}while(ap->hint_private);
+
+	addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+
+pack_alloc_done:
+	if(ap_pack_data)
+		do_gettimeofday(&ap_pack_data->tv);
+	return addr;
+}
+
 
 sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
                 nvm_block **ret_victim_block)
@@ -212,8 +316,11 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
 	spin_lock(&ap->lock);
+	if(ap->cur)
+		ap->cur->parent_ap = NULL;
 	ap->cur = block;
-	DMDEBUG("Set ap->cur with block in addr %ld", block_to_addr(block));
+	ap->cur->parent_ap = ap;
+	DMINFO("Set ap->cur with block in addr %ld", block_to_addr(block));
 	spin_unlock(&ap->lock);
 }
 
@@ -238,7 +345,11 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
                                     struct nvm_block **ret_victim_block)
 {
 	struct nvm_block *block = ap->cur;
-	sector_t p_addr = openssd_alloc_phys_addr(block);
+	sector_t p_addr;
+
+	//DMINFO("openssd_alloc_addr_from_ap - call openssd_alloc_phys_addr");
+	p_addr = openssd_alloc_phys_addr(block);
+	DMINFO("openssd_alloc_addr_from_ap - got p_addr %ld", p_addr);
 
 	while (p_addr == LTOP_EMPTY) {
 		block = nvm_pool_get_block(block->pool);
@@ -341,10 +452,10 @@ static void openssd_endio(struct bio *bio, int err)
 	pb = get_per_bio_data(bio);
 	block = pb->block;
 	ap = pb->ap;
+	DMDEBUG("endio: starting. pb %p sync %p", pb, pb->sync);
 
 	os = ap->parent;
 	pool = ap->pool;
-
 	/* TODO: This can be optimized to only account on read */
 	openssd_put_block(block);
 
@@ -434,6 +545,7 @@ static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, str
 
 		// if this is the first page in a the ap buffer
 		if (addr == phys->addr) {
+			printk("buffered data\n");
 			bio_for_each_segment(bv, bio, j) {
 				dst_p = kmap_atomic(bv->bv_page);
 				src_p = kmap_atomic(&ap->cur->data[idx]);
@@ -592,6 +704,7 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 	pb->block = block;
 	pb->physical_addr = bio->bi_sector;
 
+	DMDEBUG("submit_bio: physical_addr %ld ap %p", pb->physical_addr, ap);
 	if (rw == WRITE)
 		bio->bi_end_io = openssd_end_write_bio;
 	else

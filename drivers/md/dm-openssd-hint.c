@@ -56,7 +56,8 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 		//continue;
 		/* verify lba covered by hint*/
 		if (is_hint_relevant(logical_addr, hint_info, is_write, os->config.flags)) {
-			DMINFO("found hint for lba %ld",logical_addr);
+			DMINFO("found hint for lba %ld (ino %ld)",
+				logical_addr, hint_info->hint.ino);
 			hint_info->processed++;
 			spin_unlock(&hint->hintlock);
 			return hint_info;
@@ -101,6 +102,14 @@ fclass file_classify(struct bio_vec* bvec)
 	return fc;
 }
 
+int openssd_is_fc_packable(fclass fc)
+{
+	if(fc == FC_VIDEO_SLOW)
+		return 1;
+
+	return 0;
+}
+
 /* no real sending for now, in prototype just put it directly in FTL's hints list
    and update ino_hint map when necessary*/
 static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
@@ -110,8 +119,10 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	hint_info_t* hint_info;
 
 	if (!(os->config.flags &
-	      (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP)))
+	      (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP | NVM_OPT_ENGINE_PACK))){
+		DMINFO("got unsupported hint");
 		goto send_done;
+	}
 
 	DMINFO("first %s hint count=%d lba=%d fc=%d",
 	       CAST_TO_PAYLOAD(hint_data)->is_write ? "WRITE" : "READ",
@@ -133,11 +144,19 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	for(i = 0; i < CAST_TO_PAYLOAD(hint_data)->count; i++) {
 		// handle file type  for
 		// 1) identified latency writes
-		// 2) TODO
-		if (os->config.flags & NVM_OPT_ENGINE_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc != FC_EMPTY) {
+		// 2) identified pack writes
+		if ((os->config.flags & NVM_OPT_ENGINE_LATENCY || os->config.flags & NVM_OPT_ENGINE_PACK)
+		    && INO_HINT_FROM_DATA(hint_data, i).fc != FC_EMPTY) {
 			DMINFO("ino %lu got new fc %d", INO_HINT_FROM_DATA(hint_data, i).ino,
 			       INO_HINT_FROM_DATA(hint_data, i).fc);
-			hint->ino_hints[INO_HINT_FROM_DATA(hint_data, i).ino] = INO_HINT_FROM_DATA(hint_data, 0).fc;
+			hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino] = INO_HINT_FROM_DATA(hint_data, 0).fc;
+		}
+
+		/* non-packable file. ignore hint*/
+		if(os->config.flags & NVM_OPT_ENGINE_PACK && 
+		   !openssd_is_fc_packable(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
+			DMINFO("non-packable file. ignore hint");
+			continue;
 		}
 
 		// insert to hints list
@@ -426,6 +445,39 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
+/* Latency-proned Logical to physical address translation.
+ *
+ * If latency hinted write, write data to two locations, and save extra mapping
+ * If non-hinted write - resort to normal allocation
+ * if GC write - no hint, but we use regular map_ltop() with GC addr
+ */
+static sector_t openssd_map_pack_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private)
+{
+	struct openssd_hint_map_private *map_alloc_data = private;
+	sector_t physical_addr;
+
+	/* If there is no hint, or this is a reclaimed ltop mapping,
+	 * use regular (single-page) map_ltop */
+	if (!map_alloc_data || map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
+		DMDEBUG("pack_rr: reclaimed or regular allocation");
+		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block,(void*)NULL);
+
+		return physical_addr;
+	}
+
+	DMDEBUG("pack_ltop: regular request. allocate page");
+
+	/* 1) get addr.
+	      openssd_alloc_addr_from_pack_ap, finds ap AND allocates addr*/
+	physical_addr = openssd_alloc_phys_pack_addr(os, ret_victim_block, map_alloc_data);
+	openssd_update_map_generic(os, logical_addr, physical_addr, (*ret_victim_block));
+		
+	DMDEBUG("pack_rr: for logical_addr=%ld alloced physical_addr=%ld ", logical_addr, physical_addr);
+
+	return physical_addr;
+}
+
+
 // do any shadow address updating required (real, none, or trim of old one)
 static void openssd_update_map_shadow(struct openssd *os,
                                       sector_t l_addr, sector_t p_addr,
@@ -465,6 +517,8 @@ static void openssd_update_map_shadow(struct openssd *os,
 	l->addr = 0;
 	l->block = NULL;
 }
+
+
 
 static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logical_addr, sector_t old_p_addr);
 
@@ -542,9 +596,6 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(os, map_alloc_data->old_p_addr));
 			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 		}
-
-		/*if (map_alloc_data->old_p_addr != LTOP_EMPTY)
-			DMDEBUG("swap_map: GC write of a FAST page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(os, map_alloc_data->old_p_addr));*/
 	}
 
 	/* hinted write, or GC of FAST page*/
@@ -555,7 +606,6 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 		return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 	}
 
-	//DMINFO("swap_rr: logical_addr=%ld physical_addr[0]=%ld (page_id=%d, blkid=%u)", logical_addr, physical_addr[0], page_id, block->id);
 	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
 	openssd_update_map_generic(os, l_addr, p_addr, (*ret_block));
 
@@ -567,10 +617,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 //	 however, no queue maipulation impl. yet...
 static struct nvm_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t logical_addr) {
 	struct openssd_hint *hint = os->hint_private;
-	// TODO: during GC or w-r-w we may get a translation for an old page.
-	//       do we care enough to enforce some serializibilty in LBA accesses?
 	int pool_idx;
-	//DMINFO("latency_lookup_ltop: logical_addr=%ld", logical_addr);
 
 	// shadow is empty
 	if (hint->shadow_map[logical_addr].addr == LTOP_EMPTY) {
@@ -686,6 +733,8 @@ int openssd_init_hint(struct openssd *os)
 int openssd_alloc_hint(struct openssd *os)
 {
 	struct openssd_hint *hint;
+	struct nvm_ap *ap;
+	struct openssd_ap_hint *ap_hint;
 	int i;
 
 	hint = kmalloc(sizeof(struct openssd_hint), GFP_KERNEL);
@@ -705,9 +754,33 @@ int openssd_alloc_hint(struct openssd *os)
 	spin_lock_init(&hint->hintlock);
 	INIT_LIST_HEAD(&hint->hintlist);
 
-	hint->ino_hints = kzalloc(HINT_MAX_INOS, GFP_KERNEL); // ino ~> hinted file type
-	if (!hint->ino_hints)
+	hint->ino2fc = kzalloc(HINT_MAX_INOS, GFP_KERNEL); // ino ~> hinted file type
+	if (!hint->ino2fc)
 		goto err_hints;
+
+	/* mark all pack hint related ap's*/
+	DMINFO("allocating hint private for pack ap's");
+	if(os->nr_aps_per_pool ==1){
+		DMERR("got only 1 ap per pool. need at least 2 for pack hints");
+		goto err_hints;
+	}
+
+	ssd_for_each_ap(os, ap, i) {
+		if(i % os->nr_aps_per_pool != os->nr_aps_per_pool -1){
+			ap->hint_private = NULL;
+			continue;
+		}
+
+		// only last ap in pool
+		ap_hint = kmalloc(sizeof(struct openssd_ap_hint), GFP_KERNEL);
+		if (!ap_hint){
+			DMERR("couldn't allocate hint private for ap %d", i);
+			goto err_hints;
+		}
+
+		ap->hint_private = (void*)ap_hint;
+		init_ap_hint(ap);
+	}
 
 	if (os->config.flags & NVM_OPT_ENGINE_SWAP) {
 		DMINFO("Swap hint support");
@@ -720,6 +793,13 @@ int openssd_alloc_hint(struct openssd *os)
 		DMINFO("Latency hint support");
 		os->map_ltop = openssd_map_latency_hint_ltop_rr;
 		os->lookup_ltop = openssd_latency_lookup_ltop;
+		os->write_bio = openssd_write_bio_hint;
+		os->read_bio = openssd_read_bio_hint;
+		os->begin_gc_private = openssd_begin_gc_hint;
+		os->end_gc_private = openssd_end_gc_hint;
+	} else if (os->config.flags & NVM_OPT_ENGINE_PACK) {
+		DMINFO("Pack hint support");
+		os->map_ltop = openssd_map_pack_hint_ltop_rr;
 		os->write_bio = openssd_write_bio_hint;
 		os->read_bio = openssd_read_bio_hint;
 		os->begin_gc_private = openssd_begin_gc_hint;
@@ -740,6 +820,8 @@ void openssd_free_hint(struct openssd *os)
 {
 	struct openssd_hint *hint = os->hint_private;
 	hint_info_t *hint_info, *next_hint_info;
+	struct nvm_ap *ap;
+	int i;
 
 	spin_lock(&hint->hintlock);
 	list_for_each_entry_safe(hint_info, next_hint_info, &hint->hintlist, list_member) {
@@ -749,8 +831,19 @@ void openssd_free_hint(struct openssd *os)
 	}
 	spin_unlock(&hint->hintlock);
 
-	kfree(hint->ino_hints);
+	kfree(hint->ino2fc);
 	vfree(hint->shadow_map);
+
+	/* mark all pack hint related ap's*/
+	DMINFO("deallocating hint private for pack ap's");
+	ssd_for_each_ap(os, ap, i) {
+		if(i % os->nr_aps_per_pool != os->nr_aps_per_pool -1){
+			continue;
+		}
+
+		// only last ap in pool
+		kfree(ap->hint_private);
+	}
 
 	kfree(os->hint_private);
 }

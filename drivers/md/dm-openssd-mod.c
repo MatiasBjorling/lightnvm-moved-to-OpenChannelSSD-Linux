@@ -25,7 +25,6 @@
 #include "dm-openssd-hint.h"
 
 /* Defaults */
-
 /* Number of append points per pool. We assume that accesses within a pool is
  * serial (NAND flash/PCM/etc.) */
 #define APS_PER_POOL 1
@@ -179,7 +178,9 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 			spin_lock_init(&ap->lock);
 			ap->parent = os;
 			ap->pool = pool;
-			ap->cur = nvm_pool_get_block(pool); // No need to lock ap->cur.
+			ap->cur = NULL;
+			openssd_set_ap_cur(ap, nvm_pool_get_block(pool)); // need to call, for pack support
+			//ap->cur = nvm_pool_get_block(pool); // No need to lock ap->cur.
 
 			ap->t_read = os->config.t_read;
 			ap->t_write = os->config.t_write;
@@ -305,9 +306,12 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (!strcmp(argv[1], "swap"))
 		os->config.flags |= NVM_OPT_ENGINE_SWAP;
-	else if (!strcmp(argv[1], "hint"))
+	else if (!strcmp(argv[1], "latency"))
 		os->config.flags |=
 		        (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_IOCTL);
+	else if (!strcmp(argv[1], "pack"))
+		os->config.flags |=
+		        (NVM_OPT_ENGINE_PACK | NVM_OPT_ENGINE_IOCTL);
 
 	if (sscanf(argv[2], "%u%c", &tmp, &dummy) != 1) {
 		ti->error = "Cannot read number of pools";
@@ -340,7 +344,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (argc > 6) {
 		if (sscanf(argv[6], "%u%c", &tmp, &dummy) == 1) {
-			os->config.flags = tmp << 15;
+			os->config.flags |= (tmp << NVM_OPT_MISC_OFFSET);
 		} else {
 			ti->error = "Cannot read flags";
 			goto err_map;

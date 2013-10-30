@@ -78,6 +78,7 @@ struct openssd_hint_map_private {
 	unsigned long flags;
 	hint_info_t *hint_info;
 };
+
 struct openssd_ap_hint {
 	unsigned int ino;
 	struct timeval tv; // time of last allocation in this ap

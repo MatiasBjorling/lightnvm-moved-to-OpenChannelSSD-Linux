@@ -454,6 +454,18 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
+void openssd_alloc_phys_addr_pack(struct openssd *os, struct nvm_block *block)
+{
+	/* pack ap's need an ap not related to any inode*/ 
+	if (block_is_full(block)){
+		DMDEBUG("__openssd_alloc_phys_addr - block is full. init ap_hint. block->parent_ap %p", block->ap);
+		BUG_ON(!block->ap);
+		if(block->ap->hint_private)
+			init_ap_hint(block->ap);
+		block->ap = NULL;
+	}
+}
+
 sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 		nvm_block **ret_victim_block, struct openssd_hint_map_private *map_alloc_data)
 {
@@ -896,6 +908,7 @@ int openssd_alloc_hint(struct openssd *os)
 		os->map_ltop = openssd_map_pack_hint_ltop_rr;
 		os->write_bio = openssd_write_bio_hint;
 		os->read_bio = openssd_read_bio_hint;
+		os->alloc_phys_addr = openssd_alloc_phys_addr_pack;
 		os->begin_gc_private = openssd_begin_gc_hint;
 		os->end_gc_private = openssd_end_gc_hint;
 	}

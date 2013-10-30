@@ -161,8 +161,11 @@ static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
                 int req_fast)
 {
 	sector_t addr = LTOP_EMPTY;
+	struct openssd *os;
 
 	BUG_ON(!block);
+
+	os = block->pool->os;
 
 	spin_lock(&block->lock);
 
@@ -183,14 +186,8 @@ static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
 	       (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
 	block->next_offset++;
 
-	/* pack ap's need an ap not related to any inode*/ 
-	if (block_is_full(block)){
-		DMDEBUG("__openssd_alloc_phys_addr - block is full. init ap_hint. block->ap %p", block->ap);
-		BUG_ON(!block->ap);
-		if(block->ap->hint_private)
-			init_ap_hint(block->ap);
-		block->ap = NULL;
-	}
+	if (os->alloc_phys_addr)
+		os->alloc_phys_addr(os, block);
 out:
 	spin_unlock(&block->lock);
 	return addr;

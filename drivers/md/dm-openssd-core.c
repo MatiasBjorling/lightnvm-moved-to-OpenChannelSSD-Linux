@@ -223,6 +223,8 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 
 void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
+	BUG_ON(!block);
+
 	spin_lock(&ap->lock);
 	if(ap->cur)
 		ap->cur->ap = NULL;

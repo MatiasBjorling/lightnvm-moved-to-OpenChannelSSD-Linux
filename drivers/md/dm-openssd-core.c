@@ -136,7 +136,9 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool) {
 	block = list_first_entry(&pool->free_list, struct nvm_block, list);
 	list_move_tail(&block->list, &pool->used_list);
 
-	DMINFO("dec nr_free_blocks");
+	/* TODO: convert to manipulation of prio_list to rcu */
+	list_add_tail(&block->prio, &pool->prio_list);
+
 	pool->nr_free_blocks--;
 
 	spin_unlock(&pool->lock);

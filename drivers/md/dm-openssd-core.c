@@ -228,7 +228,6 @@ void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 		ap->cur->ap = NULL;
 	ap->cur = block;
 	ap->cur->ap = ap;
-	DMINFO("Set ap->cur with block in addr %ld", block_to_addr(block));
 	spin_unlock(&ap->lock);
 }
 

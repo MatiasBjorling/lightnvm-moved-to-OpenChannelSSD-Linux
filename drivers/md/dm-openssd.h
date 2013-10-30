@@ -280,9 +280,6 @@ void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block);
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool);
 sector_t openssd_alloc_phys_addr(struct nvm_block *block);
 sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct nvm_block **ret_victim_block);
-struct openssd_hint_map_private;
-sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
-		nvm_block **ret_victim_block, struct openssd_hint_map_private *map_alloc_data);
 
 /*   Naive implementations */
 void openssd_delayed_bio_submit(struct work_struct *work);

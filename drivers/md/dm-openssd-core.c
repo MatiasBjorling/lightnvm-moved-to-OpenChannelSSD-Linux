@@ -453,7 +453,6 @@ static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, str
 
 		// if this is the first page in a the ap buffer
 		if (addr == phys->addr) {
-			printk("buffered data\n");
 			bio_for_each_segment(bv, bio, j) {
 				dst_p = kmap_atomic(bv->bv_page);
 				src_p = kmap_atomic(&ap->cur->data[idx]);

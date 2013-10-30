@@ -86,15 +86,10 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
  * Only GC should do this */
 void openssd_block_release(struct percpu_ref *ref)
 {
-	struct nvm_block *block;
-
-	block = container_of(ref, struct nvm_block, ref_count);
+	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
 
 	DMDEBUG("erasing block %u", block->id);
 	__erase_block(block);
-
-	/* lock taken in openssd_gc_collect */
-	spin_unlock(&block->gc_lock);
 
 	nvm_pool_put_block(block);
 }
@@ -108,7 +103,10 @@ void openssd_gc_collect(struct openssd *os)
 	int max_collect = round_up(os->nr_pools, 2);
 
 	if (!spin_trylock(&os->gc_lock))
+	{
+		printk("Couldn't gc\n");
 		return;
+	}
 
 	while (max_collect) {
 		block = NULL;
@@ -125,24 +123,27 @@ void openssd_gc_collect(struct openssd *os)
 			if (nr_blocks_need < pool->nr_free_blocks)
 				goto finished;
 
+			spin_lock(&pool->lock);
 			list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
 			block = list_first_entry(&pool->prio_list, struct
 			                         nvm_block, prio);
 
-			/* lock is released in openssd_block_release */
-			if (!spin_trylock(&block->gc_lock))
-				goto finished;
+			list_del(&block->prio);
 
 			if (!block->nr_invalid_pages) {
-				spin_unlock(&block->gc_lock);
+				list_add(&block->prio, &pool->prio_list);
+				spin_unlock(&pool->lock);
 				goto finished;
 			}
 
 			/*this should never happen. Anyway, lets check for it.*/
 			if (!block_is_full(block)) {
-				spin_unlock(&block->gc_lock);
+				list_add(&block->prio, &pool->prio_list);
+				spin_unlock(&pool->lock);
 				goto finished;
 			}
+
+			spin_unlock(&pool->lock);
 
 			/* rewrite to have moves outside lock. i.e. so we can
 			 * prepare multiple pages in parallel on the attached

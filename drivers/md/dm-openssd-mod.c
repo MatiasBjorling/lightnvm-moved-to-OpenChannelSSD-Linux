@@ -153,16 +153,10 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 			spin_lock_init(&block->lock);
 			spin_lock_init(&block->gc_lock);
 
-			if (percpu_ref_init(&block->ref_count, openssd_block_release))
-				goto err_blocks;
-
 			block->pool = pool;
 			block->id = (i * os->nr_blks_per_pool) + j;
 
-			openssd_reset_block(block);
-
 			list_add_tail(&block->list, &pool->free_list);
-			list_add_tail(&block->prio, &pool->prio_list);
 		}
 	}
 

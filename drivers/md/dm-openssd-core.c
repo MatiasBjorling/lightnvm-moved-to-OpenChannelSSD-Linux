@@ -110,6 +110,8 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool) {
 	struct page *data;
 	unsigned int order = ffs(os->nr_host_pages_in_blk) - 1;
 
+	BUG_ON(!pool);
+
 	data = alloc_pages(GFP_NOIO, order);
 
 	if (!data)
@@ -224,6 +226,7 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 
 void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
+	BUG_ON(!ap);
 	BUG_ON(!block);
 
 	spin_lock(&ap->lock);

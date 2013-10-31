@@ -840,51 +840,41 @@ int openssd_alloc_hint(struct openssd *os)
 {
 	struct openssd_hint *hint;
 	struct nvm_ap *ap;
-	struct openssd_ap_hint *ap_hint;
+	struct nvm_pool *pool;
 	int i;
 
 	hint = kmalloc(sizeof(struct openssd_hint), GFP_KERNEL);
 	if (!hint)
 		return -ENOMEM;
 
-	// initla shadow maps are empty
 	hint->shadow_map = vmalloc(sizeof(struct nvm_addr) * os->nr_pages);
 	if (!hint->shadow_map)
 		goto err_shadow_map;
 	memset(hint->shadow_map, 0, sizeof(struct nvm_addr) * os->nr_pages);
 
-	// initial shadow l2p is LTOP_EMPTY
 	for(i = 0; i < os->nr_pages; i++)
 		hint->shadow_map[i].addr = LTOP_EMPTY;
 
 	spin_lock_init(&hint->hintlock);
 	INIT_LIST_HEAD(&hint->hintlist);
 
-	hint->ino2fc = kzalloc(HINT_MAX_INOS, GFP_KERNEL); // ino ~> hinted file type
+	hint->ino2fc = kzalloc(HINT_MAX_INOS, GFP_KERNEL);
 	if (!hint->ino2fc)
 		goto err_hints;
 
 	/* mark all pack hint related ap's*/
-	DMINFO("allocating hint private for pack ap's");
-	if(os->nr_aps_per_pool ==1){
-		DMERR("got only 1 ap per pool. need at least 2 for pack hints");
-		goto err_hints;
-	}
+	ssd_for_each_pool(os, pool, i) {
+		unsigned int last_ap;
+		/* choose the last ap in each pool */
+		last_ap = (i * os->nr_aps_per_pool) + os->nr_aps_per_pool - 1;
+		ap = &os->aps[last_ap];
 
-	ssd_for_each_ap(os, ap, i) {
-		if(i % os->nr_aps_per_pool != os->nr_aps_per_pool -1){
-			ap->hint_private = NULL;
-			continue;
+		ap->hint_private = kmalloc(sizeof(struct openssd_ap_hint),
+								GFP_KERNEL);
+		if (!ap->hint_private) {
+			DMERR("Couldn't allocate hint private for ap.");
+			goto err_ap_hints;
 		}
-
-		// only last ap in pool
-		ap_hint = kmalloc(sizeof(struct openssd_ap_hint), GFP_KERNEL);
-		if (!ap_hint){
-			DMERR("couldn't allocate hint private for ap %d", i);
-			goto err_hints;
-		}
-
-		ap->hint_private = (void*)ap_hint;
 		init_ap_hint(ap);
 	}
 
@@ -911,11 +901,20 @@ int openssd_alloc_hint(struct openssd *os)
 		os->alloc_phys_addr = openssd_alloc_phys_addr_pack;
 		os->begin_gc_private = openssd_begin_gc_hint;
 		os->end_gc_private = openssd_end_gc_hint;
+
+		if (os->nr_aps_per_pool < 2 ) {
+			DMERR("Need at least 2 aps for pack hints");
+			goto err_hints;
+		}
 	}
 
 	os->hint_private = hint;
 
 	return 0;
+err_ap_hints:
+	ssd_for_each_ap(os, ap, i)
+		kfree(ap->hint_private);
+	kfree(hint->ino2fc);
 err_hints:
 	vfree(hint->shadow_map);
 err_shadow_map:

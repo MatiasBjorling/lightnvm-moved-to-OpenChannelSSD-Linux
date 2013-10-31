@@ -165,20 +165,21 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 	if (!os->aps)
 		goto err_blocks;
 
+	ssd_for_each_ap(os, ap, i) {
+		spin_lock_init(&ap->lock);
+		ap->parent = os;
+		ap->pool = &os->pools[i / os->nr_aps_per_pool];
+
+		block = nvm_pool_get_block(ap->pool);
+		openssd_set_ap_cur(ap, block);
+
+		ap->t_read = os->config.t_read;
+		ap->t_write = os->config.t_write;
+		ap->t_erase = os->config.t_erase;
+
+	}
 	ssd_for_each_pool(os, pool, i) {
 		for (j = 0; j < os->nr_aps_per_pool; j++) {
-			ap = &os->aps[(i * os->nr_aps_per_pool) + j];
-
-			spin_lock_init(&ap->lock);
-			ap->parent = os;
-			ap->pool = pool;
-
-			block = nvm_pool_get_block(pool);
-			openssd_set_ap_cur(ap, block);
-
-			ap->t_read = os->config.t_read;
-			ap->t_write = os->config.t_write;
-			ap->t_erase = os->config.t_erase;
 		}
 	}
 
@@ -329,6 +330,10 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	os->nr_aps_per_pool = APS_PER_POOL;
 	if (argc > 5) {
 		if (sscanf(argv[5], "%u%c", &tmp, &dummy) == 1) {
+			if (!tmp) {
+				DMERR("Number of aps set to 1.");
+				tmp = APS_PER_POOL;
+			}
 			os->nr_aps_per_pool = tmp;
 		} else {
 			ti->error = "Cannot read number of append points";

@@ -161,7 +161,7 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 	}
 
 	os->nr_aps = os->nr_aps_per_pool * os->nr_pools;
-	os->aps = kmalloc(sizeof(struct nvm_ap) * os->nr_pools * os->nr_aps, GFP_KERNEL);
+	os->aps = kzalloc(sizeof(struct nvm_ap) * os->nr_pools * os->nr_aps, GFP_KERNEL);
 	if (!os->aps)
 		goto err_blocks;
 

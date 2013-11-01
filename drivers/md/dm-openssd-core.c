@@ -1,6 +1,8 @@
 #include "dm-openssd.h"
 #include <linux/percpu-refcount.h>
 
+#define DELME 1
+
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
 	struct per_bio_data *pbd = bio->bi_private;

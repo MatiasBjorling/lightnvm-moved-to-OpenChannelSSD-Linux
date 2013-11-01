@@ -1,11 +1,14 @@
 #include "dm-openssd.h"
 #include <linux/percpu-refcount.h>
 
-static inline struct per_bio_data *get_per_bio_data(struct bio *bio) {
-	return (struct per_bio_data *) bio->bi_private;
+static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
+{
+	struct per_bio_data *pbd = bio->bi_private;
+	return pbd;
 }
 
-static struct per_bio_data *alloc_decorate_per_bio_data(struct openssd *os, struct bio *bio) {
+static struct per_bio_data *alloc_decorate_per_bio_data(struct openssd *os, struct bio *bio)
+{
 	struct per_bio_data *pb = mempool_alloc(os->per_bio_pool, GFP_NOIO);
 
 	if (!pb) {

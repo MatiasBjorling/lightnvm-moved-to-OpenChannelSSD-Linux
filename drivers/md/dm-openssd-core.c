@@ -249,7 +249,7 @@ void openssd_print_total_blocks(struct openssd *os)
 	ssd_for_each_pool(os, pool, i)
 	total += pool->nr_free_blocks;
 
-	DMINFO("Total free blocks: %u", total);
+	DMDEBUG("Total free blocks: %u", total);
 }
 
 sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)

@@ -107,8 +107,21 @@ fclass file_classify(struct bio_vec* bvec)
 		fc = FC_VIDEO_SLOW;
 	}
 
+	if(sec_in_mem[0]==0xfffffffe && sec_in_mem[1]==0xfffffffe && sec_in_mem[2]==0x07 && sec_in_mem[3]==0x01){
+		DMINFO("identified DB_INDEX file");
+		fc = FC_DB_INDEX;
+	}
+
 	kunmap_atomic(sec_in_mem);
 	return fc;
+}
+
+int openssd_is_fc_latency(fclass fc)
+{
+	if(fc == FC_DB_INDEX)
+		return 1;
+
+	return 0;
 }
 
 int openssd_is_fc_packable(fclass fc)
@@ -129,11 +142,11 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 
 	if (!(os->config.flags &
 	      (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP | NVM_OPT_ENGINE_PACK))){
-		DMINFO("got unsupported hint");
+		DMERR("got unsupported hint");
 		goto send_done;
 	}
 
-	DMINFO("first %s hint count=%d lba=%d fc=%d",
+	DMDEBUG("first %s hint count=%d lba=%d fc=%d",
 	       CAST_TO_PAYLOAD(hint_data)->is_write ? "WRITE" : "READ",
 	       CAST_TO_PAYLOAD(hint_data)->count,
 	       INO_HINT_FROM_DATA(hint_data, 0).start_lba,
@@ -141,7 +154,7 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 
 	// assert relevant hint support
 	if (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(hint->hint_flags & HINT_SWAP)) {
-		DMINFO("hint of types %x not supported (1st entry ino %lu lba %u count %u)",
+		DMERR("hint of types %x not supported (1st entry ino %lu lba %u count %u)",
 		       CAST_TO_PAYLOAD(hint_data)->hint_flags,
 		       INO_HINT_FROM_DATA(hint_data, 0).ino,
 		       INO_HINT_FROM_DATA(hint_data, 0).start_lba,
@@ -168,6 +181,13 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 			continue;
 		}
 
+		/* non-latency file. ignore hint*/
+		if(os->config.flags & NVM_OPT_ENGINE_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc == FC_EMPTY &&
+		   !openssd_is_fc_latency(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
+			DMINFO("non-latency file. ignore hint");
+			continue;
+		}
+
 		// insert to hints list
 		hint_info = kmalloc(sizeof(hint_info_t), GFP_KERNEL);
 		if (!hint_info) {
@@ -179,7 +199,7 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 		hint_info->is_write   = CAST_TO_PAYLOAD(hint_data)->is_write;
 		hint_info->hint_flags = CAST_TO_PAYLOAD(hint_data)->hint_flags;
 
-		DMINFO("about to add hint_info to list. %s %s",
+		DMDEBUG("about to add hint_info to list. %s %s",
 		       (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP) ? "SWAP" :
 		       (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_LATENCY)?"LATENCY":"REGULAR",
 		       (CAST_TO_PAYLOAD(hint_data)->is_write) ? "WRITE" : "READ");

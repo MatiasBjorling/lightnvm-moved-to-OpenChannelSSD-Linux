@@ -285,8 +285,6 @@ void openssd_erase_block(struct nvm_block *block)
 	/* Send erase command to device. */
 }
 
-
-
 static void openssd_fill_bio_and_end(struct bio *bio)
 {
 	zero_fill_bio(bio);
@@ -411,10 +409,6 @@ done:
 		complete(&pb->event);
 
 	free_per_bio_data(os, pb);
-
-	/* separate bio is allocated on write. Remember to free it */
-	if (bio_data_dir(bio) == WRITE)
-		kfree(bio);
 }
 
 static void openssd_end_read_bio(struct bio *bio, int err)
@@ -429,6 +423,9 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 {
 	/* FIXME: Implement error handling of writes */
 	openssd_endio(bio, err);
+
+	/* separate bio is allocated on write. Remember to free it */
+	kfree(bio);
 }
 
 sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct nvm_block **victim_block, void *private)

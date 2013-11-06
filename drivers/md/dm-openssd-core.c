@@ -368,6 +368,7 @@ static void openssd_endio(struct bio *bio, int err)
 	ap = pb->ap;
 	DMDEBUG("endio: starting. pb %p sync %p", pb, pb->sync);
 
+	DMINFO("END READ OS Sector addr: %ld Sectors: %u Size: %u", bio->bi_sector, bio_sectors(bio), bio->bi_size);
 	os = ap->parent;
 	pool = ap->pool;
 	/* TODO: This can be optimized to only account on read */
@@ -505,7 +506,6 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 			exec_bio->bi_sector = phys->addr * NR_PHY_IN_LOG;
 
 			// XXX buffered reads!
-
 			//printk("exec_bio addr: %lu bi_sectors: %u orig_addr: %lu\n", exec_bio->bi_sector, bio_sectors(exec_bio), bio->bi_sector);
 			openssd_submit_bio(os, phys->block, READ, exec_bio, 0);
 		}
@@ -513,13 +513,15 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 		l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 		phys = os->lookup_ltop(os, l_addr);
 
-		bio->bi_sector = phys->addr * NR_PHY_IN_LOG;
+		/* dont forget to account for non-4K-aligned bio*/
+		bio->bi_sector = phys->addr * NR_PHY_IN_LOG + (bio->bi_sector % NR_PHY_IN_LOG);
 
 		if (!phys->block) {
 			openssd_fill_bio_and_end(bio);
 			return DM_MAPIO_SUBMITTED;
 		}
 
+		DMDEBUG("READ Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", l_addr, phys->addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 		/* When physical page contains several logical pages, we may need to
 		 * read from buffer. Check if so, and if page is cached in ap, read from
 		 * there */
@@ -595,7 +597,7 @@ int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 		}
 
 		/* Submit bio for all physical addresses*/
-		//DMINFO("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
+		DMDEBUG("WRITE Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
 		size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
 		if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
@@ -617,7 +619,7 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 	pb->block = block;
 	pb->physical_addr = bio->bi_sector;
 
-	DMDEBUG("submit_bio: physical_addr %ld ap %p", pb->physical_addr, ap);
+	DMDEBUG("openssd_submit_bio: physical_addr %ld ap %p", pb->physical_addr, ap);
 	if (rw == WRITE)
 		bio->bi_end_io = openssd_end_write_bio;
 	else

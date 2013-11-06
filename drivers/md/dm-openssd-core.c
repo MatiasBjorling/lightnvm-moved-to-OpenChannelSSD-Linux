@@ -365,20 +365,18 @@ static void openssd_endio(struct bio *bio, int err)
 	unsigned long diff, dev_wait, total_wait = 0;
 
 	pb = get_per_bio_data(bio);
+
+	BUG_ON(pb->physical_addr == LTOP_EMPTY);
+
 	block = pb->block;
 	ap = pb->ap;
-	DMDEBUG("endio: starting. pb %p sync %p", pb, pb->sync);
 
 	DMINFO("END READ OS Sector addr: %ld Sectors: %u Size: %u", bio->bi_sector, bio_sectors(bio), bio->bi_size);
 	os = ap->parent;
 	pool = ap->pool;
+
 	/* TODO: This can be optimized to only account on read */
 	openssd_put_block(block);
-
-	if (pb->physical_addr == LTOP_EMPTY) {
-		DMDEBUG("openssd_endio: no real IO performed. goto done");
-		goto done;
-	}
 
 	if (bio_data_dir(bio) == WRITE)
 		dev_wait = ap->t_write;

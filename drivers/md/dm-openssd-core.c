@@ -411,6 +411,10 @@ done:
 		complete(&pb->event);
 
 	free_per_bio_data(os, pb);
+
+	/* separate bio is allocated on write. Remember to free it */
+	if (bio_data_dir(bio) == WRITE)
+		kfree(bio);
 }
 
 static void openssd_end_read_bio(struct bio *bio, int err)

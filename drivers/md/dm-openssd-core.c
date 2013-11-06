@@ -294,14 +294,15 @@ static void openssd_fill_bio_and_end(struct bio *bio)
 }
 
 /* lookup the primary translation table. If there isn't an associated block to
- * the addr. We shall assume that there is no data and doesn't take a ref */
-struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr) {
-	// TODO: during GC or w-r-w we may get a translation for an old page.
-	//       do we care enough to enforce some serializibilty in LBA accesses?
+ * the addr. We assume that there is no data and doesn't take a ref */
+struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
+{
 	struct nvm_addr *addr;
 
+	BUG_ON(!(l_addr >= 0 && l_addr < os->nr_pages));
+
 	while (1) {
-		addr = &os->trans_map[logical_addr];
+		addr = &os->trans_map[l_addr];
 
 		if (!addr->block)
 			return addr;

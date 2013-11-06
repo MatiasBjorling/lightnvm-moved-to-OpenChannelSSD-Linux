@@ -65,7 +65,7 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 		//continue;
 		/* verify lba covered by hint*/
 		if (is_hint_relevant(logical_addr, hint_info, is_write, os->config.flags)) {
-			DMINFO("found hint for lba %ld (ino %ld)",
+			DMDEBUG("found hint for lba %ld (ino %ld)",
 				logical_addr, hint_info->hint.ino);
 			hint_info->processed++;
 			spin_unlock(&hint->hintlock);
@@ -73,7 +73,7 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 		}
 	}
 	spin_unlock(&hint->hintlock);
-	DMINFO("no hint found for %s lba %ld", (is_write)?"WRITE":"READ",logical_addr);
+	DMDEBUG("no hint found for %s lba %ld", (is_write)?"WRITE":"READ",logical_addr);
 
 	return NULL;
 }
@@ -177,14 +177,14 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 		/* non-packable file. ignore hint*/
 		if(os->config.flags & NVM_OPT_ENGINE_PACK && 
 		   !openssd_is_fc_packable(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
-			DMINFO("non-packable file. ignore hint");
+			DMDEBUG("non-packable file. ignore hint");
 			continue;
 		}
 
 		/* non-latency file. ignore hint*/
 		if(os->config.flags & NVM_OPT_ENGINE_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc == FC_EMPTY &&
 		   !openssd_is_fc_latency(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
-			DMINFO("non-latency file. ignore hint");
+			DMDEBUG("non-latency file. ignore hint");
 			continue;
 		}
 
@@ -265,7 +265,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 	CAST_TO_PAYLOAD(hint_data)->sectors_count = sectors_count;
 	CAST_TO_PAYLOAD(hint_data)->is_write = is_write;
 	ino = -1;
-	DMINFO("%s lba=%d sectors_count=%d",
+	DMDEBUG("%s lba=%d sectors_count=%d",
 	       is_write ? "WRITE" : "READ",
 	       lba, sectors_count);
 #if 0
@@ -280,7 +280,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 		if (bv_page && !PageSlab(bv_page)) {
 			// swap hint
 			if (PageSwapCache(bv_page)) {
-				DMINFO("swap bio");
+				DMDEBUG("swap bio");
 				// TODO - not tested
 				CAST_TO_PAYLOAD(hint_data)->hint_flags |= HINT_SWAP;
 
@@ -305,13 +305,13 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 				ino = host->i_ino;
 
 				if (!host->i_sb || !host->i_sb->s_type || !host->i_sb->s_type->name) {
-					DMINFO("not related to file system");
+					DMDEBUG("not related to file system");
 					bio_len += bvec[0].bv_len;
 					continue;
 				}
 
 				if (!ino) {
-					DMINFO("not inode related");
+					DMDEBUG("not inode related");
 					bio_len += bvec[0].bv_len;
 					continue;
 				}
@@ -340,7 +340,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 
 					INO_HINT_FROM_DATA(hint_data, hint_idx).count +=
 					        bvec[0].bv_len / sector_size;
-					DMINFO("increase count for hint %u. new count=%u",
+					DMDEBUG("increase count for hint %u. new count=%u",
 					       hint_idx, INO_HINT_FROM_DATA(hint_data, hint_idx).count);
 					bio_len+= bvec[0].bv_len;
 					continue;
@@ -352,7 +352,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 					continue;
 				}
 
-				DMINFO("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u",
+				DMDEBUG("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u",
 				       is_write ? "WRITE":"READ",
 				       ino,
 				       lba + (bio_len / sector_size),
@@ -390,7 +390,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 	ret = openssd_send_hint(os, hint_data);
 
 	if (ret != 0)
-		DMINFO("openssd_send_hint error %d", ret);
+		DMERR("openssd_send_hint error %d", ret);
 
 done:
 	kfree(hint_data);
@@ -447,7 +447,7 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 				return DM_MAPIO_REQUEUE;
 			}
 
-			DMINFO("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
+			DMDEBUG("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
 			size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
@@ -505,14 +505,14 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 
 		/* got it */
 		if(ap_pack_data->ino == map_alloc_data->hint_info->hint.ino){
-			DMINFO("ap with block_addr %ld associated to requested inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
+			DMDEBUG("ap with block_addr %ld associated to requested inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
 			addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
 			break;
 		}
 	}
 
 	if (addr != LTOP_EMPTY){
-		DMINFO("allocated addr %ld from PREVIOUS associated ap ", addr);
+		DMDEBUG("allocated addr %ld from PREVIOUS associated ap ", addr);
 		goto pack_alloc_done;
 	}
 
@@ -543,7 +543,7 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 		/* got it - empty ap not associated to any inode */
 		ap_pack_data->ino = map_alloc_data->hint_info->hint.ino; // do this before alloc_addr
 		addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
-		DMINFO("re-associated ap with block_addr %ld to new inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
+		DMDEBUG("re-associated ap with block_addr %ld to new inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
 
 		break;
 	}
@@ -633,7 +633,7 @@ static void openssd_update_map_shadow(struct openssd *os,
 
 		return;
 	} else if (flags & MAP_PRIMARY) {
-		DMERR("should update primary only");
+		DMDEBUG("should update primary only");
 		return;
 	}
 
@@ -662,7 +662,6 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 
 	/* If there is no hint, or this is a reclaimed ltop mapping,
 	 * use regular (single-page) map_ltop. handle both primary and shadow cases*/
-	DMINFO("map_alloc_data %p", map_alloc_data);
 	if (map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
 		DMDEBUG("reclaimed or regular allocation");
 		// dont pass map_alloc_data for primary
@@ -747,19 +746,19 @@ static struct nvm_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t
 
 	// shadow is empty
 	if (hint->shadow_map[logical_addr].addr == LTOP_EMPTY) {
-		DMINFO("no shadow. read primary");
+		DMDEBUG("no shadow. read primary");
 		return openssd_lookup_ltop(os, logical_addr);
 	}
 
 	// check if primary is busy
 	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / os->nr_pools);
 	if (atomic_read(&os->pools[pool_idx].is_active)) {
-		DMINFO("primary busy. read shadow");
+		DMDEBUG("primary busy. read shadow");
 		return &hint->shadow_map[logical_addr];
 	}
 
 	// primary not busy
-	DMINFO("primary not busy");
+	DMDEBUG("primary not busy");
 	return openssd_lookup_ltop(os, logical_addr);
 }
 
@@ -792,7 +791,7 @@ static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_
 	struct nvm_addr *l;
 	unsigned int page_offset;
 
-	DMINFO("trim old shaddow");
+	DMDEBUG("trim old shaddow");
 	l = &hint->shadow_map[l_addr];
 	if (l->block) {
 		page_offset = l->addr % os->nr_host_pages_in_blk;
@@ -811,7 +810,7 @@ int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
 {
 	hint_data_t __user *uhint = (hint_data_t __user *)arg;
 	hint_data_t* hint_data;
-	DMINFO("send user hint");
+	DMDEBUG("send user hint");
 
 	/* allocate hint_data */
 	hint_data = kmalloc(sizeof(hint_data_t), GFP_KERNEL);

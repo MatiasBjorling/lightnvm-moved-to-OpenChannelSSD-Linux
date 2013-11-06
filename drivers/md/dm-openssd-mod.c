@@ -281,6 +281,8 @@ err_rev_trans_map:
 static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 {
 	struct openssd *os;
+	struct block_device *bdev;
+	struct request_queue *q;
 	unsigned int tmp;
 	char dummy;
 
@@ -298,6 +300,12 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &os->dev))
 		goto err_map;
+
+	/* overwrite device sector size */
+	bdev = os->dev->bdev;
+	q = bdev_get_queue(bdev);
+	blk_queue_logical_block_size(q, EXPOSED_PAGE_SIZE);
+	blk_queue_physical_block_size(q, EXPOSED_PAGE_SIZE);
 
 	if (!strcmp(argv[1], "swap"))
 		os->config.flags |= NVM_OPT_ENGINE_SWAP;

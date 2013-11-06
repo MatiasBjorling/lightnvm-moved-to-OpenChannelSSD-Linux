@@ -81,6 +81,8 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 {
 	struct openssd *os = ti->private;
 	int ret;
+	sector_t l_addr = bio->bi_sector;
+
 	bio->bi_bdev = os->dev->bdev;
 
 	if (bio_data_dir(bio) == WRITE)
@@ -88,8 +90,11 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 	else
 		ret = os->read_bio(os, bio);
 
-	DMDEBUG("openssd_map: %s l_addr %ld, map done", (bio_data_dir(bio) ==
-	                WRITE) ? "WRITE" : "READ", bio->bi_sector/8);
+	DMDEBUG("map: %s l: %llu -> p: %llu sz: %u",
+			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ",
+			(unsigned long long) l_addr / NR_PHY_IN_LOG,
+			(unsigned long long) bio->bi_sector / NR_PHY_IN_LOG,
+			bio->bi_size);
 
 	return ret;
 }
@@ -281,8 +286,6 @@ err_rev_trans_map:
 static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 {
 	struct openssd *os;
-	struct block_device *bdev;
-	struct request_queue *q;
 	unsigned int tmp;
 	char dummy;
 
@@ -300,12 +303,6 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &os->dev))
 		goto err_map;
-
-	/* overwrite device sector size */
-	bdev = os->dev->bdev;
-	q = bdev_get_queue(bdev);
-	blk_queue_logical_block_size(q, EXPOSED_PAGE_SIZE);
-	blk_queue_physical_block_size(q, EXPOSED_PAGE_SIZE);
 
 	if (!strcmp(argv[1], "swap"))
 		os->config.flags |= NVM_OPT_ENGINE_SWAP;

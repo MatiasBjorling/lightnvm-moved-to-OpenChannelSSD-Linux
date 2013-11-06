@@ -45,7 +45,7 @@
  */
 
 #define EXPOSED_PAGE_SIZE 4096	/* The page size that we expose to the operating system */
-#define FLASH_PAGE_SIZE 8192	/* The size of the physical flash page */
+#define FLASH_PAGE_SIZE 4096	/* The size of the physical flash page */
 
 #define NR_HOST_PAGES_IN_FLASH_PAGE (FLASH_PAGE_SIZE / EXPOSED_PAGE_SIZE)
 #define NR_PHY_IN_LOG (EXPOSED_PAGE_SIZE / 512)

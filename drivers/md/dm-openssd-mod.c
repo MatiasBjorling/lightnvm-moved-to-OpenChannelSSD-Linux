@@ -85,12 +85,17 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 
 	bio->bi_bdev = os->dev->bdev;
 
-	if (bio_data_dir(bio) == WRITE)
+	if (bio_data_dir(bio) == WRITE) {
+		if (bio_sectors(bio) != NR_PHY_IN_LOG) {
+			DMERR("Write: num of sectors not supported (%u)", bio_sectors(bio));
+			return DM_MAPIO_REQUEUE;
+		}
 		ret = os->write_bio(os, bio);
-	else
+	} else {
 		ret = os->read_bio(os, bio);
+	}
 
-	DMDEBUG("map: %s l: %llu -> p: %llu sz: %u",
+	DMINFO("map: %s l: %llu -> p: %llu sz: %u",
 			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ",
 			(unsigned long long) l_addr / NR_PHY_IN_LOG,
 			(unsigned long long) bio->bi_sector / NR_PHY_IN_LOG,

@@ -309,6 +309,8 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &os->dev))
 		goto err_map;
 
+	dm_set_target_max_io_len(ti, NR_PHY_IN_LOG);
+
 	if (!strcmp(argv[1], "swap"))
 		os->config.flags |= NVM_OPT_ENGINE_SWAP;
 	else if (!strcmp(argv[1], "latency"))

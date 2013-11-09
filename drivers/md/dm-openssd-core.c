@@ -423,7 +423,7 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 	openssd_endio(bio, err);
 
 	/* separate bio is allocated on write. Remember to free it */
-	kfree(bio);
+	bio_put(bio);
 }
 
 sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct nvm_block **victim_block, void *private)

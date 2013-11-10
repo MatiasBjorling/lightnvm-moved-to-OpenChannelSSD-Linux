@@ -54,8 +54,6 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 
 		openssd_submit_bio(os, block, READ, src_bio, 1);
 
-		bio_put(src_bio);
-
 		/* Perform write */
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
@@ -78,6 +76,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
 				openssd_submit_write(os, dst_addr, victim_block, size);
 		}
+		bio_put(src_bio);
 	}
 	__free_page(page);
 	bitmap_fill(block->invalid_pages, os->nr_host_pages_in_blk);

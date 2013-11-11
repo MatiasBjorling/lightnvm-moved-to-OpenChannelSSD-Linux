@@ -411,14 +411,10 @@ static void openssd_endio(struct bio *bio, int err)
 
 static void openssd_end_read_bio(struct bio *bio, int err)
 {
-	struct per_bio_data *pb = get_per_bio_data(bio);
 	/* FIXME: Implement error handling of reads
 	 * Remember that bio->bi_end_io is overwritten during bio_split()
 	 */
 	openssd_endio(bio, err);
-
-	if (pb->sync)
-		bio_put(bio);
 }
 
 static void openssd_end_write_bio(struct bio *bio, int err)

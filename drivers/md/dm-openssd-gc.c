@@ -44,9 +44,9 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 	while ((slot = find_next_zero_bit(block->invalid_pages, os->nr_host_pages_in_blk, slot + 1)) < os->nr_host_pages_in_blk) {
 		/* Perform read */
 		p_addr = block_to_addr(block) + slot;
-		src_bio = bio_alloc(GFP_NOIO, 1);
 
-		bio_get(src_bio);
+		/* TODO: check for memory failure */
+		src_bio = bio_alloc(GFP_NOIO, 1);
 
 		src_bio->bi_bdev = os->dev->bdev;
 		src_bio->bi_sector = p_addr * NR_PHY_IN_LOG;
@@ -54,6 +54,8 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 
 		openssd_submit_bio(os, block, READ, src_bio, 1);
 
+		printk("ref: src_bio %u", atomic_read(&src_bio->bi_cnt));
+		bio_put(src_bio);
 		/* Perform write */
 
 		/* We use the physical address to go to the logical page addr,

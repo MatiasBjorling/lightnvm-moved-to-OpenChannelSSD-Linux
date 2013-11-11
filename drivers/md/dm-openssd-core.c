@@ -411,10 +411,14 @@ static void openssd_endio(struct bio *bio, int err)
 
 static void openssd_end_read_bio(struct bio *bio, int err)
 {
+	struct per_bio_data *pb = get_per_bio_data(bio);
 	/* FIXME: Implement error handling of reads
 	 * Remember that bio->bi_end_io is overwritten during bio_split()
 	 */
 	openssd_endio(bio, err);
+
+	if (pb->sync)
+		bio_put(bio);
 }
 
 static void openssd_end_write_bio(struct bio *bio, int err)
@@ -531,7 +535,7 @@ void openssd_submit_write(struct openssd *os, sector_t physical_addr,
 	int i;
 
 	//FIXME: can fail
-	issue_bio = bio_alloc(GFP_NOIO, 2);
+	issue_bio = bio_alloc(GFP_NOIO, NR_HOST_PAGES_IN_FLASH_PAGE);
 	issue_bio->bi_bdev = os->dev->bdev;
 	issue_bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
 

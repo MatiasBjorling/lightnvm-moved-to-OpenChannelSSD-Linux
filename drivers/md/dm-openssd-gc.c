@@ -54,10 +54,9 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 
 		openssd_submit_bio(os, block, READ, src_bio, 1);
 
-		printk("ref: src_bio %u", atomic_read(&src_bio->bi_cnt));
 		bio_put(src_bio);
-		/* Perform write */
 
+		/* Perform write */
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
 		l_addr = os->lookup_ptol(os, p_addr);

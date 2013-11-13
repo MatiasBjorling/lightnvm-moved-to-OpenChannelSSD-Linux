@@ -26,7 +26,7 @@
 #include <linux/workqueue.h>
 #include <linux/kthread.h>
 #include <linux/mempool.h>
-#include <linux/percpu-refcount.h>
+#include <linux/kref.h>
 
 #define DM_MSG_PREFIX "openssd"
 #define LTOP_EMPTY -1
@@ -110,7 +110,7 @@ struct nvm_block {
 
 	/* Block state handling */
 	spinlock_t gc_lock;
-	struct percpu_ref ref_count; /* Outstanding IOs to be completed on block */
+	struct kref ref_count; /* Outstanding IOs to be completed on block */
 };
 
 struct nvm_addr {
@@ -251,6 +251,7 @@ struct openssd {
 	struct workqueue_struct *kbiod_wq;
 
 	spinlock_t gc_lock;
+	struct completion gc_finished;
 	struct task_struct *kt_openssd; /* handles gc and any other async work */
 
 	/* Hint related*/
@@ -290,8 +291,8 @@ void openssd_delayed_bio_submit(struct work_struct *work);
 sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block);
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
-/* Calls map_ltop_rr with a specified number of retries. Returns LTOP_EMPTY if failed */
-sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
+/* Calls map_ltop_rr. Cannot fail (FIXME: unless out of memory) */
+sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
 
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
 struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
@@ -308,7 +309,7 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
                                 sector_t p_addr, struct nvm_block *p_block);
 
 /*   NVM device related */
-void openssd_block_release(struct percpu_ref *);
+void openssd_block_release(struct kref *);
 
 /*   Block maintanence */
 
@@ -317,7 +318,7 @@ void openssd_reset_block(struct nvm_block *block);
 
 /* dm-openssd-gc.c */
 void openssd_block_erase(struct kref *);
-void openssd_gc_collect(struct openssd *os);
+int openssd_gc_collect(struct openssd *os);
 
 
 /* dm-openssd-hint.c */
@@ -391,15 +392,6 @@ static inline int physical_to_slot(struct openssd *os, sector_t phys)
 	return (phys % (os->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
-static inline void openssd_get_block(struct nvm_block *block)
-{
-	percpu_ref_get(&block->ref_count);
-}
-
-static inline void openssd_put_block(struct nvm_block *block)
-{
-	percpu_ref_put(&block->ref_count);
-}
 #endif
 
 #endif /* DM_OPENSSD_H_ */

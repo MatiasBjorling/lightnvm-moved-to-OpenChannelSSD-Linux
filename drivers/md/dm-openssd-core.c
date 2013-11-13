@@ -1,7 +1,4 @@
 #include "dm-openssd.h"
-#include <linux/percpu-refcount.h>
-
-#define DELME 1
 
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
@@ -64,8 +61,7 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 	l = &os->trans_map[l_addr];
 	if (l->block) {
 		page_offset = l->addr % (os->nr_host_pages_in_blk);
-		if (test_and_set_bit(page_offset, l->block->invalid_pages))
-			WARN_ON(true);
+		WARN_ON(test_and_set_bit(page_offset, l->block->invalid_pages));
 		l->block->nr_invalid_pages++;
 	}
 
@@ -79,7 +75,6 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 inline void openssd_reset_block(struct nvm_block *block)
 {
 	struct openssd *os = block->pool->os;
-	unsigned int order = ffs(os->nr_host_pages_in_blk) - 1;
 
 	BUG_ON(!block);
 
@@ -88,7 +83,6 @@ inline void openssd_reset_block(struct nvm_block *block)
 	if (block->data) {
 		WARN_ON(!bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk));
 		bitmap_zero(block->invalid_pages, os->nr_host_pages_in_blk);
-		__free_pages(block->data, order);
 	}
 
 	block->ap = NULL;
@@ -97,7 +91,7 @@ inline void openssd_reset_block(struct nvm_block *block)
 	block->nr_invalid_pages = 0;
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
-	percpu_ref_init(&block->ref_count, openssd_block_release);
+	kref_init(&block->ref_count);
 	spin_unlock(&block->lock);
 }
 
@@ -117,16 +111,17 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool) {
 
 	BUG_ON(!pool);
 
-	data = alloc_pages(GFP_NOIO, order);
-
-	if (!data)
-		return NULL;
-
 	spin_lock(&pool->lock);
 
 	if (list_empty(&pool->free_list)) {
 		spin_unlock(&pool->lock);
-		__free_pages(data, order);
+		DMERR_LIMIT("Pool have no free pages available %p", &pool);
+		return NULL;
+	}
+
+	data = alloc_pages(GFP_KERNEL, order);
+	if (!data) {
+		DMERR_LIMIT("Could not allocate memory for block data");
 		return NULL;
 	}
 
@@ -146,7 +141,6 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool) {
 	return block;
 }
 
-
 /* We assume that all valid pages have already been moved when added back to the
  * free list. We add it last to allow round-robin use of all pages. Thereby provide
  * simple (naive) wear-leveling.
@@ -158,9 +152,10 @@ void nvm_pool_put_block(struct nvm_block *block)
 	spin_lock(&pool->lock);
 
 	list_move_tail(&block->list, &pool->free_list);
-
 	pool->nr_free_blocks++;
+
 	spin_unlock(&pool->lock);
+
 }
 
 static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
@@ -263,10 +258,11 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
                                     struct nvm_block **ret_victim_block)
 {
 	struct nvm_block *block = ap->cur;
+	struct nvm_pool *pool = block->pool;
 	sector_t p_addr = openssd_alloc_phys_addr(block);
 
-	while (p_addr == LTOP_EMPTY) {
-		block = nvm_pool_get_block(block->pool);
+	if (p_addr == LTOP_EMPTY) {
+		block = nvm_pool_get_block(pool);
 
 		if (!block)
 			return LTOP_EMPTY;
@@ -308,10 +304,8 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
 		/* during gc, the mapping will be updated accordently. We
 		 * therefore stop submitting new reads to the address, until it
 		 * is copied to the new place. */
-		if (!spin_is_locked(&addr->block->gc_lock)) {
-			openssd_get_block(addr->block);
+		if (!spin_is_locked(&addr->block->gc_lock))
 			return addr;
-		}
 
 		schedule();
 	}
@@ -325,24 +319,26 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
  * Returns the physical mapped address.
  */
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
-                               struct nvm_block **ret_victim_block, void *private)
+			struct nvm_block **ret_victim_block, void *private)
 {
 	struct nvm_ap *ap;
 	sector_t p_addr;
 
-	ap = get_next_ap(os);
+	while (1) {
+		ap = get_next_ap(os);
 
-	p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+		p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
 
-	if (p_addr != LTOP_EMPTY)
-		DMDEBUG("l_addr=%ld new p_addr=%ld (blkid=%u)",
-		        l_addr, p_addr, (*ret_victim_block)->id);
+		if (p_addr != LTOP_EMPTY)
+			return p_addr;
 
-	return p_addr;
+		if (openssd_gc_collect(os))
+			wait_for_completion_io_timeout(&os->gc_finished, HZ);
+	}
 }
 
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
-                                   struct nvm_block **ret_victim_block, void *private)
+			struct nvm_block **ret_victim_block, void *private)
 {
 	sector_t p_addr;
 
@@ -361,6 +357,7 @@ static void openssd_endio(struct bio *bio, int err)
 	struct nvm_block *block;
 	struct timeval end_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
+	unsigned int data_cnt;
 
 	pb = get_per_bio_data(bio);
 
@@ -372,12 +369,19 @@ static void openssd_endio(struct bio *bio, int err)
 	pool = ap->pool;
 
 	/* TODO: This can be optimized to only account on read */
-	openssd_put_block(block);
+	kref_put(&block->ref_count, openssd_block_release);
 
-	if (bio_data_dir(bio) == WRITE)
+	if (bio_data_dir(bio) == WRITE) {
+		data_cnt = atomic_inc_return(&block->data_cmnt_size);
+		if (data_cnt == os->nr_host_pages_in_blk) {
+			unsigned int order =
+				ffs(block->pool->os->nr_host_pages_in_blk) - 1;
+			__free_pages(block->data, order);
+		}
 		dev_wait = ap->t_write;
-	else
+	} else {
 		dev_wait = ap->t_read;
+	}
 
 	openssd_delay_endio_hint(os, bio, pb, &dev_wait);
 
@@ -424,23 +428,13 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 
 	/* separate bio is allocated on write. Remember to free it */
 	bio_put(bio);
+
 }
 
-sector_t openssd_alloc_addr_retries(struct openssd *os, sector_t logical_addr, struct nvm_block **victim_block, void *private)
+sector_t openssd_alloc_addr(struct openssd *os, sector_t l_addr,
+				struct nvm_block **victim_block, void *private)
 {
-	unsigned int retries;
-	sector_t physical_addr = LTOP_EMPTY;
-
-	for (retries = 0; retries < 3; retries++) {
-		physical_addr = os->map_ltop(os, logical_addr, victim_block, private);
-
-		if (physical_addr != LTOP_EMPTY)
-			break;
-
-		openssd_gc_collect(os);
-	}
-
-	return physical_addr;
+	return os->map_ltop(os, l_addr, victim_block, private);
 }
 
 static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, struct nvm_addr *phys)
@@ -551,15 +545,16 @@ int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 
 	bio_for_each_segment(bv, bio, i) {
 		logical_addr = (bio->bi_sector / NR_PHY_IN_LOG) + i;
-
-		physical_addr = openssd_alloc_addr_retries(os, logical_addr, &victim_block, NULL);
+retry:
+		physical_addr = openssd_alloc_addr(os, logical_addr,
+							&victim_block, NULL);
 
 		/* not used, but used for printing in dm map function */
 		bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
 
 		if (physical_addr == LTOP_EMPTY) {
-			DMERR("Out of physical addresses. Retry");
-			return DM_MAPIO_REQUEUE;
+			DMERR_LIMIT("Out of physical addresses. Retry");
+			goto retry;
 		}
 
 		/* Submit bio for all physical addresses*/
@@ -607,12 +602,14 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 	// We allow counting to be semi-accurate as theres no locking for accounting.
 	ap->io_accesses[bio_data_dir(bio)]++;
 
+	kref_get(&block->ref_count);
+
 	if (sync) {
 		rw |= REQ_SYNC;
 		pb->sync = 1;
 		init_completion(&pb->event);
 		submit_bio(rw, bio);
-		wait_for_completion(&pb->event);
+		wait_for_completion_io_timeout(&pb->event, 2*HZ);
 	} else {
 		submit_bio(rw, bio);
 	}

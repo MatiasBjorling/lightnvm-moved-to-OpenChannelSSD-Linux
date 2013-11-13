@@ -1,5 +1,3 @@
-#include <linux/percpu-refcount.h>
-
 #include "dm-openssd.h"
 #include "dm-openssd-hint.h"
 
@@ -58,14 +56,12 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
 		l_addr = os->lookup_ptol(os, p_addr);
-		DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", p_addr, l_addr, l_addr, os->trans_map[l_addr].addr);
+		/* DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", p_addr, l_addr, l_addr, os->trans_map[l_addr].addr);*/
 
 		if (os->begin_gc_private)
-			gc_private = os->begin_gc_private(l_addr,
-			                                  p_addr, block);
+			gc_private = os->begin_gc_private(l_addr, p_addr, block);
 
-		dst_addr = os->map_ltop(os, l_addr, &victim_block,
-		                        gc_private);
+		dst_addr = os->map_ltop(os, l_addr, &victim_block, gc_private);
 
 		if (os->end_gc_private)
 			os->end_gc_private(gc_private);
@@ -76,6 +72,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
 				openssd_submit_write(os, dst_addr, victim_block, size);
 		}
+
 		bio_put(src_bio);
 	}
 	__free_page(page);
@@ -84,84 +81,77 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 
 /* Push erase condition to automatically be executed when block goes to zero.
  * Only GC should do this */
-void openssd_block_release(struct percpu_ref *ref)
+void openssd_block_release(struct kref *ref)
 {
 	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
 
-	DMDEBUG("erasing block %u", block->id);
 	__erase_block(block);
 
 	nvm_pool_put_block(block);
 }
 
-void openssd_gc_collect(struct openssd *os)
+int openssd_gc_collect(struct openssd *os)
 {
 	struct nvm_pool *pool;
 	struct nvm_block *block;
 	unsigned int nr_blocks_need;
 	int pid, pid_start;
-	int max_collect = round_up(os->nr_pools, 2);
 
-	if (!spin_trylock(&os->gc_lock))
-	{
-		printk("Couldn't gc\n");
-		return;
-	}
+	if (!spin_trylock(&os->gc_lock)) 
+		return 1;
 
-	while (max_collect) {
-		block = NULL;
-		/* Iterate the pools once to look for pool that has a block to be freed. */
-		pid = os->next_collect_pool % os->nr_pools;
-		pid_start = pid;
-		do {
-			pool = &os->pools[pid];
+	block = NULL;
+	/* Iterate the pools once to look for pool that has a block to be freed. */
+	pid = os->next_collect_pool % os->nr_pools;
+	pid_start = pid;
+	do {
+		pool = &os->pools[pid];
 
-			nr_blocks_need = pool->nr_blocks;
-			do_div(nr_blocks_need, GC_LIMIT_INVERSE);
+		nr_blocks_need = pool->nr_blocks;
+		do_div(nr_blocks_need, GC_LIMIT_INVERSE);
 
-			//DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
-			if (nr_blocks_need < pool->nr_free_blocks)
-				goto finished;
+		//DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
+		if (nr_blocks_need < pool->nr_free_blocks)
+			goto finished;
 
-			spin_lock(&pool->lock);
-			list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
-			block = list_first_entry(&pool->prio_list, struct
-			                         nvm_block, prio);
+		spin_lock(&pool->lock);
+		list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
+		block = list_first_entry(&pool->prio_list, struct
+								nvm_block, prio);
 
-			list_del(&block->prio);
+		list_del(&block->prio);
 
-			if (!block->nr_invalid_pages) {
-				list_add(&block->prio, &pool->prio_list);
-				spin_unlock(&pool->lock);
-				goto finished;
-			}
-
-			/*this should never happen. Anyway, lets check for it.*/
-			if (!block_is_full(block)) {
-				list_add(&block->prio, &pool->prio_list);
-				spin_unlock(&pool->lock);
-				goto finished;
-			}
-
+		if (!block->nr_invalid_pages) {
+			list_add(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->lock);
+			goto finished;
+		}
 
-			/* rewrite to have moves outside lock. i.e. so we can
-			 * prepare multiple pages in parallel on the attached
-			 * device. */
-			openssd_move_valid_pages(os, block);
+		/*this should never happen. Anyway, lets check for it.*/
+		if (!block_is_full(block)) {
+			list_add(&block->prio, &pool->prio_list);
+			spin_unlock(&pool->lock);
+			goto finished;
+		}
 
-			/* We activate ref counting and removes the initial ref
-			 * count to let it take action. i.e. perform physical
-			 * erase if needed and return to the pool free list.*/
-			percpu_ref_kill_and_confirm(&block->ref_count,
-			                            openssd_block_release);
+		spin_unlock(&pool->lock);
+
+		/* rewrite to have moves outside lock. i.e. so we can
+		 * prepare multiple pages in parallel on the attached
+		 * device. */
+		openssd_move_valid_pages(os, block);
+
+		kref_put(&block->ref_count, openssd_block_release);
 finished:
-			pid++;
-			pid %= os->nr_pools;
-		} while (pid_start != pid);
+		pid++;
+		pid %= os->nr_pools;
+	} while (pid_start != pid);
 
-		os->next_collect_pool++;
-		max_collect--;
-	}
+	os->next_collect_pool++;
+
 	spin_unlock(&os->gc_lock);
+
+	complete_all(&os->gc_finished);
+
+	return 0;
 }

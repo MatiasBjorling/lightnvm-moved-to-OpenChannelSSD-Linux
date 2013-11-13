@@ -95,11 +95,11 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 		ret = os->read_bio(os, bio);
 	}
 
-	DMINFO("map: %s l: %llu -> p: %llu sz: %u",
+	/*DMINFO("map: %s l: %llu -> p: %llu sz: %u",
 			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ",
 			(unsigned long long) l_addr / NR_PHY_IN_LOG,
 			(unsigned long long) bio->bi_sector / NR_PHY_IN_LOG,
-			bio->bi_size);
+			bio->bi_size);*/
 
 	return ret;
 }
@@ -204,9 +204,6 @@ err_blocks:
 	ssd_for_each_pool(os, pool, i) {
 		if (!pool->blocks)
 			break;
-		pool_for_each_block(pool, block, j) {
-			percpu_ref_cancel_init(&block->ref_count);
-		}
 		kfree(pool->blocks);
 	}
 	kfree(os->pools);
@@ -252,6 +249,8 @@ static int nvm_init(struct dm_target *ti, struct openssd *os)
 
 	// Simple round-robin strategy
 	atomic_set(&os->next_write_ap, -1);
+
+	init_completion(&os->gc_finished);
 
 	os->lookup_ltop = openssd_lookup_ltop;
 	os->lookup_ptol = openssd_lookup_ptol;
@@ -366,6 +365,8 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	if (argc > 7) {
 		if (sscanf(argv[7], "%u%c", &tmp, &dummy) == 1) {
 			os->config.gc_time = tmp;
+			if (os->config.gc_time <= 0)
+				os->config.gc_time = 1;
 		} else {
 			ti->error = "Cannot read gc timing";
 			goto err_map;

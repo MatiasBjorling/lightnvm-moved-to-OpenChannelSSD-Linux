@@ -440,12 +440,7 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 			if (j == 1)
 				map_alloc_data.flags = MAP_SHADOW;
 
-			physical_addr = openssd_alloc_addr_retries(os, logical_addr, &victim_block, &map_alloc_data);
-
-			if (physical_addr == LTOP_EMPTY) {
-				DMERR("Out of physical addresses. Retry");
-				return DM_MAPIO_REQUEUE;
-			}
+			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, &map_alloc_data);
 
 			DMDEBUG("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 

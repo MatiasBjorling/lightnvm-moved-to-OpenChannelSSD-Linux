@@ -133,6 +133,7 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 	int i, j;
 
 	spin_lock_init(&os->gc_lock);
+	spin_lock_init(&os->trans_lock);
 
 	os->pools = kzalloc(sizeof(struct nvm_pool) * os->nr_pools, GFP_KERNEL);
 	if (!os->pools)

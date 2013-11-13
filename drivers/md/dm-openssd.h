@@ -203,6 +203,7 @@ struct openssd {
 	/* also store a reverse map for garbage collection */
 	sector_t *rev_trans_map;
 
+	spinlock_t trans_lock;
 	/* Usually instantiated to the number of available parallel channels
 	 * within the hardware device. i.e. a controller with 4 flash channels,
 	 * would have 4 pools.

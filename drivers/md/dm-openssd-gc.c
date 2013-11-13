@@ -92,7 +92,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		bio_put(src_bio);
 	}
 	__free_page(page);
-	bitmap_fill(block->invalid_pages, os->nr_host_pages_in_blk);
+	BUG_ON(!bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk));
 }
 
 /* Push erase condition to automatically be executed when block goes to zero.
@@ -103,6 +103,7 @@ void openssd_block_release(struct kref *ref)
 
 	__erase_block(block);
 
+	spin_unlock(&block->gc_lock);
 	nvm_pool_put_block(block);
 }
 
@@ -132,23 +133,18 @@ int openssd_gc_collect(struct openssd *os)
 
 		spin_lock(&pool->lock);
 		block = block_prio_find_max(&pool->prio_list);
-		
 		list_del(&block->prio);
-
-		if (!block->nr_invalid_pages) {
-			list_add(&block->prio, &pool->prio_list);
-			spin_unlock(&pool->lock);
-			goto finished;
-		}
-
-		/*this should never happen. Anyway, lets check for it.*/
-		if (!block_is_full(block)) {
-			list_add(&block->prio, &pool->prio_list);
-			spin_unlock(&pool->lock);
-			goto finished;
-		}
-
 		spin_unlock(&pool->lock);
+
+		/* this should never happen. Its just here for an extra check */
+		BUG_ON(!block->nr_invalid_pages);
+
+		/* this should never happen. Anyway, lets check for it.*/
+		BUG_ON(!block_is_full(block));
+
+		/* take the lock. But also make sure that we haven't messed up the 
+		 * gc routine, by removing the global gc lock. */
+		BUG_ON(!spin_trylock(&block->gc_lock));
 
 		/* rewrite to have moves outside lock. i.e. so we can
 		 * prepare multiple pages in parallel on the attached

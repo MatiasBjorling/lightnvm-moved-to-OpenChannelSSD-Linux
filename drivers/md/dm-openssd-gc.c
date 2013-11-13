@@ -21,6 +21,22 @@ static int block_prio_sort_cmp(void *priv, struct list_head *lh_a, struct list_h
 	return a->nr_invalid_pages < b->nr_invalid_pages;
 }
 
+/* linearly find the block with highest number of invalid pages */
+static struct nvm_block * block_prio_find_max(struct list_head *pool_block_list)
+{
+	struct list_head *lh, *lh_max = NULL;
+
+	lh_max = pool_block_list->next;
+	list_for_each(lh, pool_block_list) {
+		if (block_prio_sort_cmp(NULL, lh_max, lh)) {
+			lh_max = lh;
+		}
+	}
+	//DMINFO("GC max: return block with max invalid %d", list_entry(lh_max, struct nvm_block, prio)->nr_invalid_pages);
+
+	return list_entry(lh_max, struct nvm_block, prio);
+}
+
 /* Move data away from flash block to be erased. Additionally update the l to p and p to l
  * mappings.
  */
@@ -115,10 +131,8 @@ int openssd_gc_collect(struct openssd *os)
 			goto finished;
 
 		spin_lock(&pool->lock);
-		list_sort(NULL, &pool->prio_list, block_prio_sort_cmp);
-		block = list_first_entry(&pool->prio_list, struct
-								nvm_block, prio);
-
+		block = block_prio_find_max(&pool->prio_list);
+		
 		list_del(&block->prio);
 
 		if (!block->nr_invalid_pages) {

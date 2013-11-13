@@ -50,25 +50,28 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
                                 sector_t p_addr, struct nvm_block *p_block)
 {
 	struct nvm_addr *l;
+	struct nvm_block *block;
 	unsigned int page_offset;
-
-	if (l_addr >= os->nr_pages || p_addr >= os->nr_pages)
-		return;
 
 	BUG_ON(l_addr >= os->nr_pages);
 	BUG_ON(p_addr >= os->nr_pages);
 
+	spin_lock(&os->trans_lock);
 	l = &os->trans_map[l_addr];
-	if (l->block) {
+	block = l->block;
+	if (block) {
 		page_offset = l->addr % (os->nr_host_pages_in_blk);
-		WARN_ON(test_and_set_bit(page_offset, l->block->invalid_pages));
-		l->block->nr_invalid_pages++;
+		spin_lock(&block->lock);
+		WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
+		block->nr_invalid_pages++;
+		spin_unlock(&block->lock);
 	}
 
 	l->addr = p_addr;
 	l->block = p_block;
 
 	os->rev_trans_map[p_addr] = l_addr;
+	spin_unlock(&os->trans_lock);
 }
 
 /* requires pool->lock taken */
@@ -296,7 +299,9 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
 	BUG_ON(!(l_addr >= 0 && l_addr < os->nr_pages));
 
 	while (1) {
+		spin_lock(&os->trans_lock);
 		addr = &os->trans_map[l_addr];
+		spin_unlock(&os->trans_lock);
 
 		if (!addr->block)
 			return addr;

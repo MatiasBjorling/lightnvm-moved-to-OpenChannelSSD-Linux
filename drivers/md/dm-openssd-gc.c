@@ -134,10 +134,15 @@ int openssd_gc_collect(struct openssd *os)
 		spin_lock(&pool->lock);
 		block = block_prio_find_max(&pool->prio_list);
 		list_del(&block->prio);
-		spin_unlock(&pool->lock);
 
 		/* this should never happen. Its just here for an extra check */
-		BUG_ON(!block->nr_invalid_pages);
+		if (!block->nr_invalid_pages) {
+			list_add(&block->prio, &pool->prio_list);
+			spin_unlock(&pool->lock);
+			goto finished;
+		}
+
+		spin_unlock(&pool->lock);
 
 		/* this should never happen. Anyway, lets check for it.*/
 		BUG_ON(!block_is_full(block));

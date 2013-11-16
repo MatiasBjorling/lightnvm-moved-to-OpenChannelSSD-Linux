@@ -220,7 +220,7 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 			break;
 	}
 
-	if (addr == LTOP_EMPTY){
+	if (addr == LTOP_EMPTY)
 		return LTOP_EMPTY;
 
 	(*ret_victim_block) = block;

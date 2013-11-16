@@ -72,7 +72,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
 		l_addr = os->lookup_ptol(os, p_addr);
-		/* DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", p_addr, l_addr, l_addr, os->trans_map[l_addr].addr);*/
+		//DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", p_addr, l_addr, l_addr, os->trans_map[l_addr].addr);
 
 		if (os->begin_gc_private)
 			gc_private = os->begin_gc_private(l_addr, p_addr, block);
@@ -127,7 +127,7 @@ int openssd_gc_collect(struct openssd *os)
 		nr_blocks_need = pool->nr_blocks;
 		do_div(nr_blocks_need, GC_LIMIT_INVERSE);
 
-		//DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
+		DMDEBUG("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks);
 		if (nr_blocks_need < pool->nr_free_blocks)
 			goto finished;
 

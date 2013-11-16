@@ -179,7 +179,7 @@ static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
 	 * the offset to the address, instead of requesting a new page
 	 * from the physical block */
 	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
-		if (req_fast && !page_is_fast(block->next_page + 1))
+		if (req_fast && !page_is_fast(block->next_page + 1, os))
 			goto out;
 
 		block->next_offset = 0;
@@ -220,8 +220,8 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 			break;
 	}
 
-	if (addr == LTOP_EMPTY)
-		addr = openssd_alloc_phys_addr(block);
+	if (addr == LTOP_EMPTY){
+		return LTOP_EMPTY;
 
 	(*ret_victim_block) = block;
 	return addr;

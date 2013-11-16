@@ -27,7 +27,7 @@ void openssd_delay_endio_hint(struct openssd *os, struct bio *bio,
 	/* different timings, roughly based on "Harey Tortoise" paper
 	 * TODO: ratio is actually 4.8 on average
 	 * TODO: consider dev_wait to be part of per_bio_data? */
-	if (page_is_fast(page_id))
+	if (page_is_fast(page_id, os))
 		(*delay) = os->config.t_write / 2;
 	else
 		(*delay) = os->config.t_write * 2;
@@ -153,7 +153,9 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	       INO_HINT_FROM_DATA(hint_data, 0).fc);
 
 	// assert relevant hint support
-	if (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(hint->hint_flags & HINT_SWAP)) {
+	if ((CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(os->config.flags & NVM_OPT_ENGINE_SWAP)) ||
+	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_LATENCY && !(os->config.flags & NVM_OPT_ENGINE_LATENCY)) ||
+	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_PACK && !(os->config.flags & NVM_OPT_ENGINE_PACK))) {
 		DMERR("hint of types %x not supported (1st entry ino %lu lba %u count %u)",
 		       CAST_TO_PAYLOAD(hint_data)->hint_flags,
 		       INO_HINT_FROM_DATA(hint_data, 0).ino,
@@ -513,7 +515,7 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 
 	/* no ap associated to requested inode.
 	   find some empty pack ap, and use it*/
-	DMDEBUG("no ap associated to inode %u", map_alloc_data->hint_info->hint.ino);
+	DMDEBUG("no ap associated to inode %lu", map_alloc_data->hint_info->hint.ino);
 	for (i = 0; addr == LTOP_EMPTY && i < os->nr_pools; i++) {
 		ap = get_next_ap(os);
 
@@ -712,7 +714,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 		}
 
 		/* GC write of a slow page */
-		if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(os, map_alloc_data->old_p_addr))) {
+		if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(os, map_alloc_data->old_p_addr), os)) {
 			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(os, map_alloc_data->old_p_addr));
 			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 		}
@@ -722,14 +724,14 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 	p_addr = openssd_alloc_phys_fastest_addr(os, ret_block);
 
 	/* no FAST page found. restort to regular allocation */
-	if(p_addr == LTOP_EMPTY) {
+	if (p_addr == LTOP_EMPTY) {
 		return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
 	}
 
 	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
 	openssd_update_map_generic(os, l_addr, p_addr, (*ret_block));
 
-	DMDEBUG("write lba %ld to FAST page %ld (*ret_victim_block=%p)", l_addr, p_addr, (*ret_block));
+	DMDEBUG("write lba %ld to page %ld (*ret_victim_block=%p)", l_addr, p_addr, (*ret_block));
 	return p_addr;
 }
 

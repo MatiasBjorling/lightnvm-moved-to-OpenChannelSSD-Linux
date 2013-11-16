@@ -363,18 +363,21 @@ static inline sector_t block_to_addr(struct nvm_block *block)
 	return block->id * os->nr_host_pages_in_blk;
 }
 
-static inline int page_is_fast(unsigned int pagenr)
+static inline int page_is_fast(unsigned int pagenr, struct openssd *os)
 {
-	/* pages: F F F F | SSFFSS | SSFFSS | ... S Slow F Fast */
+	/* pages: F F F F | SSFFSS | SSFFSS | ... | S S S S . S Slow F Fast */
 	if (pagenr < 4)
 		return 1;
 
+	if (pagenr >= os->nr_pages_per_blk - 4)
+		return 0;
+
 	pagenr -= 4;
-	pagenr %= 6;
+	pagenr %= 4;
 
-	if (pagenr == 2 || pagenr == 3)
+	if (pagenr == 2 || pagenr == 3) 
 		return 1;
-
+	
 	return 0;
 }
 

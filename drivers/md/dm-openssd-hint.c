@@ -600,7 +600,6 @@ static sector_t openssd_map_pack_hint_ltop_rr(struct openssd *os, sector_t logic
 	return physical_addr;
 }
 
-
 // do any shadow address updating required (real, none, or trim of old one)
 static void openssd_update_map_shadow(struct openssd *os,
                                       sector_t l_addr, sector_t p_addr,
@@ -608,25 +607,34 @@ static void openssd_update_map_shadow(struct openssd *os,
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct nvm_addr *l;
+	struct nvm_block *block;
 	unsigned int page_offset;
+
+	BUG_ON(l_addr >= os->nr_pages);
+	BUG_ON(p_addr >= os->nr_pages);
 
 	DMDEBUG("flags=%lu", flags);
 	/* Secondary mapping. update shadow */
 	if(flags & MAP_SHADOW) {
 		DMDEBUG("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
 
+		spin_lock(&os->trans_lock);
 		l = &hint->shadow_map[l_addr];
-		if (l->block) {
-			page_offset = l->addr % os->nr_host_pages_in_blk;
-			if(test_and_set_bit(page_offset, l->block->invalid_pages))
-				WARN_ON(true);
-			l->block->nr_invalid_pages++;
+		block = l->block;
+
+		if (block) {
+			page_offset = l->addr % (os->nr_host_pages_in_blk);
+			spin_lock(&block->lock);
+			WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
+			block->nr_invalid_pages++;
+			spin_unlock(&block->lock);
 		}
 
 		l->addr = p_addr;
 		l->block = p_block;
 
 		os->rev_trans_map[p_addr] = l_addr;
+		spin_unlock(&os->trans_lock);
 
 		return;
 	} else if (flags & MAP_PRIMARY) {
@@ -780,33 +788,43 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
 	return flag;
 }
 
-
 // if we ever support trim, this may be unified with some generic function
 static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct nvm_addr *l;
+	struct nvm_block *block;
 	unsigned int page_offset;
 
-	DMDEBUG("trim old shaddow");
+	BUG_ON(l_addr >= os->nr_pages);
+	BUG_ON(p_addr >= os->nr_pages);
+
+	spin_lock(&os->trans_lock);
 	l = &hint->shadow_map[l_addr];
-	if (l->block) {
-		page_offset = l->addr % os->nr_host_pages_in_blk;
-		if(test_and_set_bit(page_offset, l->block->invalid_pages))
-			WARN_ON(true);
-		l->block->nr_invalid_pages++;
+	block = l->block;
+
+	DMDEBUG("trim old shaddow");
+	if (block) {
+		page_offset = l->addr % (os->nr_host_pages_in_blk);
+		spin_lock(&block->lock);
+		WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
+		block->nr_invalid_pages++;
+		spin_unlock(&block->lock);
 	}
 
 	l->addr = 0;
 	l->block = 0;
 
 	os->rev_trans_map[p_addr] = l_addr;
+	spin_unlock(&os->trans_lock);
 }
 
 int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
 {
 	hint_data_t __user *uhint = (hint_data_t __user *)arg;
 	hint_data_t* hint_data;
+	int ret;
+
 	DMDEBUG("send user hint");
 
 	/* allocate hint_data */
@@ -821,7 +839,10 @@ int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
 		return -EFAULT;
 
 	// send hint to device
-	return openssd_send_hint(os, hint_data);
+	ret = openssd_send_hint(os, hint_data);
+	kfree(hint_data);
+
+	return ret;
 }
 
 int openssd_ioctl_kernel_hint_cmd(struct openssd *os, unsigned long arg)

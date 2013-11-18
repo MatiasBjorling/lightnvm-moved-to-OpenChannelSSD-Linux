@@ -109,7 +109,7 @@ struct nvm_block {
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
 
 	/* Block state handling */
-	spinlock_t gc_lock;
+	atomic_t gc_running;
 	struct kref ref_count; /* Outstanding IOs to be completed on block */
 };
 
@@ -254,6 +254,7 @@ struct openssd {
 	struct workqueue_struct *kbiod_wq;
 
 	spinlock_t gc_lock;
+	unsigned int gc_running;
 	struct completion gc_finished;
 	struct completion gc_kick;
 	struct task_struct *kt_openssd; /* handles gc and any other async work */

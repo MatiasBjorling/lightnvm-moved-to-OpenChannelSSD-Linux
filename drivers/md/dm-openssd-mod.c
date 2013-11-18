@@ -164,7 +164,7 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 
 		pool_for_each_block(pool, block, j) {
 			spin_lock_init(&block->lock);
-			spin_lock_init(&block->gc_lock);
+			atomic_set(&block->gc_running, 0);
 
 			block->pool = pool;
 			block->id = (i * os->nr_blks_per_pool) + j;

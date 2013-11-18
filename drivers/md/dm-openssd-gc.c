@@ -125,7 +125,6 @@ void openssd_block_release(struct kref *ref)
 
 	__erase_block(block);
 
-	spin_unlock(&block->gc_lock);
 	nvm_pool_put_block(block);
 }
 
@@ -136,8 +135,15 @@ int openssd_gc_collect(struct openssd *os)
 	unsigned int nr_blocks_need;
 	int pid, pid_start, i = 0;
 
-	if (!spin_trylock(&os->gc_lock))
+	spin_lock(&os->gc_lock);
+
+	if (os->gc_running) {
+		spin_unlock(&os->gc_lock);
 		return 1;
+	}
+
+	os->gc_running = 1;
+	spin_unlock(&os->gc_lock);
 
 	block = NULL;
 	/* Iterate the pools once to look for pool that has a block to be freed. */
@@ -171,7 +177,7 @@ int openssd_gc_collect(struct openssd *os)
 
 			/* take the lock. But also make sure that we haven't messed up the
 			 * gc routine, by removing the global gc lock. */
-			BUG_ON(!spin_trylock(&block->gc_lock));
+			BUG_ON(!atomic_inc_return(&block->gc_running));
 
 			/* rewrite to have moves outside lock. i.e. so we can
 			 * prepare multiple pages in parallel on the attached
@@ -189,9 +195,11 @@ int openssd_gc_collect(struct openssd *os)
 
 	os->next_collect_pool++;
 
+	spin_lock(&os->gc_lock);
+	os->gc_running = 0;
 	spin_unlock(&os->gc_lock);
 
-	complete_all(&os->gc_finished);
+	complete(&os->gc_finished);
 
 	return 0;
 }

@@ -87,6 +87,7 @@ inline void openssd_reset_block(struct nvm_block *block)
 	block->next_page = 0;
 	block->next_offset = 0;
 	block->nr_invalid_pages = 0;
+	atomic_set(&block->gc_running, 0);
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
 	kref_init(&block->ref_count);
@@ -125,8 +126,6 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 		return NULL;
 	}
 
-	if (is_gc)
-		printk("wer\n");
 	while(!is_gc && pool->nr_free_blocks <= os->nr_aps_per_pool * 4) {
 		spin_unlock(&pool->lock);
 		return NULL;
@@ -141,7 +140,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 
 	openssd_reset_block(block);
 
-	block->data = mempool_alloc(os->block_page_pool, GFP_NOIO);
+	block->data = mempool_alloc(os->block_page_pool, GFP_ATOMIC);
 	BUG_ON(!block->data);
 
 	return block;
@@ -160,7 +159,6 @@ void nvm_pool_put_block(struct nvm_block *block)
 	list_move_tail(&block->list, &pool->free_list);
 	pool->nr_free_blocks++;
 
-	printk("nr %u\n", pool->nr_free_blocks);
 	spin_unlock(&pool->lock);
 
 }
@@ -262,7 +260,11 @@ void openssd_print_total_blocks(struct openssd *os)
 
 sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)
 {
-	return os->rev_trans_map[physical_addr];
+	sector_t addr;
+	spin_lock(&os->trans_lock);
+	addr = os->rev_trans_map[physical_addr];
+	spin_unlock(&os->trans_lock);
+	return addr;
 }
 
 sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
@@ -326,7 +328,7 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
 		/* during gc, the mapping will be updated accordently. We
 		 * therefore stop submitting new reads to the address, until it
 		 * is copied to the new place. */
-		if (!spin_is_locked(&addr->block->gc_lock))
+		if (!atomic_read(&addr->block->gc_running))
 			return addr;
 
 		schedule();
@@ -397,8 +399,6 @@ static void openssd_endio(struct bio *bio, int err)
 	if (bio_data_dir(bio) == WRITE) {
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
 		if (data_cnt == os->nr_host_pages_in_blk) {
-			struct list_head *h;
-			unsigned int i = 0;
 			mempool_free(block->data, os->block_page_pool);
 			block->data = NULL;
 

@@ -442,7 +442,7 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 			if (j == 1)
 				map_alloc_data.flags = MAP_SHADOW;
 
-			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, &map_alloc_data);
+			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, 0, &map_alloc_data);
 
 			DMDEBUG("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
@@ -503,7 +503,7 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 		/* got it */
 		if(ap_pack_data->ino == map_alloc_data->hint_info->hint.ino){
 			DMDEBUG("ap with block_addr %ld associated to requested inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
-			addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+			addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
 			break;
 		}
 	}
@@ -539,7 +539,7 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 
 		/* got it - empty ap not associated to any inode */
 		ap_pack_data->ino = map_alloc_data->hint_info->hint.ino; // do this before alloc_addr
-		addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+		addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
 		DMDEBUG("re-associated ap with block_addr %ld to new inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
 
 		break;
@@ -558,7 +558,7 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 		ap = get_next_ap(os);
 	}while(ap->hint_private);
 
-	addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+	addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
 
 pack_alloc_done:
 	if(ap_pack_data)
@@ -574,7 +574,7 @@ pack_alloc_done:
  * If non-hinted write - resort to normal allocation
  * if GC write - no hint, but we use regular map_ltop() with GC addr
  */
-static sector_t openssd_map_pack_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private)
+static sector_t openssd_map_pack_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
 	sector_t physical_addr;
@@ -583,7 +583,7 @@ static sector_t openssd_map_pack_hint_ltop_rr(struct openssd *os, sector_t logic
 	 * use regular (single-page) map_ltop */
 	if (!map_alloc_data || map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
 		DMDEBUG("pack_rr: reclaimed or regular allocation");
-		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block,(void*)NULL);
+		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, 0, NULL);
 
 		return physical_addr;
 	}
@@ -659,7 +659,7 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
  * If non-hinted write - resort to normal allocation
  * if GC write - no hint, but we use regular map_ltop() with GC addr
  */
-static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private)
+static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
 	struct nvm_ap *ap;
@@ -671,8 +671,8 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 		DMDEBUG("reclaimed or regular allocation");
 		// dont pass map_alloc_data for primary
 		map_alloc_data->flags = openssd_get_mapping_flag(os, logical_addr, map_alloc_data->old_p_addr);
-		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block,
-		                (map_alloc_data->flags & (MAP_SHADOW))?map_alloc_data:(void*)NULL);
+		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, 0,
+		                (map_alloc_data->flags & MAP_SHADOW) ? map_alloc_data : NULL);
 
 		// will do nothing if primary
 		DMDEBUG("update_map_shaddow");
@@ -684,7 +684,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	DMDEBUG("latency_ltop: allocate page");
 
 	if (map_alloc_data->flags & MAP_PRIMARY) {
-		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, NULL);
+		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, 0, NULL);
 		map_alloc_data->prev_ap = block_to_ap(os, (*ret_victim_block));
 		return physical_addr;
 	}
@@ -693,7 +693,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 		ap = get_next_ap(os);
 	} while (map_alloc_data->prev_ap == ap);
 
-	physical_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+	physical_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
 	openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block), map_alloc_data->flags);
 
 	DMDEBUG("retrieved addrs of shadow page");
@@ -708,7 +708,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
  * If no reelvant ap found, or non-swap write - resort to normal allocation
  */
 static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
-                sector_t l_addr, struct nvm_block **ret_block, void *private)
+                sector_t l_addr, struct nvm_block **ret_block, int is_gc, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
 	sector_t p_addr;
@@ -718,13 +718,13 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 	if (map_alloc_data) {
 		if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
 			DMDEBUG("swap_map: non-GC non-hinted write");
-			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
+			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, 0, NULL);
 		}
 
 		/* GC write of a slow page */
 		if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(os, map_alloc_data->old_p_addr), os)) {
 			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(os, map_alloc_data->old_p_addr));
-			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
+			return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, 0, NULL);
 		}
 	}
 
@@ -733,7 +733,7 @@ static sector_t openssd_map_swap_hint_ltop_rr(struct openssd *os,
 
 	/* no FAST page found. restort to regular allocation */
 	if (p_addr == LTOP_EMPTY) {
-		return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, NULL);
+		return openssd_alloc_map_ltop_rr(os, l_addr, ret_block, 0, NULL);
 	}
 
 	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);

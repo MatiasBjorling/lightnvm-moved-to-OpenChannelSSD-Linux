@@ -40,6 +40,8 @@
 /* Run GC every X seconds */
 #define GC_TIME 10
 
+#define MIN_POOL_PAGES 16
+
 static struct kmem_cache *_per_bio_cache;
 
 static int openssd_kthread(void *data)
@@ -51,7 +53,7 @@ static int openssd_kthread(void *data)
 
 		openssd_gc_collect(os);
 
-		schedule_timeout_uninterruptible(os->config.gc_time * HZ);
+		wait_for_completion_timeout(&os->gc_kick, os->config.gc_time * HZ);
 	}
 
 	return 0;
@@ -181,7 +183,7 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 		ap->parent = os;
 		ap->pool = &os->pools[i / os->nr_aps_per_pool];
 
-		block = nvm_pool_get_block(ap->pool);
+		block = nvm_pool_get_block(ap->pool, 0);
 		openssd_set_ap_cur(ap, block);
 
 		ap->t_read = os->config.t_read;
@@ -216,9 +218,11 @@ err_pool:
 static int nvm_init(struct dm_target *ti, struct openssd *os)
 {
 	int i;
+	unsigned int order;
 
 	os->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE * os->nr_pages_per_blk;
 	os->nr_pages = os->nr_pools * os->nr_blks_per_pool * os->nr_host_pages_in_blk;
+	order = ffs(os->nr_host_pages_in_blk) - 1;
 
 	/* Invalid pages in block bitmap is preallocated. */
 	if (os->nr_host_pages_in_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG)
@@ -241,10 +245,18 @@ static int nvm_init(struct dm_target *ti, struct openssd *os)
 	if (!os->per_bio_pool)
 		goto err_dev_lookup;
 
+	os->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
+	if (!os->page_pool)
+		goto err_per_bio_pool;
+
+	os->block_page_pool = mempool_create_page_pool(os->nr_aps, order);
+	if (!os->block_page_pool)
+		goto err_page_pool;
+
 	if (bdev_physical_block_size(os->dev->bdev) > EXPOSED_PAGE_SIZE) {
 		ti->error = "dm-openssd: Got bad sector size. Device sector size \
 			is larger than exposed";
-		goto err_per_bio_pool;
+		goto err_block_page_pool;
 	}
 	os->sector_size = EXPOSED_PAGE_SIZE;
 
@@ -252,6 +264,7 @@ static int nvm_init(struct dm_target *ti, struct openssd *os)
 	atomic_set(&os->next_write_ap, -1);
 
 	init_completion(&os->gc_finished);
+	init_completion(&os->gc_kick);
 
 	os->lookup_ltop = openssd_lookup_ltop;
 	os->lookup_ptol = openssd_lookup_ptol;
@@ -266,14 +279,18 @@ static int nvm_init(struct dm_target *ti, struct openssd *os)
 	nvm_pool_init(os, ti);
 
 	if (openssd_alloc_hint(os))
-		goto err_per_bio_pool;
+		goto err_block_page_pool;
 
 	// FIXME: Clean up pool init on failure.
 	os->kt_openssd = kthread_run(openssd_kthread, os, "kopenssd");
 	if (!os->kt_openssd)
-		goto err_per_bio_pool;
+		goto err_block_page_pool;
 
 	return 0;
+err_block_page_pool:
+	mempool_destroy(os->block_page_pool);
+err_page_pool:
+	mempool_destroy(os->page_pool);
 err_per_bio_pool:
 	mempool_destroy(os->per_bio_pool);
 err_dev_lookup:
@@ -460,6 +477,7 @@ static void openssd_dtr(struct dm_target *ti)
 
 	destroy_workqueue(os->kbiod_wq);
 	mempool_destroy(os->per_bio_pool);
+	mempool_destroy(os->page_pool);
 
 	openssd_free_hint(os);
 

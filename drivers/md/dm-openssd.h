@@ -181,7 +181,7 @@ struct nvm_config {
 
 struct openssd;
 
-typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct nvm_block **, void *);
+typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct nvm_block **, int, void *);
 typedef struct nvm_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
 typedef int (write_bio_fn)(struct openssd *, struct bio *);
@@ -220,6 +220,8 @@ struct openssd {
 	struct nvm_ap *aps;
 
 	mempool_t *per_bio_pool;
+	mempool_t *page_pool;
+	mempool_t *block_page_pool;
 
 	/* Frequently used config variables */
 	int nr_pools;
@@ -253,6 +255,7 @@ struct openssd {
 
 	spinlock_t gc_lock;
 	struct completion gc_finished;
+	struct completion gc_kick;
 	struct task_struct *kt_openssd; /* handles gc and any other async work */
 
 	/* Hint related*/
@@ -281,7 +284,7 @@ struct per_bio_data {
 void openssd_print_total_blocks(struct openssd *os);
 
 void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block);
-struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool);
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc);
 sector_t openssd_alloc_phys_addr(struct nvm_block *block);
 sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct nvm_block **ret_victim_block);
 
@@ -289,11 +292,10 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct nvm_block **
 void openssd_delayed_bio_submit(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
-sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block);
-sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
-sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
+sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block, int is_gc);
+sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
 /* Calls map_ltop_rr. Cannot fail (FIXME: unless out of memory) */
-sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, void *private);
+sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
 
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
 struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
@@ -320,6 +322,7 @@ void openssd_reset_block(struct nvm_block *block);
 /* dm-openssd-gc.c */
 void openssd_block_erase(struct kref *);
 int openssd_gc_collect(struct openssd *os);
+void openssd_gc_kick_wait(struct openssd *os);
 
 
 /* dm-openssd-hint.c */

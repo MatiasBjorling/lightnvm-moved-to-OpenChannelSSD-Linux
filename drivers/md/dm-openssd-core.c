@@ -82,12 +82,7 @@ inline void openssd_reset_block(struct nvm_block *block)
 	BUG_ON(!block);
 
 	spin_lock(&block->lock);
-
-	if (block->data) {
-		WARN_ON(!bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk));
-		bitmap_zero(block->invalid_pages, os->nr_host_pages_in_blk);
-	}
-
+	bitmap_zero(block->invalid_pages, os->nr_host_pages_in_blk);
 	block->ap = NULL;
 	block->next_page = 0;
 	block->next_offset = 0;
@@ -106,40 +101,48 @@ inline void openssd_reset_block(struct nvm_block *block)
  * that the start of used list is the oldest block, and therefore higher probability
  * of invalidated pages.
  */
-struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool) {
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 	struct openssd *os = pool->os;
 	struct nvm_block *block = NULL;
-	struct page *data;
-	unsigned int order = ffs(os->nr_host_pages_in_blk) - 1;
+	struct list_head *head, *i;
+	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
 
 	BUG_ON(!pool);
 
 	spin_lock(&pool->lock);
 
 	if (list_empty(&pool->free_list)) {
+		list_for_each_safe(head, i, &pool->free_list)
+			free_cnt++;
+		list_for_each_safe(head, i, &pool->used_list)
+			used_cnt++;
+		list_for_each_safe(head, i, &pool->prio_list)
+			prio_cnt++;
+
 		spin_unlock(&pool->lock);
-		DMERR_LIMIT("Pool have no free pages available %p", &pool);
+		DMERR_LIMIT("Pool have no free pages available %u %u %u %p",
+				free_cnt, used_cnt, prio_cnt, pool);
 		return NULL;
 	}
 
-	data = alloc_pages(GFP_KERNEL, order);
-	if (!data) {
-		DMERR_LIMIT("Could not allocate memory for block data");
+	if (is_gc)
+		printk("wer\n");
+	while(!is_gc && pool->nr_free_blocks <= os->nr_aps_per_pool * 4) {
+		spin_unlock(&pool->lock);
 		return NULL;
 	}
 
 	block = list_first_entry(&pool->free_list, struct nvm_block, list);
 	list_move_tail(&block->list, &pool->used_list);
 
-	/* TODO: convert to manipulation of prio_list to rcu */
-	list_add_tail(&block->prio, &pool->prio_list);
-
 	pool->nr_free_blocks--;
 
 	spin_unlock(&pool->lock);
 
 	openssd_reset_block(block);
-	block->data = data;
+
+	block->data = mempool_alloc(os->block_page_pool, GFP_NOIO);
+	BUG_ON(!block->data);
 
 	return block;
 }
@@ -157,15 +160,15 @@ void nvm_pool_put_block(struct nvm_block *block)
 	list_move_tail(&block->list, &pool->free_list);
 	pool->nr_free_blocks++;
 
+	printk("nr %u\n", pool->nr_free_blocks);
 	spin_unlock(&pool->lock);
 
 }
 
-static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
-                int req_fast)
+static sector_t __openssd_alloc_phys_addr(struct nvm_block *block, int req_fast)
 {
-	sector_t addr = LTOP_EMPTY;
 	struct openssd *os;
+	sector_t addr = LTOP_EMPTY;
 
 	BUG_ON(!block);
 
@@ -175,6 +178,7 @@ static sector_t __openssd_alloc_phys_addr(struct nvm_block *block,
 
 	if (block_is_full(block))
 		goto out;
+
 	/* If there is multiple host pages within a flash page, we add the
 	 * the offset to the address, instead of requesting a new page
 	 * from the physical block */
@@ -227,17 +231,21 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct
 	return addr;
 }
 
+/* requires ap->lock taken */
 void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
 	BUG_ON(!ap);
 	BUG_ON(!block);
 
-	spin_lock(&ap->lock);
-	if(ap->cur)
+	if (ap->cur) {
+		spin_lock(&ap->cur->lock);
+		if (!block_is_full(ap->cur))
+			DMERR("Block isn't full - %u %u", ap->cur->next_page, ap->cur->next_offset);
+		spin_unlock(&ap->cur->lock);
 		ap->cur->ap = NULL;
+	}
 	ap->cur = block;
 	ap->cur->ap = ap;
-	spin_unlock(&ap->lock);
 }
 
 void openssd_print_total_blocks(struct openssd *os)
@@ -258,24 +266,33 @@ sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)
 }
 
 sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
-                                    struct nvm_block **ret_victim_block)
+				struct nvm_block **ret_victim_block, int is_gc)
 {
-	struct nvm_block *block = ap->cur;
-	struct nvm_pool *pool = block->pool;
-	sector_t p_addr = openssd_alloc_phys_addr(block);
+	struct nvm_block *block;
+	struct nvm_pool *pool;
+	sector_t p_addr;
+
+	spin_lock(&ap->lock);
+
+	block = ap->cur;
+	pool = block->pool;
+	p_addr = openssd_alloc_phys_addr(block);
 
 	if (p_addr == LTOP_EMPTY) {
-		block = nvm_pool_get_block(pool);
+		block = nvm_pool_get_block(pool, is_gc);
 
-		if (!block)
+		if (!block) {
+			spin_unlock(&ap->lock);
 			return LTOP_EMPTY;
+		}
 
 		openssd_set_ap_cur(ap, block);
 		p_addr = openssd_alloc_phys_addr(block);
 	}
 
-	(*ret_victim_block) = block;
+	spin_unlock(&ap->lock);
 
+	(*ret_victim_block) = block;
 	return p_addr;
 }
 
@@ -323,8 +340,8 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
  *
  * Returns the physical mapped address.
  */
-sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
-			struct nvm_block **ret_victim_block, void *private)
+static sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
+		struct nvm_block **ret_victim_block, int is_gc, void *private)
 {
 	struct nvm_ap *ap;
 	sector_t p_addr;
@@ -332,22 +349,23 @@ sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 	while (1) {
 		ap = get_next_ap(os);
 
-		p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block);
+		p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, is_gc);
 
 		if (p_addr != LTOP_EMPTY)
-			return p_addr;
+			break;
 
-		if (openssd_gc_collect(os))
-			wait_for_completion_io_timeout(&os->gc_finished, HZ);
+		openssd_gc_kick_wait(os);
 	}
+
+	return p_addr;
 }
 
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
-			struct nvm_block **ret_victim_block, void *private)
+		struct nvm_block **ret_victim_block, int is_gc, void *private)
 {
 	sector_t p_addr;
 
-	p_addr = openssd_alloc_ltop_rr(os, l_addr, ret_victim_block, private);
+	p_addr = openssd_alloc_ltop_rr(os, l_addr, ret_victim_block, is_gc, private);
 	openssd_update_map_generic(os, l_addr, p_addr, (*ret_victim_block));
 
 	return p_addr;
@@ -379,9 +397,14 @@ static void openssd_endio(struct bio *bio, int err)
 	if (bio_data_dir(bio) == WRITE) {
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
 		if (data_cnt == os->nr_host_pages_in_blk) {
-			unsigned int order =
-				ffs(block->pool->os->nr_host_pages_in_blk) - 1;
-			__free_pages(block->data, order);
+			struct list_head *h;
+			unsigned int i = 0;
+			mempool_free(block->data, os->block_page_pool);
+			block->data = NULL;
+
+			spin_lock(&pool->lock);
+			list_add_tail(&block->prio, &pool->prio_list);
+			spin_unlock(&pool->lock);
 		}
 		dev_wait = ap->t_write;
 	} else {
@@ -437,29 +460,31 @@ static void openssd_end_write_bio(struct bio *bio, int err)
 }
 
 sector_t openssd_alloc_addr(struct openssd *os, sector_t l_addr,
-				struct nvm_block **victim_block, void *private)
+		struct nvm_block **victim_block, int is_gc, void *private)
 {
-	return os->map_ltop(os, l_addr, victim_block, private);
+	return os->map_ltop(os, l_addr, victim_block, is_gc, private);
 }
 
 static int openssd_handle_buffered_read(struct openssd *os, struct bio *bio, struct nvm_addr *phys)
 {
 	struct nvm_ap *ap;
+	struct nvm_block *block;
 	struct bio_vec *bv;
 	int i, j, pool_idx = phys->addr / (os->nr_pages / os->nr_pools);
-	int idx = phys->addr % (os->nr_host_pages_in_blk);
+	int data_idx = phys->addr % (os->nr_host_pages_in_blk);
 	void *src_p, *dst_p;
 	sector_t addr;
 
 	for (i = 0; i < os->nr_aps_per_pool; i++) {
 		ap = &os->aps[(pool_idx * os->nr_aps_per_pool) + i];
-		addr = block_to_addr(ap->cur) + ap->cur->next_page * NR_HOST_PAGES_IN_FLASH_PAGE;
+		block = ap->cur;
+		addr = block_to_addr(block) + block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE;
 
 		// if this is the first page in a the ap buffer
 		if (addr == phys->addr) {
 			bio_for_each_segment(bv, bio, j) {
 				dst_p = kmap_atomic(bv->bv_page);
-				src_p = kmap_atomic(&ap->cur->data[idx]);
+				src_p = kmap_atomic(&block->data[data_idx]);
 
 				memcpy(dst_p, src_p, bv->bv_len);
 				kunmap_atomic(dst_p);
@@ -552,7 +577,7 @@ int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 		logical_addr = (bio->bi_sector / NR_PHY_IN_LOG) + i;
 retry:
 		physical_addr = openssd_alloc_addr(os, logical_addr,
-							&victim_block, NULL);
+							&victim_block, 0, NULL);
 
 		/* not used, but used for printing in dm map function */
 		bio->bi_sector = physical_addr * NR_PHY_IN_LOG;

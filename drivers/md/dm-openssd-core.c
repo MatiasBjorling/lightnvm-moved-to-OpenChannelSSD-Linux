@@ -309,9 +309,7 @@ static void openssd_fill_bio_and_end(struct bio *bio)
 	bio_endio(bio, 0);
 }
 
-/* lookup the primary translation table. If there isn't an associated block to
- * the addr. We assume that there is no data and doesn't take a ref */
-struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
+struct nvm_addr *openssd_lookup_ltop_map(struct openssd *os, sector_t l_addr, struct nvm_addr *l2p_map)
 {
 	struct nvm_addr *addr;
 
@@ -319,7 +317,7 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
 
 	while (1) {
 		spin_lock(&os->trans_lock);
-		addr = &os->trans_map[l_addr];
+		addr = &l2p_map[l_addr];
 		spin_unlock(&os->trans_lock);
 
 		if (!addr->block)
@@ -335,6 +333,13 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
 	}
 }
 
+/* lookup the primary translation table. If there isn't an associated block to
+ * the addr. We assume that there is no data and doesn't take a ref */
+struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
+{
+	return openssd_lookup_ltop_map(os, l_addr, os->trans_map);
+}
+
 /* Simple round-robin Logical to physical address translation.
  *
  * Retrieve the mapping using the active append point. Then update the ap for the
@@ -342,7 +347,7 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
  *
  * Returns the physical mapped address.
  */
-static sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
+sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 		struct nvm_block **ret_victim_block, int is_gc, void *private)
 {
 	struct nvm_ap *ap;

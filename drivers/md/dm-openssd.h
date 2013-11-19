@@ -27,6 +27,7 @@
 #include <linux/kthread.h>
 #include <linux/mempool.h>
 #include <linux/kref.h>
+#include <linux/completion.h>
 
 #define DM_MSG_PREFIX "openssd"
 #define LTOP_EMPTY -1
@@ -76,6 +77,8 @@ enum target_flags {
 	NVM_OPT_POOL_SERIALIZE	= 1 << NVM_OPT_MISC_OFFSET,
 	/* Use fast/slow page access pattern */
 	NVM_OPT_FAST_SLOW_PAGES	= 1 << (NVM_OPT_MISC_OFFSET+1),
+	/* Disable dev waits */
+	NVM_OPT_NO_WAITS	= 1 << (NVM_OPT_MISC_OFFSET+2),
 };
 
 /* Pool descriptions */
@@ -252,12 +255,12 @@ struct openssd {
 							   to the next write append point */
 
 	struct workqueue_struct *kbiod_wq;
+	struct workqueue_struct *kgc_wq;
 
 	spinlock_t gc_lock;
 	unsigned int gc_running;
-	struct completion gc_finished;
-	struct completion gc_kick;
-	struct task_struct *kt_openssd; /* handles gc and any other async work */
+	struct work_struct gc_ws;
+	struct timer_list gc_timer;
 
 	/* Hint related*/
 	void *hint_private;
@@ -325,7 +328,8 @@ void openssd_reset_block(struct nvm_block *block);
 
 /* dm-openssd-gc.c */
 void openssd_block_erase(struct kref *);
-int openssd_gc_collect(struct openssd *os);
+void openssd_gc_cb(unsigned long data);
+void openssd_gc_collect(struct work_struct *work);
 void openssd_gc_kick_wait(struct openssd *os);
 
 

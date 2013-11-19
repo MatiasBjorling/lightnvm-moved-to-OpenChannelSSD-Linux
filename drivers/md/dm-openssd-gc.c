@@ -4,6 +4,13 @@
 /* Run only GC if less than 1/X blocks are free */
 #define GC_LIMIT_INVERSE 10
 
+void openssd_gc_cb(unsigned long data)
+{
+	struct openssd *os = (void*) data;
+	queue_work(os->kgc_wq, &os->gc_ws);
+	mod_timer(&os->gc_timer, jiffies + msecs_to_jiffies(os->config.gc_time));
+}
+
 static void __erase_block(struct nvm_block *block)
 {
 	// Perform device erase
@@ -25,9 +32,6 @@ static struct nvm_block* block_prio_find_max(struct nvm_pool *pool)
 {
 	struct list_head *list = &pool->prio_list;
 	struct nvm_block *block, *max;
-	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
-	struct list_head *i, *head;
-	unsigned int k, max2 = 0;
 
 	BUG_ON(list_empty(list));
 
@@ -36,23 +40,6 @@ static struct nvm_block* block_prio_find_max(struct nvm_pool *pool)
 		max = block_max_invalid(max, block);
 	/*DMINFO("GC max: return block with max invalid %d %d",
 	 max->nr_invalid_pages, max->next_page);*/
-
-	if (max->nr_invalid_pages == 0) {
-		list_for_each_safe(head, i, &pool->free_list)
-			free_cnt++;
-		list_for_each_safe(head, i, &pool->used_list)
-			used_cnt++;
-		list_for_each_safe(head, i, &pool->prio_list)
-			prio_cnt++;
-		for (k = 0; k < pool->os->nr_pages; k++) {
-			if (pool->os->trans_map[k].block)
-				max2 = k;
-		}
-		printk("available %u %u %u %u\n",
-				free_cnt, used_cnt, prio_cnt, max2);
-//	list_for_each_entry(block, list, prio)
-//			printk("b: %u\n", block->nr_invalid_pages);
-	}
 
 	return max;
 }
@@ -128,22 +115,13 @@ void openssd_block_release(struct kref *ref)
 	nvm_pool_put_block(block);
 }
 
-int openssd_gc_collect(struct openssd *os)
+void openssd_gc_collect(struct work_struct *work)
 {
+	struct openssd *os = container_of(work, struct openssd, gc_ws);
 	struct nvm_pool *pool;
 	struct nvm_block *block;
 	unsigned int nr_blocks_need;
-	int pid, pid_start, i = 0;
-
-	spin_lock(&os->gc_lock);
-
-	if (os->gc_running) {
-		spin_unlock(&os->gc_lock);
-		return 1;
-	}
-
-	os->gc_running = 1;
-	spin_unlock(&os->gc_lock);
+	int pid, pid_start;
 
 	block = NULL;
 	/* Iterate the pools once to look for pool that has a block to be freed. */
@@ -187,26 +165,16 @@ int openssd_gc_collect(struct openssd *os)
 			kref_put(&block->ref_count, openssd_block_release);
 
 			spin_lock(&pool->lock);
-			i++;
 		}
 		spin_unlock(&pool->lock);
 		//DMERR("Freed %u blocks", i);
 	}
 
 	os->next_collect_pool++;
-
-	spin_lock(&os->gc_lock);
-	os->gc_running = 0;
-	spin_unlock(&os->gc_lock);
-
-	complete(&os->gc_finished);
-
-	return 0;
 }
 
 void openssd_gc_kick_wait(struct openssd *os)
 {
-	complete(&os->gc_kick);
-	if (!wait_for_completion_io_timeout(&os->gc_finished, HZ))
-		DMINFO_LIMIT("GC didn't finish fast enough on wait");
+	queue_work(os->kgc_wq, &os->gc_ws);
+	flush_workqueue(os->kgc_wq);
 }

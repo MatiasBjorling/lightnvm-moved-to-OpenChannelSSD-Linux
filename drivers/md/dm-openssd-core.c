@@ -418,7 +418,7 @@ static void openssd_endio(struct bio *bio, int err)
 
 	openssd_delay_endio_hint(os, bio, pb, &dev_wait);
 
-	if (dev_wait) {
+	if (!(os->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
 		do_gettimeofday(&end_tv);
 		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
 		if (dev_wait > diff)

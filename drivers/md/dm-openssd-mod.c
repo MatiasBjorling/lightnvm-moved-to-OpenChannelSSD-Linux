@@ -44,21 +44,6 @@
 
 static struct kmem_cache *_per_bio_cache;
 
-static int openssd_kthread(void *data)
-{
-	struct openssd *os = (struct openssd *)data;
-	BUG_ON(!os);
-
-	while (!kthread_should_stop()) {
-
-		openssd_gc_collect(os);
-
-		wait_for_completion_timeout(&os->gc_kick, os->config.gc_time * HZ);
-	}
-
-	return 0;
-}
-
 static int openssd_ioctl(struct dm_target *ti, unsigned int cmd,
                          unsigned long arg)
 {
@@ -136,6 +121,7 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 
 	spin_lock_init(&os->gc_lock);
 	spin_lock_init(&os->trans_lock);
+	INIT_WORK(&os->gc_ws, openssd_gc_collect);
 
 	os->pools = kzalloc(sizeof(struct nvm_pool) * os->nr_pools, GFP_KERNEL);
 	if (!os->pools)
@@ -196,9 +182,16 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 		}
 	}
 
-	os->kbiod_wq = alloc_workqueue("kopenssd-work", WQ_MEM_RECLAIM, 0);
+	os->kbiod_wq = alloc_workqueue("kopenssd-work", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
 	if (!os->kbiod_wq) {
 		DMERR("Couldn't start kopenssd-worker");
+		goto err_blocks;
+	}
+
+	os->kgc_wq = alloc_workqueue("kopenssd-gc", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
+	if (!os->kgc_wq) {
+		DMERR("Couldn't start kopenssd-gc");
+		destroy_workqueue(os->kbiod_wq);
 		goto err_blocks;
 	}
 
@@ -263,9 +256,6 @@ static int nvm_init(struct dm_target *ti, struct openssd *os)
 	// Simple round-robin strategy
 	atomic_set(&os->next_write_ap, -1);
 
-	init_completion(&os->gc_finished);
-	init_completion(&os->gc_kick);
-
 	os->lookup_ltop = openssd_lookup_ltop;
 	os->lookup_ptol = openssd_lookup_ptol;
 	os->map_ltop = openssd_alloc_map_ltop_rr;
@@ -282,9 +272,8 @@ static int nvm_init(struct dm_target *ti, struct openssd *os)
 		goto err_block_page_pool;
 
 	// FIXME: Clean up pool init on failure.
-	os->kt_openssd = kthread_run(openssd_kthread, os, "kopenssd");
-	if (!os->kt_openssd)
-		goto err_block_page_pool;
+	setup_timer(&os->gc_timer, openssd_gc_cb, (unsigned long)os);
+	mod_timer(&os->gc_timer, jiffies + msecs_to_jiffies(1000));
 
 	return 0;
 err_block_page_pool:
@@ -384,7 +373,7 @@ static int openssd_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		if (sscanf(argv[7], "%u%c", &tmp, &dummy) == 1) {
 			os->config.gc_time = tmp;
 			if (os->config.gc_time <= 0)
-				os->config.gc_time = 1;
+				os->config.gc_time = 1000;
 		} else {
 			ti->error = "Cannot read gc timing";
 			goto err_map;
@@ -463,8 +452,6 @@ static void openssd_dtr(struct dm_target *ti)
 			flush_scheduled_work();
 	}
 
-	kthread_stop(os->kt_openssd);
-
 	/* TODO: remember outstanding block refs, waiting to be erased... */
 	ssd_for_each_pool(os, pool, i)
 	kfree(pool->blocks);
@@ -475,7 +462,10 @@ static void openssd_dtr(struct dm_target *ti)
 	vfree(os->trans_map);
 	vfree(os->rev_trans_map);
 
+	del_timer(&os->gc_timer);
+
 	destroy_workqueue(os->kbiod_wq);
+	destroy_workqueue(os->kgc_wq);
 	mempool_destroy(os->per_bio_pool);
 	mempool_destroy(os->page_pool);
 

@@ -295,10 +295,13 @@ void openssd_delayed_bio_submit(struct work_struct *work);
 /* Allocation of physical addresses from block when increasing responsibility. */
 sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block, int is_gc);
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
+sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
+
 /* Calls map_ltop_rr. Cannot fail (FIXME: unless out of memory) */
 sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
 
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
+struct nvm_addr *openssd_lookup_ltop_map(struct openssd *os, sector_t l_addr, struct nvm_addr *l2p_map);
 struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
 sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
 

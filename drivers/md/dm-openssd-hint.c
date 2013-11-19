@@ -420,29 +420,29 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	map_alloc_data.flags = MAP_PRIMARY;
 
 	/* do hint */
-	openssd_bio_hint(os, bio);
+	//openssd_bio_hint(os, bio);
 
 	bio_for_each_segment(bv, bio, i) {
-		if (bv->bv_len != PAGE_SIZE && bv->bv_offset != 0) {
-			printk("Doesn't yet support IO sizes other than system page size. (bv_len %u bv_offset %u)", bv->bv_len, bv->bv_offset);
-			return -ENOSPC;
-		}
-
 		logical_addr = (bio->bi_sector / NR_PHY_IN_LOG) + i;
-
 		map_alloc_data.hint_info = openssd_find_hint(os, logical_addr, 1);
 
 		if (map_alloc_data.hint_info && map_alloc_data.hint_info->hint_flags & HINT_LATENCY)
 			numCopies = 2;
-
 		/* Submit bio for all physical addresses*/
 		DMDEBUG("numCopies=%d", numCopies);
 		for(j = 0; j < numCopies; j++) {
-
 			if (j == 1)
 				map_alloc_data.flags = MAP_SHADOW;
-
+retry:
 			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, 0, &map_alloc_data);
+
+			/* not used, but used for printing in dm map function */
+			bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
+
+			if (physical_addr == LTOP_EMPTY) {
+				DMERR_LIMIT("Out of physical addresses. Retry");
+				goto retry;
+			}
 
 			DMDEBUG("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
@@ -662,12 +662,11 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
 static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private)
 {
 	struct openssd_hint_map_private *map_alloc_data = private;
-	struct nvm_ap *ap;
 	sector_t physical_addr;
 
 	/* If there is no hint, or this is a reclaimed ltop mapping,
 	 * use regular (single-page) map_ltop. handle both primary and shadow cases*/
-	if (map_alloc_data->old_p_addr != LTOP_EMPTY || !map_alloc_data->hint_info) {
+	if (is_gc || !map_alloc_data->hint_info) {
 		DMDEBUG("reclaimed or regular allocation");
 		// dont pass map_alloc_data for primary
 		map_alloc_data->flags = openssd_get_mapping_flag(os, logical_addr, map_alloc_data->old_p_addr);
@@ -681,7 +680,7 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 
 		return physical_addr;
 	}
-	DMDEBUG("latency_ltop: allocate page");
+	DMDEBUG("latency_ltop: allocate shaddow page");
 
 	if (map_alloc_data->flags & MAP_PRIMARY) {
 		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, 0, NULL);
@@ -689,14 +688,10 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 		return physical_addr;
 	}
 
-	do {
-		ap = get_next_ap(os);
-	} while (map_alloc_data->prev_ap == ap);
-
-	physical_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
+	physical_addr = openssd_alloc_ltop_rr(os, logical_addr, ret_victim_block, is_gc, map_alloc_data);
 	openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block), map_alloc_data->flags);
 
-	DMDEBUG("retrieved addrs of shadow page");
+	DMDEBUG("got address of shadow page");
 
 	return physical_addr;
 }
@@ -749,6 +744,8 @@ static struct nvm_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t
 	struct openssd_hint *hint = os->hint_private;
 	int pool_idx;
 
+	BUG_ON(!(logical_addr >= 0 && logical_addr < os->nr_pages));
+
 	// shadow is empty
 	if (hint->shadow_map[logical_addr].addr == LTOP_EMPTY) {
 		DMDEBUG("no shadow. read primary");
@@ -759,7 +756,7 @@ static struct nvm_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t
 	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / os->nr_pools);
 	if (atomic_read(&os->pools[pool_idx].is_active)) {
 		DMDEBUG("primary busy. read shadow");
-		return &hint->shadow_map[logical_addr];
+		return openssd_lookup_ltop_map(os, logical_addr, hint->shadow_map);
 	}
 
 	// primary not busy

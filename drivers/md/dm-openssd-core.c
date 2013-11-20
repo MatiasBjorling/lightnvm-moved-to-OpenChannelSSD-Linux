@@ -74,9 +74,9 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 	block = l->block;
 	if (block) {
 		page_offset = l->addr % (os->nr_host_pages_in_blk);
-		DMDEBUG("update generic mapping l_addr %ld p_addr %ld page_offset %ld block addr %ld (block->gc_running %d)", l_addr, p_addr, page_offset, block_to_addr(block), atomic_read(&block->gc_running));
-		spin_lock(&block->lock);
+		//DMDEBUG("update generic mapping l_addr %ld p_addr %ld page_offset %ld block addr %ld (block->gc_running %d)", l_addr, p_addr, page_offset, block_to_addr(block), atomic_read(&block->gc_running));
 		WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
+		spin_lock(&block->lock);
 		block->nr_invalid_pages++;
 		spin_unlock(&block->lock);
 	}
@@ -316,9 +316,8 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
 
 		openssd_set_ap_cur(ap, block);
 		p_addr = openssd_alloc_phys_addr(block);
-		(*ret_victim_block) = block;
 	}
-
+	(*ret_victim_block) = block;
 finished:
 	spin_unlock(&ap->lock);
 
@@ -385,7 +384,7 @@ sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 	p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, is_gc);
 
 	if (p_addr != LTOP_EMPTY) {
-//		DMDEBUG("allocated l_addr %ld p_addr %ld (block addr %ld)", l_addr, p_addr, block_to_addr(*ret_victim_block));
+		WARN_ON(!(*ret_victim_block));
 		return p_addr;
 	}
 
@@ -566,7 +565,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
-int openssd_handle_buffered_write(sector_t p_addr, struct nvm_block *block,
+int openssd_write_data_copy(sector_t p_addr, struct nvm_block *block,
                                   struct bio_vec *bv)
 {
 	struct openssd *os = block->pool->os;
@@ -584,7 +583,7 @@ int openssd_handle_buffered_write(sector_t p_addr, struct nvm_block *block,
 	return atomic_inc_return(&block->data_size);
 }
 
-void openssd_submit_write(struct openssd *os, sector_t physical_addr,
+void openssd_write_submit(struct openssd *os, sector_t physical_addr,
                           struct nvm_block* victim_block, int size)
 {
 	struct bio *issue_bio;
@@ -612,12 +611,9 @@ int openssd_execute_bio(struct openssd *os, struct bio *bio)
 	p_addr = openssd_alloc_addr(os, l_addr, &victim_block, 0, NULL);
 
 	if (victim_block) {
-		/* not used, but used for printing in dm map function */
-		bio->bi_sector = p_addr * NR_PHY_IN_LOG;
-		//DMINFO("WRITE Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
-		size = openssd_handle_buffered_write(p_addr, victim_block,
+		size = openssd_write_data_copy(p_addr, victim_block,
 				bio_iovec(bio));
-		openssd_submit_write(os, p_addr, victim_block, size);
+		openssd_write_submit(os, p_addr, victim_block, size);
 	} else {
 		spin_lock(&os->deferred_lock);
 		bio_list_add(&os->deferred_bios, bio);
@@ -630,7 +626,6 @@ int openssd_execute_bio(struct openssd *os, struct bio *bio)
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 {
 	openssd_execute_bio(os, bio);
-	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -673,9 +668,7 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 		rw |= REQ_SYNC;
 		init_completion(&pb->event);
 		submit_bio(rw, bio);
-		if (!wait_for_completion_io_timeout(&pb->event, 2*HZ)) {
-			DMERR("Sync IO request timed out.");
-		}
+		wait_for_completion_io(&pb->event);
 	} else {
 		submit_bio(rw, bio);
 	}

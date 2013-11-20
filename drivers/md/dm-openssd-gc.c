@@ -67,8 +67,10 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 	struct bio_vec *bv;
 	void *gc_private = NULL;
 
-	if (bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk))
+	if (bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk)) {
+		printk("o0\n");
 		return;
+	}
 
 	printk("o1\n");
 	while ((slot = find_next_zero_bit(block->invalid_pages, os->nr_host_pages_in_blk, slot + 1)) < os->nr_host_pages_in_blk) {
@@ -104,9 +106,9 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 
 		/* Write using regular write machanism */
 		bio_for_each_segment(bv, src_bio, i) {
-			unsigned int size = openssd_handle_buffered_write(dst_addr, victim_block, bv);
+			unsigned int size = openssd_write_data_copy(dst_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-				openssd_submit_write(os, dst_addr, victim_block, size);
+				openssd_write_submit(os, dst_addr, victim_block, size);
 		}
 
 		bio_put(src_bio);
@@ -178,7 +180,6 @@ void openssd_gc_collect(struct work_struct *work)
 	//DMERR("Freed %u blocks", i);
 
 	os->next_collect_pool++;
-	printk("c\n");
 
 	queue_work(os->kbiod_wq, &os->deferred_ws);
 }

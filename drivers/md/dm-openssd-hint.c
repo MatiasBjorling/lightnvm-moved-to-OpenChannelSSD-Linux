@@ -450,9 +450,9 @@ retry:
 
 			DMDEBUG("Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
-			size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
+			size = openssd_write_data_copy(physical_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-				openssd_submit_write(os, physical_addr, victim_block, size);
+				openssd_write_submit(os, physical_addr, victim_block, size);
 		}
 	}
 

@@ -403,7 +403,7 @@ static int openssd_read_bio_hint(struct openssd *os, struct bio *bio)
 	return openssd_read_bio_generic(os, bio);
 }
 
-static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr);
+static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr);
 
 static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 {
@@ -415,7 +415,6 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	unsigned int numCopies = 1;
 	struct openssd_hint_map_private map_alloc_data;
 
-	map_alloc_data.prev_ap = NULL;
 	map_alloc_data.old_p_addr = LTOP_EMPTY;
 	map_alloc_data.flags = MAP_PRIMARY;
 
@@ -428,13 +427,18 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 
 		if (map_alloc_data.hint_info && map_alloc_data.hint_info->hint_flags & HINT_LATENCY)
 			numCopies = 2;
+
 		/* Submit bio for all physical addresses*/
-		DMDEBUG("numCopies=%d", numCopies);
+		DMDEBUG("logical_addr %ld numCopies=%d", logical_addr, numCopies);
 		for(j = 0; j < numCopies; j++) {
+			victim_block = NULL;
 			if (j == 1)
 				map_alloc_data.flags = MAP_SHADOW;
 retry:
 			physical_addr = openssd_alloc_addr(os, logical_addr, &victim_block, 0, &map_alloc_data);
+			/* primary updated. trim old shadow */
+			if(os->config.flags & NVM_OPT_ENGINE_LATENCY && j==0)
+				openssd_trim_map_shadow(os, logical_addr);
 
 			/* not used, but used for printing in dm map function */
 			bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
@@ -450,11 +454,6 @@ retry:
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
 				openssd_submit_write(os, physical_addr, victim_block, size);
 		}
-
-		/* trim old shadow when necessary (currently no support for
-		 * multiple hint types at once) */
-		if(os->config.flags & NVM_OPT_ENGINE_LATENCY && numCopies == 1)
-			openssd_trim_map_shadow(os, logical_addr, physical_addr);
 	}
 
 	/* Processed entire hint */
@@ -613,17 +612,16 @@ static void openssd_update_map_shadow(struct openssd *os,
 	BUG_ON(l_addr >= os->nr_pages);
 	BUG_ON(p_addr >= os->nr_pages);
 
-	DMDEBUG("flags=%lu", flags);
+	DMDEBUG("openssd_update_map_shadow: flags=%lu", flags);
 	/* Secondary mapping. update shadow */
 	if(flags & MAP_SHADOW) {
-		DMDEBUG("update shadow mapping l_addr %ld p_addr %ld", l_addr, p_addr);
-
 		spin_lock(&os->trans_lock);
 		l = &hint->shadow_map[l_addr];
 		block = l->block;
-
+		
 		if (block) {
 			page_offset = l->addr % (os->nr_host_pages_in_blk);
+			DMDEBUG("update shadow mapping l_addr %ld p_addr %ld page_offset %ld block addr %ld l->addr %ld (flags %x block->gc_running %d)", l_addr, p_addr, page_offset, block_to_addr(block), l->addr, flags, atomic_read(&block->gc_running));
 			spin_lock(&block->lock);
 			WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 			block->nr_invalid_pages++;
@@ -664,30 +662,20 @@ static sector_t openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t lo
 	struct openssd_hint_map_private *map_alloc_data = private;
 	sector_t physical_addr;
 
-	/* If there is no hint, or this is a reclaimed ltop mapping,
-	 * use regular (single-page) map_ltop. handle both primary and shadow cases*/
-	if (is_gc || !map_alloc_data->hint_info) {
-		DMDEBUG("reclaimed or regular allocation");
-		// dont pass map_alloc_data for primary
+	/* reclaimed write. need to know if we're reclaiming primary/shaddow*/
+	if (is_gc) {
 		map_alloc_data->flags = openssd_get_mapping_flag(os, logical_addr, map_alloc_data->old_p_addr);
-		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, 0,
-		                (map_alloc_data->flags & MAP_SHADOW) ? map_alloc_data : NULL);
-
-		// will do nothing if primary
-		DMDEBUG("update_map_shaddow");
-		openssd_update_map_shadow(os, logical_addr, physical_addr,
-		                          (*ret_victim_block), map_alloc_data->flags);
-
-		return physical_addr;
+		DMDEBUG("gc write. flags %x", map_alloc_data->flags);
 	}
-	DMDEBUG("latency_ltop: allocate shaddow page");
+	DMDEBUG("latency_ltop: allocate primary and shaddow pages");
 
+	/* primary -> allcoate and update generic mapping */
 	if (map_alloc_data->flags & MAP_PRIMARY) {
-		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, 0, NULL);
-		map_alloc_data->prev_ap = block_to_ap(os, (*ret_victim_block));
+		physical_addr = openssd_alloc_map_ltop_rr(os, logical_addr, ret_victim_block, is_gc, NULL);
 		return physical_addr;
 	}
 
+	/* shaddow -> allocate and update shaddow mapping*/
 	physical_addr = openssd_alloc_ltop_rr(os, logical_addr, ret_victim_block, is_gc, map_alloc_data);
 	openssd_update_map_shadow(os, logical_addr, physical_addr, (*ret_victim_block), map_alloc_data->flags);
 
@@ -769,50 +757,55 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
 	struct openssd_hint *hint = os->hint_private;
 	unsigned long flag = MAP_PRIMARY;
 
-	//DMINFO("os->trans_map[%ld].addr %ld hint->shadow_map[%ld].addr", logical_addr, os->trans_map[logical_addr].addr, logical_addr, hint->shadow_map[logical_addr].addr);
 	if(old_p_addr != LTOP_EMPTY) {
-		flag = MAP_SINGLE;
+		DMDEBUG("get_flag old_p_addr %ld os->trans_map[%ld].addr %ld hint->shadow_map[%ld].addr %ld", old_p_addr, logical_addr, os->trans_map[logical_addr].addr, logical_addr, hint->shadow_map[logical_addr].addr);
+		spin_lock(&os->trans_lock);
 		if(os->trans_map[logical_addr].addr == old_p_addr)
-			flag |= MAP_PRIMARY;
+			flag = MAP_PRIMARY;
 		else if(hint->shadow_map[logical_addr].addr == old_p_addr)
-			flag |= MAP_SHADOW;
+			flag = MAP_SHADOW;
 		else {
 			DMERR("Reclaiming a physical page %ld not mapped by any logical addr", old_p_addr);
 			WARN_ON(true);
 		}
+		spin_unlock(&os->trans_lock);
 	}
 
 	return flag;
 }
 
 // if we ever support trim, this may be unified with some generic function
-static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr, sector_t p_addr)
+static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct nvm_addr *l;
 	struct nvm_block *block;
 	unsigned int page_offset;
+	sector_t p_addr;
 
 	BUG_ON(l_addr >= os->nr_pages);
-	BUG_ON(p_addr >= os->nr_pages);
 
 	spin_lock(&os->trans_lock);
 	l = &hint->shadow_map[l_addr];
 	block = l->block;
+	p_addr = l->addr;
 
 	DMDEBUG("trim old shaddow");
 	if (block) {
+		BUG_ON(p_addr >= os->nr_pages);
+
 		page_offset = l->addr % (os->nr_host_pages_in_blk);
+		DMDEBUG("trim map shadow l_addr %ld p_addr %ld page_offset %ld ", l_addr, p_addr, page_offset);
 		spin_lock(&block->lock);
 		WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 		block->nr_invalid_pages++;
 		spin_unlock(&block->lock);
+	
+		os->rev_trans_map[p_addr] = LTOP_EMPTY;
 	}
 
 	l->addr = 0;
 	l->block = 0;
-
-	os->rev_trans_map[p_addr] = l_addr;
 	spin_unlock(&os->trans_lock);
 }
 

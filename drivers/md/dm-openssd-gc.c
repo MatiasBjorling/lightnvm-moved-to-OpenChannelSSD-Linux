@@ -160,6 +160,7 @@ void openssd_gc_collect(struct work_struct *work)
 			/* rewrite to have moves outside lock. i.e. so we can
 			 * prepare multiple pages in parallel on the attached
 			 * device. */
+			DMDEBUG("moving block addr %ld", block_to_addr(block));
 			openssd_move_valid_pages(os, block);
 
 			kref_put(&block->ref_count, openssd_block_release);

@@ -61,6 +61,7 @@ void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
 	block = l->block;
 	if (block) {
 		page_offset = l->addr % (os->nr_host_pages_in_blk);
+		DMDEBUG("update generic mapping l_addr %ld p_addr %ld page_offset %ld block addr %ld (block->gc_running %d)", l_addr, p_addr, page_offset, block_to_addr(block), atomic_read(&block->gc_running));
 		spin_lock(&block->lock);
 		WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 		block->nr_invalid_pages++;
@@ -364,6 +365,7 @@ sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 		openssd_gc_kick_wait(os);
 	}
 
+	DMDEBUG("allocated l_addr %ld p_addr %ld (block addr %ld)", l_addr, p_addr, block_to_addr(*ret_victim_block));
 	return p_addr;
 }
 

@@ -119,9 +119,10 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 	struct nvm_ap *ap;
 	int i, j;
 
-	spin_lock_init(&os->gc_lock);
 	spin_lock_init(&os->trans_lock);
-	INIT_WORK(&os->gc_ws, openssd_gc_collect);
+	spin_lock_init(&os->deferred_lock);
+	INIT_WORK(&os->deferred_ws, openssd_deferred_bio_submit);
+	bio_list_init(&os->deferred_bios);
 
 	os->pools = kzalloc(sizeof(struct nvm_pool) * os->nr_pools, GFP_KERNEL);
 	if (!os->pools)
@@ -129,22 +130,27 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 
 	ssd_for_each_pool(os, pool, i) {
 		spin_lock_init(&pool->lock);
+		spin_lock_init(&pool->gc_lock);
+		spin_lock_init(&pool->waiting_lock);
+
+		init_completion(&pool->gc_finished);
+
+		INIT_WORK(&pool->gc_ws, openssd_gc_collect);
+		INIT_WORK(&pool->waiting_ws, openssd_delayed_bio_submit);
 
 		INIT_LIST_HEAD(&pool->free_list);
 		INIT_LIST_HEAD(&pool->used_list);
 		INIT_LIST_HEAD(&pool->prio_list);
 
+		pool->os = os;
 		pool->phy_addr_start = i * os->nr_blks_per_pool;
 		pool->phy_addr_end = (i + 1) * os->nr_blks_per_pool - 1;
-
 		pool->nr_free_blocks = pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
-		pool->blocks = kzalloc(sizeof(struct nvm_block) * pool->nr_blocks, GFP_KERNEL);
-		pool->os = os;
-		spin_lock_init(&pool->waiting_lock);
+
 		bio_list_init(&pool->waiting_bios);
-		INIT_WORK(&pool->waiting_ws, openssd_delayed_bio_submit);
 		atomic_set(&pool->is_active, 0);
 
+		pool->blocks = kzalloc(sizeof(struct nvm_block) * pool->nr_blocks, GFP_KERNEL);
 		if (!pool->blocks)
 			goto err_blocks;
 
@@ -171,24 +177,22 @@ static int nvm_pool_init(struct openssd *os, struct dm_target *ti)
 
 		block = nvm_pool_get_block(ap->pool, 0);
 		openssd_set_ap_cur(ap, block);
+		/* Emergency gc block */
+		block = nvm_pool_get_block(ap->pool, 1);
+		ap->gc_cur = block;
 
 		ap->t_read = os->config.t_read;
 		ap->t_write = os->config.t_write;
 		ap->t_erase = os->config.t_erase;
-
-	}
-	ssd_for_each_pool(os, pool, i) {
-		for (j = 0; j < os->nr_aps_per_pool; j++) {
-		}
 	}
 
-	os->kbiod_wq = alloc_workqueue("kopenssd-work", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
+	os->kbiod_wq = alloc_workqueue("kopenssd-work", WQ_MEM_RECLAIM, 0);
 	if (!os->kbiod_wq) {
 		DMERR("Couldn't start kopenssd-worker");
 		goto err_blocks;
 	}
 
-	os->kgc_wq = alloc_workqueue("kopenssd-gc", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
+	os->kgc_wq = alloc_workqueue("kopenssd-gc", WQ_MEM_RECLAIM, 0);
 	if (!os->kgc_wq) {
 		DMERR("Couldn't start kopenssd-gc");
 		destroy_workqueue(os->kbiod_wq);

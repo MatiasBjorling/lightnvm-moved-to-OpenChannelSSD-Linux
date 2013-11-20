@@ -31,7 +31,7 @@
 
 #define DM_MSG_PREFIX "openssd"
 #define LTOP_EMPTY -1
-
+#define LTOP_DEFER -2
 /*
  * For now we hardcode the configuration for the OpenSSD unit that we own. In
  * the future this should be made configurable.
@@ -125,10 +125,14 @@ struct nvm_pool {
 	/* Pool block lists */
 	struct {
 		spinlock_t lock;
-		struct list_head used_list;	/* In-use blocks */
-		struct list_head free_list;	/* Not used blocks i.e. released and ready for use */
-		struct list_head prio_list;	/* Prioritized list of blocks. Sorted according to cost/benefit. */
 	} ____cacheline_aligned_in_smp;
+	struct {
+		spinlock_t gc_lock;
+	} ____cacheline_aligned_in_smp;
+
+	struct list_head used_list;	/* In-use blocks */
+	struct list_head free_list;	/* Not used blocks i.e. released and ready for use */
+	struct list_head prio_list;	/* Blocks that may be GC'ed. */
 
 	unsigned long phy_addr_start;	/* References the physical start block */
 	unsigned int phy_addr_end;		/* References the physical end block */
@@ -141,9 +145,14 @@ struct nvm_pool {
 
 	/* Postpone issuing I/O if append point is active */
 	atomic_t is_active;
-	struct work_struct waiting_ws;
+
 	spinlock_t waiting_lock;
+	struct work_struct waiting_ws;
 	struct bio_list waiting_bios;
+
+	unsigned int gc_running;
+	struct completion gc_finished;
+	struct work_struct gc_ws;
 };
 
 /*
@@ -159,6 +168,7 @@ struct nvm_ap {
 	struct openssd *parent;
 	struct nvm_pool *pool;
 	struct nvm_block *cur;
+	struct nvm_block *gc_cur;
 
 	/* Timings used for end_io waiting */
 	unsigned long t_read;
@@ -175,7 +185,7 @@ struct nvm_ap {
 struct nvm_config {
 	unsigned long flags;
 
-	unsigned int gc_time;		/* GC every X seconds */
+	unsigned int gc_time;		/* GC every X microseconds */
 
 	unsigned int t_read;
 	unsigned int t_write;
@@ -257,9 +267,10 @@ struct openssd {
 	struct workqueue_struct *kbiod_wq;
 	struct workqueue_struct *kgc_wq;
 
-	spinlock_t gc_lock;
-	unsigned int gc_running;
-	struct work_struct gc_ws;
+	spinlock_t deferred_lock;
+	struct work_struct deferred_ws;
+	struct bio_list deferred_bios;
+
 	struct timer_list gc_timer;
 
 	/* Hint related*/
@@ -294,6 +305,7 @@ sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct nvm_block **
 
 /*   Naive implementations */
 void openssd_delayed_bio_submit(struct work_struct *work);
+void openssd_deferred_bio_submit(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
 sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block, int is_gc);
@@ -313,6 +325,7 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 void openssd_submit_write(struct openssd *os, sector_t physical_addr,
                           struct nvm_block* victim_block, int size);
 int openssd_handle_buffered_write(sector_t physical_addr, struct nvm_block *victim_block, struct bio_vec *bv);
+int openssd_execute_bio(struct openssd *os, struct bio *bio);
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
 int openssd_read_bio_generic(struct openssd *os, struct bio *bio);
 void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
@@ -330,7 +343,7 @@ void openssd_reset_block(struct nvm_block *block);
 void openssd_block_erase(struct kref *);
 void openssd_gc_cb(unsigned long data);
 void openssd_gc_collect(struct work_struct *work);
-void openssd_gc_kick_wait(struct openssd *os);
+void openssd_gc_kick(struct nvm_pool *pool);
 
 
 /* dm-openssd-hint.c */
@@ -370,7 +383,9 @@ static inline int block_is_full(struct nvm_block *block)
 
 static inline sector_t block_to_addr(struct nvm_block *block)
 {
-	struct openssd *os = block->pool->os;
+	struct openssd *os;
+	BUG_ON(!block);
+	os = block->pool->os;
 	return block->id * os->nr_host_pages_in_blk;
 }
 

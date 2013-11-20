@@ -34,6 +34,19 @@ static void free_per_bio_data(struct openssd *os, struct per_bio_data *pb)
 	mempool_free(pb, os->per_bio_pool);
 }
 
+void openssd_deferred_bio_submit(struct work_struct *work)
+{
+	struct openssd *os = container_of(work, struct openssd, deferred_ws);
+	struct bio *bio;
+
+	spin_lock(&os->deferred_lock);
+	bio = bio_list_get(&os->deferred_bios);
+	spin_unlock(&os->deferred_lock);
+
+	for_each_bio(bio)
+		openssd_execute_bio(os, bio);
+}
+
 void openssd_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
@@ -282,20 +295,33 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
 	p_addr = openssd_alloc_phys_addr(block);
 
 	if (p_addr == LTOP_EMPTY) {
-		block = nvm_pool_get_block(pool, is_gc);
+		block = nvm_pool_get_block(pool, 0);
 
 		if (!block) {
-			spin_unlock(&ap->lock);
-			return LTOP_EMPTY;
+			if (is_gc) {
+				p_addr = openssd_alloc_phys_addr(ap->gc_cur);
+				if (p_addr == LTOP_EMPTY) {
+					block = nvm_pool_get_block(pool, 1);
+					if (!block)
+						DMERR("No more blocks");
+					ap->gc_cur = block;
+					ap->gc_cur->ap = ap;
+					p_addr =
+						openssd_alloc_phys_addr(ap->gc_cur);
+				}
+				(*ret_victim_block) = ap->gc_cur;
+			}
+			goto finished;
 		}
 
 		openssd_set_ap_cur(ap, block);
 		p_addr = openssd_alloc_phys_addr(block);
+		(*ret_victim_block) = block;
 	}
 
+finished:
 	spin_unlock(&ap->lock);
 
-	(*ret_victim_block) = block;
 	return p_addr;
 }
 
@@ -354,19 +380,20 @@ sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
 	struct nvm_ap *ap;
 	sector_t p_addr;
 
-	while (1) {
-		ap = get_next_ap(os);
+	ap = get_next_ap(os);
 
-		p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, is_gc);
+	p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, is_gc);
 
-		if (p_addr != LTOP_EMPTY)
-			break;
-
-		openssd_gc_kick_wait(os);
+	if (p_addr != LTOP_EMPTY) {
+//		DMDEBUG("allocated l_addr %ld p_addr %ld (block addr %ld)", l_addr, p_addr, block_to_addr(*ret_victim_block));
+		return p_addr;
 	}
 
-	DMDEBUG("allocated l_addr %ld p_addr %ld (block addr %ld)", l_addr, p_addr, block_to_addr(*ret_victim_block));
-	return p_addr;
+	openssd_gc_kick(ap->pool);
+
+	WARN_ON(is_gc);
+
+	return LTOP_EMPTY;
 }
 
 sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
@@ -375,7 +402,9 @@ sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
 	sector_t p_addr;
 
 	p_addr = openssd_alloc_ltop_rr(os, l_addr, ret_victim_block, is_gc, private);
-	openssd_update_map_generic(os, l_addr, p_addr, (*ret_victim_block));
+
+	if (p_addr != LTOP_EMPTY)
+		openssd_update_map_generic(os, l_addr, p_addr, (*ret_victim_block));
 
 	return p_addr;
 }
@@ -409,9 +438,9 @@ static void openssd_endio(struct bio *bio, int err)
 			mempool_free(block->data, os->block_page_pool);
 			block->data = NULL;
 
-			spin_lock(&pool->lock);
+			spin_lock(&pool->gc_lock);
 			list_add_tail(&block->prio, &pool->prio_list);
-			spin_unlock(&pool->lock);
+			spin_unlock(&pool->gc_lock);
 		}
 		dev_wait = ap->t_write;
 	} else {
@@ -573,35 +602,34 @@ void openssd_submit_write(struct openssd *os, sector_t physical_addr,
 	openssd_submit_bio(os, victim_block, WRITE, issue_bio, 0);
 }
 
-int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
+int openssd_execute_bio(struct openssd *os, struct bio *bio)
 {
-	struct nvm_block *victim_block;
-	struct bio_vec *bv;
-	sector_t logical_addr, physical_addr;
-	int i, size;
+	struct nvm_block *victim_block = NULL;
+	sector_t l_addr, p_addr;
+	int size;
 
-	bio_for_each_segment(bv, bio, i) {
-		logical_addr = (bio->bi_sector / NR_PHY_IN_LOG) + i;
-retry:
-		physical_addr = openssd_alloc_addr(os, logical_addr,
-							&victim_block, 0, NULL);
+	l_addr = (bio->bi_sector / NR_PHY_IN_LOG);
+	p_addr = openssd_alloc_addr(os, l_addr, &victim_block, 0, NULL);
 
+	if (victim_block) {
 		/* not used, but used for printing in dm map function */
-		bio->bi_sector = physical_addr * NR_PHY_IN_LOG;
-
-		if (physical_addr == LTOP_EMPTY) {
-			DMERR_LIMIT("Out of physical addresses. Retry");
-			goto retry;
-		}
-
-		/* Submit bio for all physical addresses*/
+		bio->bi_sector = p_addr * NR_PHY_IN_LOG;
 		//DMINFO("WRITE Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
-
-		size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
-		if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-			openssd_submit_write(os, physical_addr, victim_block, size);
+		size = openssd_handle_buffered_write(p_addr, victim_block,
+				bio_iovec(bio));
+		openssd_submit_write(os, p_addr, victim_block, size);
+	} else {
+		spin_lock(&os->deferred_lock);
+		bio_list_add(&os->deferred_bios, bio);
+		spin_unlock(&os->deferred_lock);
 	}
 
+	return 0;
+}
+
+int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
+{
+	openssd_execute_bio(os, bio);
 	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
@@ -616,7 +644,7 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 	pb->ap = ap;
 	pb->block = block;
 	pb->physical_addr = bio->bi_sector;
-	pb->sync = 0;
+	pb->sync = sync;
 
 	if (rw == WRITE)
 		bio->bi_end_io = openssd_end_write_bio;
@@ -643,10 +671,11 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 
 	if (sync) {
 		rw |= REQ_SYNC;
-		pb->sync = 1;
 		init_completion(&pb->event);
 		submit_bio(rw, bio);
-		wait_for_completion_io_timeout(&pb->event, 2*HZ);
+		if (!wait_for_completion_io_timeout(&pb->event, 2*HZ)) {
+			DMERR("Sync IO request timed out.");
+		}
 	} else {
 		submit_bio(rw, bio);
 	}

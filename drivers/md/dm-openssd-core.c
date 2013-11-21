@@ -43,8 +43,10 @@ void openssd_deferred_bio_submit(struct work_struct *work)
 	bio = bio_list_get(&os->deferred_bios);
 	spin_unlock(&os->deferred_lock);
 
-	for_each_bio(bio) /* TODO: remember private is lost */
+	for_each_bio(bio) {/* TODO: remember private is lost */
 		openssd_write_execute_bio(os, bio, 0, NULL);
+		bio_put(bio);
+	}
 }
 
 void openssd_delayed_bio_submit(struct work_struct *work)
@@ -81,8 +83,6 @@ struct nvm_addr *openssd_update_map(struct openssd *os, sector_t l_addr,
 	struct nvm_addr *p;
 
 	BUG_ON(l_addr >= os->nr_pages);
-	if (p_addr >= os->nr_pages)
-		printk("l %llu p %llu b %u\n", l_addr, p_addr, p_block->id);
 	BUG_ON(p_addr >= os->nr_pages);
 
 	spin_lock(&os->trans_lock);
@@ -277,18 +277,6 @@ void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 	ap->cur->ap = ap;
 }
 
-void openssd_print_total_blocks(struct openssd *os)
-{
-	struct nvm_pool *pool;
-	unsigned int total = 0;
-	int i;
-
-	ssd_for_each_pool(os, pool, i)
-	total += pool->nr_free_blocks;
-
-	DMDEBUG("Total free blocks: %u", total);
-}
-
 sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr)
 {
 	sector_t addr;
@@ -326,7 +314,8 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
 					p_addr =
 						openssd_alloc_phys_addr(ap->gc_cur);
 				}
-				(*ret_victim_block) = ap->gc_cur;
+				*ret_victim_block = ap->gc_cur;
+				BUG_ON(!ap->gc_cur);
 			}
 			goto finished;
 		}
@@ -334,7 +323,7 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
 		openssd_set_ap_cur(ap, block);
 		p_addr = openssd_alloc_phys_addr(block);
 	}
-	(*ret_victim_block) = block;
+	*ret_victim_block = block;
 finished:
 	spin_unlock(&ap->lock);
 
@@ -391,23 +380,22 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t l_addr)
  * Returns the physical mapped address.
  */
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr,
-		struct nvm_block **ret_victim_block, int is_gc, void *private)
+		struct nvm_block **block, int is_gc, void *private)
 {
 	struct nvm_ap *ap;
 	sector_t p_addr;
 
 	ap = get_next_ap(os);
 
-	p_addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, is_gc);
+	p_addr = openssd_alloc_addr_from_ap(ap, block, is_gc);
 
-	if (p_addr != LTOP_EMPTY) {
-		WARN_ON(!(*ret_victim_block));
+	if (p_addr != LTOP_EMPTY)
 		return p_addr;
-	}
 
 	openssd_gc_kick(ap->pool);
 
 	WARN_ON(is_gc);
+	WARN_ON((*block));
 
 	return LTOP_EMPTY;
 }
@@ -421,7 +409,7 @@ struct nvm_addr *openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
 
 	p_addr = openssd_alloc_ltop_rr(os, l_addr, &block, is_gc, private);
 
-	if (!block)
+	if (block)
 		addr = openssd_update_map(os, l_addr, p_addr, block);
 
 	return addr;
@@ -572,6 +560,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 	bio->bi_sector = p->addr * NR_PHY_IN_LOG +
 					(bio->bi_sector % NR_PHY_IN_LOG);
 
+	
 	if (!p->block) {
 		bio->bi_sector = 0;
 		openssd_fill_bio_and_end(bio);
@@ -647,6 +636,7 @@ int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
 		spin_lock(&os->deferred_lock);
 		bio_list_add(&os->deferred_bios, bio);
 		spin_unlock(&os->deferred_lock);
+		bio_get(bio);
 	}
 
 	return 0;

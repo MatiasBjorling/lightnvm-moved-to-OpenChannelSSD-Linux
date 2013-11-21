@@ -887,21 +887,29 @@ int openssd_alloc_hint(struct openssd *os)
 		init_ap_hint(ap);
 	}
 
-	os->write_bio = openssd_write_bio_hint;
-	os->read_bio = openssd_read_bio_hint;
-	os->begin_gc_private = openssd_begin_gc_hint;
-	os->end_gc_private = openssd_end_gc_hint;
 	if (os->config.flags & NVM_OPT_ENGINE_SWAP) {
 		DMINFO("Swap hint support");
 		os->map_ltop = openssd_map_swap_hint_ltop_rr;
+		os->write_bio = openssd_write_bio_hint;
+		os->read_bio = openssd_read_bio_hint;
+		os->begin_gc_private = openssd_begin_gc_hint;
+		os->end_gc_private = openssd_end_gc_hint;
 	} else if (os->config.flags & NVM_OPT_ENGINE_LATENCY) {
 		DMINFO("Latency hint support");
 		os->map_ltop = openssd_map_latency_hint_ltop_rr;
 		os->lookup_ltop = openssd_latency_lookup_ltop;
+		os->write_bio = openssd_write_bio_hint;
+		os->read_bio = openssd_read_bio_hint;
+		os->begin_gc_private = openssd_begin_gc_hint;
+		os->end_gc_private = openssd_end_gc_hint;
 	} else if (os->config.flags & NVM_OPT_ENGINE_PACK) {
 		DMINFO("Pack hint support");
 		os->map_ltop = openssd_map_pack_hint_ltop_rr;
 		os->alloc_phys_addr = openssd_alloc_phys_addr_pack;
+		os->write_bio = openssd_write_bio_hint;
+		os->read_bio = openssd_read_bio_hint;
+		os->begin_gc_private = openssd_begin_gc_hint;
+		os->end_gc_private = openssd_end_gc_hint;
 
 		if (os->nr_aps_per_pool < 2 ) {
 			DMERR("Need at least 2 aps for pack hints");

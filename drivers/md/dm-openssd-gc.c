@@ -65,13 +65,11 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 	int slot = -1;
 	void *gc_private = NULL;
 
-	if (bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk)) {
-		printk("o0\n");
+	if (bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk))
 		return;
-	}
 
 	printk("o1\n");
-	while ((slot = find_next_zero_bit(block->invalid_pages, os->nr_host_pages_in_blk, slot + 1)) < os->nr_host_pages_in_blk) {
+	while ((slot = find_first_zero_bit(block->invalid_pages, os->nr_host_pages_in_blk)) < os->nr_host_pages_in_blk) {
 		/* Perform read */
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
@@ -96,7 +94,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		 * place */
 		src_bio->bi_sector = l_addr;
 
-		//DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", p_addr, l_addr, l_addr, os->trans_map[l_addr].addr);
+		//DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", src.addr, l_addr, l_addr, os->trans_map[l_addr].addr);
 
 		if (os->begin_gc_private)
 			gc_private = os->begin_gc_private(l_addr, src.addr, block);
@@ -109,7 +107,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		bio_put(src_bio);
 		mempool_free(page, os->page_pool);
 	}
-	BUG_ON(!bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk));
+	WARN_ON(!bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk));
 	printk("o2\n");
 }
 

@@ -199,7 +199,7 @@ struct openssd;
 typedef struct nvm_addr *(map_ltop_fn)(struct openssd *, sector_t, int, void *);
 typedef struct nvm_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
-typedef int (write_bio_fn)(struct openssd *, struct bio *);
+typedef int (write_bio_fn)(struct openssd *, struct bio *, int deferred);
 typedef int (read_bio_fn)(struct openssd *, struct bio *);
 typedef void (alloc_phys_addr_fn)(struct openssd *, struct nvm_block *);
 typedef void *(begin_gc_private_fn)(sector_t, sector_t, struct nvm_block *);
@@ -328,7 +328,7 @@ sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
 void openssd_submit_bio(struct openssd *os, struct nvm_addr *p, int rw, struct bio *bio, int sync);
 struct bio *openssd_write_init_bio(struct openssd *os, struct bio *bio, struct nvm_addr *p);
 int openssd_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
-int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
+int openssd_write_bio_generic(struct openssd *os, struct bio *bio, int deferred);
 int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc, void *private);
 int openssd_read_bio_generic(struct openssd *os, struct bio *bio);
 struct nvm_addr *openssd_update_map(struct openssd *os,  sector_t l_addr,

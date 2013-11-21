@@ -44,7 +44,7 @@ void openssd_deferred_bio_submit(struct work_struct *work)
 	spin_unlock(&os->deferred_lock);
 
 	for_each_bio(bio) {/* TODO: remember private is lost */
-		openssd_write_execute_bio(os, bio, 0, NULL);
+		os->write_bio(os, bio, 1);
 		bio_put(bio);
 	}
 }
@@ -67,12 +67,9 @@ void invalidate_block_page(struct openssd *os, struct nvm_addr *p)
 	unsigned int page_offset;
 	struct nvm_block *block = p->block;
 
-	if (!block)
-		return;
-
 	page_offset = p->addr % os->nr_host_pages_in_blk;
-	WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 	spin_lock(&block->lock);
+	WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 	block->nr_invalid_pages++;
 	spin_unlock(&block->lock);
 }
@@ -90,11 +87,12 @@ struct nvm_addr *openssd_update_map(struct openssd *os, sector_t l_addr,
 
 	while (atomic_inc_return(&p->inflight) != 1) {
 		atomic_dec(&p->inflight);
-		DMERR("waiting on previous write to finish");
+		DMERR("w");
 		udelay(100);
 	}
 
-	invalidate_block_page(os, p);
+	if (p->block)
+		invalidate_block_page(os, p);
 
 	p->addr = p_addr;
 	p->block = p_block;
@@ -157,7 +155,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 		return NULL;
 	}
 
-	while(!is_gc && pool->nr_free_blocks <= os->nr_aps_per_pool * 4) {
+	while(!is_gc && pool->nr_free_blocks <= os->nr_pools * 2) {
 		spin_unlock(&pool->lock);
 		return NULL;
 	}
@@ -307,8 +305,10 @@ sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap,
 				p_addr = openssd_alloc_phys_addr(ap->gc_cur);
 				if (p_addr == LTOP_EMPTY) {
 					block = nvm_pool_get_block(pool, 1);
-					if (!block)
+					if (!block) {
 						DMERR("No more blocks");
+						BUG_ON(1);
+					}
 					ap->gc_cur = block;
 					ap->gc_cur->ap = ap;
 					p_addr =
@@ -411,6 +411,11 @@ struct nvm_addr *openssd_alloc_map_ltop_rr(struct openssd *os, sector_t l_addr,
 
 	if (block)
 		addr = openssd_update_map(os, l_addr, p_addr, block);
+
+	if (is_gc) {
+		//printk("l: %llu b: %u\n", p_addr, block->id);
+	}
+
 
 	return addr;
 }
@@ -618,6 +623,7 @@ struct bio *openssd_write_init_bio(struct openssd *os, struct bio *bio,
 	return issue_bio;
 }
 
+/* returns 0 if deferred */
 int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
 		void *private)
 {
@@ -630,22 +636,23 @@ int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
 
 	if (p) {
 		issue_bio = openssd_write_init_bio(os, bio, p);
-		openssd_submit_bio(os, p, WRITE, issue_bio, 0);
+		openssd_submit_bio(os, p, WRITE, issue_bio, is_gc);
+		return 1;
 	} else {
 		BUG_ON(is_gc);
 		spin_lock(&os->deferred_lock);
 		bio_list_add(&os->deferred_bios, bio);
 		spin_unlock(&os->deferred_lock);
 		bio_get(bio);
+		return 0;
 	}
-
-	return 0;
 }
 
-int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
+int openssd_write_bio_generic(struct openssd *os, struct bio *bio, int deferred)
 {
 	openssd_write_execute_bio(os, bio, 0, NULL);
-	bio_endio(bio, 0);
+	if (!deferred)
+		bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 

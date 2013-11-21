@@ -28,10 +28,10 @@
 #include <linux/mempool.h>
 #include <linux/kref.h>
 #include <linux/completion.h>
+#include <linux/hashtable.h>
 
 #define DM_MSG_PREFIX "openssd"
 #define LTOP_EMPTY -1
-#define LTOP_DEFER -2
 /*
  * For now we hardcode the configuration for the OpenSSD unit that we own. In
  * the future this should be made configurable.
@@ -119,6 +119,8 @@ struct nvm_block {
 struct nvm_addr {
 	sector_t addr;
 	struct nvm_block *block;
+	struct hlist_node *list;
+	atomic_t inflight;
 };
 
 struct nvm_pool {
@@ -194,7 +196,7 @@ struct nvm_config {
 
 struct openssd;
 
-typedef sector_t (map_ltop_fn)(struct openssd *, sector_t, struct nvm_block **, int, void *);
+typedef struct nvm_addr *(map_ltop_fn)(struct openssd *, sector_t, int, void *);
 typedef struct nvm_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
 typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
 typedef int (write_bio_fn)(struct openssd *, struct bio *);
@@ -273,6 +275,9 @@ struct openssd {
 
 	struct timer_list gc_timer;
 
+	/* in-flight data lookup, lookup by logical address */
+	struct hlist_head *inflight;
+
 	/* Hint related*/
 	void *hint_private;
 
@@ -282,7 +287,7 @@ struct openssd {
 
 struct per_bio_data {
 	struct nvm_ap *ap;
-	struct nvm_block *block;
+	struct nvm_addr *addr;
 	struct timeval start_tv;
 	sector_t physical_addr;
 
@@ -298,6 +303,7 @@ struct per_bio_data {
 /*   Helpers */
 void openssd_print_total_blocks(struct openssd *os);
 
+void invalidate_block_page(struct openssd *os, struct nvm_addr *p);
 void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block);
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc);
 sector_t openssd_alloc_phys_addr(struct nvm_block *block);
@@ -309,11 +315,11 @@ void openssd_deferred_bio_submit(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
 sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block, int is_gc);
-sector_t openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
+struct nvm_addr *openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, int is_gc, void *private);
 sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
 
 /* Calls map_ltop_rr. Cannot fail (FIXME: unless out of memory) */
-sector_t openssd_alloc_addr(struct openssd *os, sector_t logical_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
+struct nvm_addr *openssd_alloc_addr(struct openssd *os, sector_t logical_addr, int is_gc, void *private);
 
 /* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
 struct nvm_addr *openssd_lookup_ltop_map(struct openssd *os, sector_t l_addr, struct nvm_addr *l2p_map);
@@ -321,15 +327,14 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
 sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
 
 /*   I/O bio related */
-void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, struct bio *bio, int sync);
-void openssd_submit_write(struct openssd *os, sector_t physical_addr,
-                          struct nvm_block* victim_block, int size);
-int openssd_handle_buffered_write(sector_t physical_addr, struct nvm_block *victim_block, struct bio_vec *bv);
-int openssd_execute_bio(struct openssd *os, struct bio *bio);
+void openssd_submit_bio(struct openssd *os, struct nvm_addr *p, int rw, struct bio *bio, int sync);
+struct bio *openssd_write_init_bio(struct openssd *os, struct bio *bio, struct nvm_addr *p);
+int openssd_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
+int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc, void *private);
 int openssd_read_bio_generic(struct openssd *os, struct bio *bio);
-void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
-                                sector_t p_addr, struct nvm_block *p_block);
+struct nvm_addr *openssd_update_map(struct openssd *os,  sector_t l_addr,
+				    sector_t p_addr, struct nvm_block *p_block);
 
 /*   NVM device related */
 void openssd_block_release(struct kref *);

@@ -68,7 +68,6 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 {
 	struct openssd *os = ti->private;
 	int ret;
-	sector_t l_addr = bio->bi_sector;
 
 	bio->bi_bdev = os->dev->bdev;
 
@@ -231,8 +230,11 @@ static int nvm_init(struct dm_target *ti, struct openssd *os)
 	memset(os->trans_map, 0, sizeof(struct nvm_addr) * os->nr_pages);
 
 	// initial l2p is LTOP_EMPTY
-	for (i = 0; i < os->nr_pages; i++)
-		os->trans_map[i].addr = LTOP_EMPTY;
+	for (i = 0; i < os->nr_pages; i++) {
+		struct nvm_addr *p = &os->trans_map[i];
+		p->addr = LTOP_EMPTY;
+		atomic_set(&p->inflight, 0);
+	}
 
 	os->rev_trans_map = vmalloc(sizeof(sector_t) * os->nr_pages);
 	if (!os->rev_trans_map)

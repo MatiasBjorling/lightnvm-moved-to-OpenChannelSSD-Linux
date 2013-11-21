@@ -13,8 +13,8 @@ static void queue_pool_gc(struct nvm_pool *pool)
 void openssd_gc_cb(unsigned long data)
 {
 	struct openssd *os = (void*) data;
-	struct nvm_pool *pool;
-	int i;
+//	struct nvm_pool *pool;
+//	int i;
 //	ssd_for_each_pool(os, pool, i)
 //		queue_pool_gc(pool);
 	mod_timer(&os->gc_timer, jiffies + msecs_to_jiffies(os->config.gc_time));
@@ -58,13 +58,11 @@ static struct nvm_block* block_prio_find_max(struct nvm_pool *pool)
  */
 static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block)
 {
+	struct nvm_addr src;
 	struct bio *src_bio;
 	struct page *page;
-	struct nvm_block* victim_block;
+	sector_t l_addr;
 	int slot = -1;
-	sector_t p_addr, l_addr, dst_addr;
-	int i;
-	struct bio_vec *bv;
 	void *gc_private = NULL;
 
 	if (bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk)) {
@@ -75,12 +73,13 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 	printk("o1\n");
 	while ((slot = find_next_zero_bit(block->invalid_pages, os->nr_host_pages_in_blk, slot + 1)) < os->nr_host_pages_in_blk) {
 		/* Perform read */
-		p_addr = block_to_addr(block) + slot;
+		src.addr = block_to_addr(block) + slot;
+		src.block = block;
 
 		/* TODO: check for memory failure */
 		src_bio = bio_alloc(GFP_NOIO, 1);
 		src_bio->bi_bdev = os->dev->bdev;
-		src_bio->bi_sector = p_addr * NR_PHY_IN_LOG;
+		src_bio->bi_sector = src.addr * NR_PHY_IN_LOG;
 
 		page = mempool_alloc(os->page_pool, GFP_NOIO);
 
@@ -88,28 +87,24 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
-		openssd_submit_bio(os, block, READ, src_bio, 1);
+		openssd_submit_bio(os, &src, READ, src_bio, 1);
 
-		/* Perform write */
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
-		l_addr = os->lookup_ptol(os, p_addr);
+		l_addr = os->lookup_ptol(os, src.addr);
+		/* remap src_bio to write the logical addr to new physical
+		 * place */
+		src_bio->bi_sector = l_addr;
+
 		//DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", p_addr, l_addr, l_addr, os->trans_map[l_addr].addr);
 
 		if (os->begin_gc_private)
-			gc_private = os->begin_gc_private(l_addr, p_addr, block);
+			gc_private = os->begin_gc_private(l_addr, src.addr, block);
 
-		dst_addr = openssd_alloc_addr(os, l_addr, &victim_block, 1, gc_private);
+		openssd_write_execute_bio(os, src_bio, 1, NULL);
 
 		if (os->end_gc_private)
 			os->end_gc_private(gc_private);
-
-		/* Write using regular write machanism */
-		bio_for_each_segment(bv, src_bio, i) {
-			unsigned int size = openssd_write_data_copy(dst_addr, victim_block, bv);
-			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-				openssd_write_submit(os, dst_addr, victim_block, size);
-		}
 
 		bio_put(src_bio);
 		mempool_free(page, os->page_pool);

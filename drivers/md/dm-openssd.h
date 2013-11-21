@@ -301,8 +301,6 @@ struct per_bio_data {
 /* dm-openssd-c */
 
 /*   Helpers */
-void openssd_print_total_blocks(struct openssd *os);
-
 void invalidate_block_page(struct openssd *os, struct nvm_addr *p);
 void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block);
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc);

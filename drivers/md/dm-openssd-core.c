@@ -43,9 +43,12 @@ void openssd_deferred_bio_submit(struct work_struct *work)
 	bio = bio_list_get(&os->deferred_bios);
 	spin_unlock(&os->deferred_lock);
 
-	for_each_bio(bio) {/* TODO: remember private is lost */
+	while (bio) {
+		struct bio *next = bio->bi_next;
+		bio->bi_next = NULL;
 		os->write_bio(os, bio, 1);
 		bio_put(bio);
+		bio = next;
 	}
 }
 

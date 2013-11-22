@@ -47,7 +47,6 @@ void openssd_deferred_bio_submit(struct work_struct *work)
 		struct bio *next = bio->bi_next;
 		bio->bi_next = NULL;
 		os->write_bio(os, bio, 1);
-		bio_put(bio);
 		bio = next;
 	}
 }
@@ -640,13 +639,13 @@ int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
 	if (p) {
 		issue_bio = openssd_write_init_bio(os, bio, p);
 		openssd_submit_bio(os, p, WRITE, issue_bio, is_gc);
+		bio_endio(bio, 0);
 		return 1;
 	} else {
 		BUG_ON(is_gc);
 		spin_lock(&os->deferred_lock);
 		bio_list_add(&os->deferred_bios, bio);
 		spin_unlock(&os->deferred_lock);
-		bio_get(bio);
 		return 0;
 	}
 }
@@ -654,8 +653,6 @@ int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio, int deferred)
 {
 	openssd_write_execute_bio(os, bio, 0, NULL);
-	if (!deferred)
-		bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 

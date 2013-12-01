@@ -405,7 +405,7 @@ static int openssd_read_bio_hint(struct openssd *os, struct bio *bio)
 
 static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr);
 
-static int openssd_write_bio_hint(struct openssd *os, struct bio *bio, int deferred)
+static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 {
 	struct openssd_hint *hint = os->hint_private;
 	struct openssd_hint_map_private map_alloc_data;
@@ -446,8 +446,7 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio, int defer
 		spin_unlock(&hint->hintlock);
 	}
 
-	if (!deferred)
-		bio_endio(bio, 0);
+	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 

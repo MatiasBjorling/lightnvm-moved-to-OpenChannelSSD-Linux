@@ -4,11 +4,11 @@
  * This file is released under the GPL.
  */
 
-#ifndef DM_OPENSSD_H_
-#define DM_OPENSSD_H_
+#ifndef DM_LIGHTNVM_H_
+#define DM_LIGHTNVM_H_
 
-#define OPENSSD_IOC_MAGIC 'O'
-#define OPENSSD_IOCTL_ID          _IO(OPENSSD_IOC_MAGIC, 0x40)
+#define LIGHTNVM_IOC_MAGIC 'O'
+#define LIGHTNVM_IOCTL_ID          _IO(LIGHTNVM_IOC_MAGIC, 0x40)
 
 #ifdef __KERNEL__
 #include <linux/device-mapper.h>
@@ -30,25 +30,31 @@
 #include <linux/completion.h>
 #include <linux/hashtable.h>
 
-#define DM_MSG_PREFIX "openssd"
+#define DM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
 /*
- * For now we hardcode the configuration for the OpenSSD unit that we own. In
- * the future this should be made configurable.
+ * For now we hardcode some of the configuration for the LightNVM device that we
+ * have. In the future this should be made configurable.
  *
  * Configuration:
+ * EXPOSED_PAGE_SIZE - the page size of which we tell the layers above the
+ * driver to issue. This usually is 512 bytes for 4K for simplivity.
+ * FLASH_PAGE_SIZE - the flash size of the individual flash pages. These should
+ * match the hardware flash chips. Currently only the same page size as
+ * EXPOSED_PAGE_SIZE is supported.
  *
- * Physical address space is divided into 8 chips. I.e. we create 8 pools for the
- * addressing. We also omit the first block of each chip as they contain
- * either the drive firmware or recordings of bad blocks.
- *
- * BLOCK_PAGE_COUNT must be a power of two.
  */
 
-#define EXPOSED_PAGE_SIZE 4096	/* The page size that we expose to the operating system */
-#define FLASH_PAGE_SIZE 4096	/* The size of the physical flash page */
+#define EXPOSED_PAGE_SIZE 4096
+#define FLASH_PAGE_SIZE EXPOSED_PAGE_SIZE
 
+
+/* Useful shorthands */
 #define NR_HOST_PAGES_IN_FLASH_PAGE (FLASH_PAGE_SIZE / EXPOSED_PAGE_SIZE)
+/* We currently assume that we the lightnvm device is accepting data in 512
+ * bytes chunks. This should be set to the smallest command size available for a
+ * given device.
+ */
 #define NR_PHY_IN_LOG (EXPOSED_PAGE_SIZE / 512)
 
 enum ltop_flags {
@@ -143,7 +149,7 @@ struct nvm_pool {
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
 	struct nvm_block *blocks;
-	struct openssd *os;
+	struct nvmd *nvmd;
 
 	/* Postpone issuing I/O if append point is active */
 	atomic_t is_active;
@@ -167,7 +173,7 @@ struct nvm_pool {
  */
 struct nvm_ap {
 	spinlock_t lock;
-	struct openssd *parent;
+	struct nvmd *parent;
 	struct nvm_pool *pool;
 	struct nvm_block *cur;
 	struct nvm_block *gc_cur;
@@ -194,19 +200,19 @@ struct nvm_config {
 	unsigned int t_erase;
 };
 
-struct openssd;
+struct nvmd;
 
-typedef struct nvm_addr *(map_ltop_fn)(struct openssd *, sector_t, int, void *);
-typedef struct nvm_addr *(lookup_ltop_fn)(struct openssd *, sector_t);
-typedef sector_t (lookup_ptol_fn)(struct openssd *, sector_t);
-typedef int (write_bio_fn)(struct openssd *, struct bio *);
-typedef int (read_bio_fn)(struct openssd *, struct bio *);
-typedef void (alloc_phys_addr_fn)(struct openssd *, struct nvm_block *);
+typedef struct nvm_addr *(map_ltop_fn)(struct nvmd *, sector_t, int, void *);
+typedef struct nvm_addr *(lookup_ltop_fn)(struct nvmd *, sector_t);
+typedef sector_t (lookup_ptol_fn)(struct nvmd *, sector_t);
+typedef int (write_bio_fn)(struct nvmd *, struct bio *);
+typedef int (read_bio_fn)(struct nvmd *, struct bio *);
+typedef void (alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
 typedef void *(begin_gc_private_fn)(sector_t, sector_t, struct nvm_block *);
 typedef void (end_gc_private_fn)(void *);
 
 /* Main structure */
-struct openssd {
+struct nvmd {
 	struct dm_dev *dev;
 	struct dm_target *ti;
 	uint32_t sector_size;
@@ -225,9 +231,9 @@ struct openssd {
 	 *
 	 * We assume that the device exposes its channels as a linear address
 	 * space. A pool therefore have a phy_addr_start and phy_addr_end that
-	 * denotes the start and end. This abstraction is used to let the openssd
-	 * (or any other device) expose its read/write/erase interface and be
-	 * administrated by the host system.
+	 * denotes the start and end. This abstraction is used to let the
+	 * lightnvm (or any other device) expose its read/write/erase interface
+	 * and be administrated by the host system.
 	 */
 	struct nvm_pool *pools;
 
@@ -298,107 +304,108 @@ struct per_bio_data {
 	unsigned int sync;
 };
 
-/* dm-openssd-c */
+/* dm-lightnvm-c */
 
 /*   Helpers */
-void invalidate_block_page(struct openssd *os, struct nvm_addr *p);
-void openssd_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block);
-struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc);
-sector_t openssd_alloc_phys_addr(struct nvm_block *block);
-sector_t openssd_alloc_phys_fastest_addr(struct openssd *os, struct nvm_block **ret_victim_block);
+void invalidate_block_page(struct nvmd *, struct nvm_addr *);
+void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
+sector_t nvm_alloc_phys_addr(struct nvm_block *);
+sector_t nvm_alloc_phys_fastest_addr(struct nvmd *, struct nvm_block **ret_victim_block);
 
 /*   Naive implementations */
-void openssd_delayed_bio_submit(struct work_struct *work);
-void openssd_deferred_bio_submit(struct work_struct *work);
+void nvm_delayed_bio_submit(struct work_struct *work);
+void nvm_deferred_bio_submit(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
-sector_t openssd_alloc_addr_from_ap(struct nvm_ap *ap, struct nvm_block **ret_victim_block, int is_gc);
-struct nvm_addr *openssd_alloc_map_ltop_rr(struct openssd *os, sector_t logical_addr, int is_gc, void *private);
-sector_t openssd_alloc_ltop_rr(struct openssd *os, sector_t l_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
+sector_t nvm_alloc_addr_from_ap(struct nvm_ap *, struct nvm_block **ret_victim_block, int is_gc);
+struct nvm_addr *nvm_alloc_map_ltop_rr(struct nvmd *, sector_t l_addr, int is_gc, void *private);
+sector_t nvm_alloc_ltop_rr(struct nvmd *, sector_t l_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
 
 /* Calls map_ltop_rr. Cannot fail (FIXME: unless out of memory) */
-struct nvm_addr *openssd_alloc_addr(struct openssd *os, sector_t logical_addr, int is_gc, void *private);
+struct nvm_addr *nvm_alloc_addr(struct nvmd *, sector_t l_addr, int is_gc, void *private);
 
-/* Gets an address from os->trans_map and take a ref count on the blocks usage. Remember to put later */
-struct nvm_addr *openssd_lookup_ltop_map(struct openssd *os, sector_t l_addr, struct nvm_addr *l2p_map);
-struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
-sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
+/* Gets an address from nvm->trans_map and take a ref count on the blocks usage. Remember to put later */
+struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *, sector_t l_addr, struct nvm_addr *l2p_map);
+struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
+sector_t nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
-void openssd_submit_bio(struct openssd *os, struct nvm_addr *p, int rw, struct bio *bio, int sync);
-struct bio *openssd_write_init_bio(struct openssd *os, struct bio *bio, struct nvm_addr *p);
-int openssd_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
-int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
-void openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc, void *private);
-int openssd_read_bio_generic(struct openssd *os, struct bio *bio);
-struct nvm_addr *openssd_update_map(struct openssd *os,  sector_t l_addr,
+void nvm_submit_bio(struct nvmd *, struct nvm_addr *, int rw, struct bio *, int sync);
+struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
+int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
+void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private);
+int nvm_write_bio(struct nvmd *, struct bio *bio);
+int nvm_read_bio(struct nvmd *, struct bio *bio);
+struct nvm_addr *nvm_update_map(struct nvmd *,  sector_t l_addr,
 				    sector_t p_addr, struct nvm_block *p_block);
 
 /*   NVM device related */
-void openssd_block_release(struct kref *);
+void nvm_block_release(struct kref *);
 
 /*   Block maintanence */
 
-void nvm_pool_put_block(struct nvm_block *block);
-void openssd_reset_block(struct nvm_block *block);
+void nvm_pool_put_block(struct nvm_block *);
+void nvm_reset_block(struct nvm_block *);
 
-/* dm-openssd-gc.c */
-void openssd_block_erase(struct kref *);
-void openssd_gc_cb(unsigned long data);
-void openssd_gc_collect(struct work_struct *work);
-void openssd_gc_kick(struct nvm_pool *pool);
+/* dm-lightnvm-gc.c */
+void nvm_block_erase(struct kref *);
+void nvm_gc_cb(unsigned long data);
+void nvm_gc_collect(struct work_struct *work);
+void nvm_gc_kick(struct nvm_pool *pool);
 
 
-/* dm-openssd-hint.c */
-int openssd_alloc_hint(struct openssd *);
-int openssd_init_hint(struct openssd *);
-void openssd_exit_hint(struct openssd *);
-void openssd_free_hint(struct openssd *);
+/* dm-lightnvm-hint.c */
+int nvm_alloc_hint(struct nvmd *);
+int nvm_init_hint(struct nvmd *);
+void nvm_exit_hint(struct nvmd *);
+void nvm_free_hint(struct nvmd *);
 
 /*   Hint core */
-int openssd_ioctl_hint(struct openssd *os, unsigned int cmd, unsigned long arg);
+int nvm_ioctl_hint(struct nvmd *, unsigned int cmd, unsigned long arg);
 
 /*   Callbacks */
-void openssd_delay_endio_hint(struct openssd *os, struct bio *bio, struct per_bio_data *pb, unsigned long *delay);
-void openssd_bio_hint(struct openssd *os, struct bio *bio);
+void nvm_delay_endio_hint(struct nvmd *, struct bio *bio, struct per_bio_data *pb, unsigned long *delay);
+void nvm_bio_hint(struct nvmd *, struct bio *bio);
 
-#define ssd_for_each_pool(openssd, pool, i)									\
-		for ((i) = 0, pool = &(openssd)->pools[0];							\
-			 (i) < (openssd)->nr_pools; (i)++, pool = &(openssd)->pools[(i)])
+#define ssd_for_each_pool(nvmd, pool, i)									\
+		for ((i) = 0, pool = &(nvmd)->pools[0];							\
+			 (i) < (nvmd)->nr_pools; (i)++, pool = &(nvmd)->pools[(i)])
 
-#define ssd_for_each_ap(openssd, ap, i)										\
-		for ((i) = 0, ap = &(openssd)->aps[0];								\
-			 (i) < (openssd)->nr_aps; (i)++, ap = &(openssd)->aps[(i)])
+#define ssd_for_each_ap(nvmd, ap, i)										\
+		for ((i) = 0, ap = &(nvmd)->aps[0];								\
+			 (i) < (nvmd)->nr_aps; (i)++, ap = &(nvmd)->aps[(i)])
 
 #define pool_for_each_block(pool, block, i)									\
 		for ((i) = 0, block = &(pool)->blocks[0];							\
 			 (i) < (pool)->nr_blocks; (i)++, block = &(pool)->blocks[(i)])
 
-static inline struct nvm_ap *get_next_ap(struct openssd *os) {
-	return &os->aps[atomic_inc_return(&os->next_write_ap) % os->nr_aps];
+static inline struct nvm_ap *get_next_ap(struct nvmd *nvmd) {
+	return &nvmd->aps[atomic_inc_return(&nvmd->next_write_ap) % nvmd->nr_aps];
 }
 
 static inline int block_is_full(struct nvm_block *block)
 {
-	struct openssd *os = block->pool->os;
-	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset == os->nr_host_pages_in_blk);
+	struct nvmd *nvmd = block->pool->nvmd;
+	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
+			block->next_offset == nvmd->nr_host_pages_in_blk);
 }
 
 static inline sector_t block_to_addr(struct nvm_block *block)
 {
-	struct openssd *os;
+	struct nvmd *nvmd;
 	BUG_ON(!block);
-	os = block->pool->os;
-	return block->id * os->nr_host_pages_in_blk;
+	nvmd = block->pool->nvmd;
+	return block->id * nvmd->nr_host_pages_in_blk;
 }
 
-static inline int page_is_fast(unsigned int pagenr, struct openssd *os)
+static inline int page_is_fast(struct nvmd *nvmd, unsigned int pagenr)
 {
 	/* pages: F F F F | SSFFSS | SSFFSS | ... | S S S S . S Slow F Fast */
 	if (pagenr < 4)
 		return 1;
 
-	if (pagenr >= os->nr_pages_per_blk - 4)
+	if (pagenr >= nvmd->nr_pages_per_blk - 4)
 		return 0;
 
 	pagenr -= 4;
@@ -410,22 +417,23 @@ static inline int page_is_fast(unsigned int pagenr, struct openssd *os)
 	return 0;
 }
 
-static inline struct nvm_ap *block_to_ap(struct openssd *os, struct nvm_block *block) {
+static inline struct nvm_ap *block_to_ap(struct nvmd *nvmd, struct nvm_block *block) {
 	unsigned int ap_idx, div, mod;
 
-	div = block->id / os->nr_blks_per_pool;
-	mod = block->id % os->nr_blks_per_pool;
-	ap_idx = div + (mod / (os->nr_blks_per_pool / os->nr_aps_per_pool));
+	div = block->id / nvmd->nr_blks_per_pool;
+	mod = block->id % nvmd->nr_blks_per_pool;
+	ap_idx = div + (mod / (nvmd->nr_blks_per_pool / nvmd->nr_aps_per_pool));
 
-	return &os->aps[ap_idx];
+	return &nvmd->aps[ap_idx];
 }
 
-static inline int physical_to_slot(struct openssd *os, sector_t phys)
+static inline int physical_to_slot(struct nvmd *nvm, sector_t phys)
 {
-	return (phys % (os->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) / NR_HOST_PAGES_IN_FLASH_PAGE;
+	return (phys % (nvm->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) /
+		NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
 #endif
 
-#endif /* DM_OPENSSD_H_ */
+#endif /* DM_LIGHTNVM_H_ */
 

@@ -1,58 +1,58 @@
 #include "dm-openssd.h"
 #include "dm-openssd-hint.h"
 
-// TODO make inline?
-static unsigned long diff_tv(struct timeval *curr_tv, struct timeval *ap_tv)
+static inline unsigned long diff_tv(struct timeval *curr_tv, struct timeval *ap_tv)
 {
 	if(curr_tv->tv_sec == ap_tv->tv_sec)
 		return curr_tv->tv_usec - ap_tv->tv_usec;
 
-	return (curr_tv->tv_sec - ap_tv->tv_sec -1) * 1000000 + (1000000-ap_tv->tv_usec) + curr_tv->tv_usec;
+	return (curr_tv->tv_sec - ap_tv->tv_sec -1) * 1000000
+				+ (1000000-ap_tv->tv_usec) + curr_tv->tv_usec;
 }
 
-void openssd_delay_endio_hint(struct openssd *os, struct bio *bio,
+void nvm_delay_endio_hint(struct nvmd *nvmd, struct bio *bio,
                               struct per_bio_data *pb, unsigned long *delay)
 {
 	int page_id;
 
-	if (!(os->config.flags & NVM_OPT_ENGINE_SWAP))
+	if (!(nvmd->config.flags & NVM_OPT_ENGINE_SWAP))
 		return;
 
 	if (bio_data_dir(bio) != WRITE)
 		return;
 
 	page_id = (pb->physical_addr / NR_HOST_PAGES_IN_FLASH_PAGE)
-	          % os->nr_pages_per_blk;
+	          % nvmd->nr_pages_per_blk;
 
 	/* different timings, roughly based on "Harey Tortoise" paper
 	 * TODO: ratio is actually 4.8 on average
 	 * TODO: consider dev_wait to be part of per_bio_data? */
-	if (page_is_fast(page_id, os))
-		(*delay) = os->config.t_write / 2;
+	if (page_is_fast(nvmd, page_id))
+		(*delay) = nvmd->config.t_write / 2;
 	else
-		(*delay) = os->config.t_write * 2;
+		(*delay) = nvmd->config.t_write * 2;
 }
 
-void *openssd_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct
+void *nvm_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct
                             nvm_block *block)
 {
-	struct openssd_hint_map_private *private =
-	        kzalloc(sizeof(struct openssd_hint_map_private), GFP_NOIO);
+	struct nvm_hint_map_private *private =
+	        kzalloc(sizeof(struct nvm_hint_map_private), GFP_NOIO);
 
 	private->old_p_addr = p_addr;
 
 	return private;
 }
 
-void openssd_end_gc_hint(void *private)
+void nvm_end_gc_hint(void *private)
 {
 	kfree(private);
 }
 
 // iterate hints list, and check if lba of current req is covered by some hint
-hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool is_write)
+hint_info_t* nvm_find_hint(struct nvmd *nvmd, sector_t logical_addr, bool is_write)
 {
-	struct openssd_hint *hint = os->hint_private;
+	struct nvm_hint *hint = nvmd->hint_private;
 	hint_info_t *hint_info;
 	struct list_head *node;
 
@@ -64,7 +64,7 @@ hint_info_t* openssd_find_hint(struct openssd *os, sector_t logical_addr, bool i
 		//DMINFO("hint start_lba=%d count=%d", hint_info->hint.start_lba, hint_info->hint.count);
 		//continue;
 		/* verify lba covered by hint*/
-		if (is_hint_relevant(logical_addr, hint_info, is_write, os->config.flags)) {
+		if (is_hint_relevant(logical_addr, hint_info, is_write, nvmd->config.flags)) {
 			DMDEBUG("found hint for lba %ld (ino %ld)",
 				logical_addr, hint_info->hint.ino);
 			hint_info->processed++;
@@ -116,31 +116,25 @@ fclass file_classify(struct bio_vec* bvec)
 	return fc;
 }
 
-int openssd_is_fc_latency(fclass fc)
+int nvm_is_fc_latency(fclass fc)
 {
-	if(fc == FC_DB_INDEX)
-		return 1;
-
-	return 0;
+	return (fc == FC_DB_INDEX);
 }
 
-int openssd_is_fc_packable(fclass fc)
+int nvm_is_fc_packable(fclass fc)
 {
-	if(fc == FC_VIDEO_SLOW)
-		return 1;
-
-	return 0;
+	return (fc == FC_VIDEO_SLOW);
 }
 
 /* no real sending for now, in prototype just put it directly in FTL's hints list
    and update ino_hint map when necessary*/
-static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
+static int nvm_send_hint(struct nvmd *nvmd, hint_data_t *hint_data)
 {
-	struct openssd_hint *hint = os->hint_private;
+	struct nvm_hint *hint = nvmd->hint_private;
 	int i;
 	hint_info_t* hint_info;
 
-	if (!(os->config.flags &
+	if (!(nvmd->config.flags &
 	      (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP | NVM_OPT_ENGINE_PACK))){
 		DMERR("got unsupported hint");
 		goto send_done;
@@ -153,9 +147,9 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 	       INO_HINT_FROM_DATA(hint_data, 0).fc);
 
 	// assert relevant hint support
-	if ((CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(os->config.flags & NVM_OPT_ENGINE_SWAP)) ||
-	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_LATENCY && !(os->config.flags & NVM_OPT_ENGINE_LATENCY)) ||
-	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_PACK && !(os->config.flags & NVM_OPT_ENGINE_PACK))) {
+	if ((CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(nvmd->config.flags & NVM_OPT_ENGINE_SWAP)) ||
+	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_LATENCY && !(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY)) ||
+	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_PACK && !(nvmd->config.flags & NVM_OPT_ENGINE_PACK))) {
 		DMERR("hint of types %x not supported (1st entry ino %lu lba %u count %u)",
 		       CAST_TO_PAYLOAD(hint_data)->hint_flags,
 		       INO_HINT_FROM_DATA(hint_data, 0).ino,
@@ -169,7 +163,7 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 		// handle file type  for
 		// 1) identified latency writes
 		// 2) identified pack writes
-		if ((os->config.flags & NVM_OPT_ENGINE_LATENCY || os->config.flags & NVM_OPT_ENGINE_PACK)
+		if ((nvmd->config.flags & NVM_OPT_ENGINE_LATENCY || nvmd->config.flags & NVM_OPT_ENGINE_PACK)
 		    && INO_HINT_FROM_DATA(hint_data, i).fc != FC_EMPTY) {
 			DMINFO("ino %lu got new fc %d", INO_HINT_FROM_DATA(hint_data, i).ino,
 			       INO_HINT_FROM_DATA(hint_data, i).fc);
@@ -177,15 +171,15 @@ static int openssd_send_hint(struct openssd *os, hint_data_t *hint_data)
 		}
 
 		/* non-packable file. ignore hint*/
-		if(os->config.flags & NVM_OPT_ENGINE_PACK && 
-		   !openssd_is_fc_packable(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
+		if(nvmd->config.flags & NVM_OPT_ENGINE_PACK &&
+		   !nvm_is_fc_packable(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
 			DMDEBUG("non-packable file. ignore hint");
 			continue;
 		}
 
 		/* non-latency file. ignore hint*/
-		if(os->config.flags & NVM_OPT_ENGINE_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc == FC_EMPTY &&
-		   !openssd_is_fc_latency(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
+		if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc == FC_EMPTY &&
+		   !nvm_is_fc_latency(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
 			DMDEBUG("non-latency file. ignore hint");
 			continue;
 		}
@@ -224,7 +218,7 @@ send_done:
  *           relevant range of LBAs covered by a page
  * 3) write - check if a page is the first sector of a file, classify it and set in hint. rest same as read
  */
-void openssd_bio_hint(struct openssd *os, struct bio *bio)
+void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 {
 	hint_data_t *hint_data;
 	fclass fc = FC_EMPTY;
@@ -233,7 +227,7 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 	struct address_space *mapping;
 	struct inode *host;
 	struct bio_vec *bvec;
-	uint32_t sector_size = os->sector_size;
+	uint32_t sector_size = nvmd->sector_size;
 	uint32_t sectors_count = 0;
 	uint32_t lba = 0, bio_len = 0, hint_idx;
 	unsigned long prev_ino = -1, first_sector = -1;
@@ -389,26 +383,26 @@ void openssd_bio_hint(struct openssd *os, struct bio *bio)
 
 	/* non-empty hint_data, send to device */
 	//hint_log("hint count=%u. send to hint device", CAST_TO_PAYLOAD(hint_data)->count);
-	ret = openssd_send_hint(os, hint_data);
+	ret = nvm_send_hint(nvmd, hint_data);
 
 	if (ret != 0)
-		DMERR("openssd_send_hint error %d", ret);
+		DMERR("nvm_send_hint error %d", ret);
 
 done:
 	kfree(hint_data);
 }
 
-static int openssd_read_bio_hint(struct openssd *os, struct bio *bio)
+static int nvm_read_bio_hint(struct nvmd *nvmd, struct bio *bio)
 {
-	return openssd_read_bio_generic(os, bio);
+	return nvm_read_bio(nvmd, bio);
 }
 
-static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr);
+static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr);
 
-static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
+static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 {
-	struct openssd_hint *hint = os->hint_private;
-	struct openssd_hint_map_private map_alloc_data;
+	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint_map_private map_alloc_data;
 	sector_t l_addr;
 	int i;
 	unsigned int numCopies = 1;
@@ -416,10 +410,10 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	map_alloc_data.old_p_addr = LTOP_EMPTY;
 	map_alloc_data.flags = MAP_PRIMARY;
 
-	//openssd_bio_hint(os, bio);
+	//nvm_bio_hint(nvmd, bio);
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
-	map_alloc_data.hint_info = openssd_find_hint(os, l_addr, 1);
+	map_alloc_data.hint_info = nvm_find_hint(nvmd, l_addr, 1);
 
 	if (map_alloc_data.hint_info && map_alloc_data.hint_info->hint_flags & HINT_LATENCY)
 		numCopies = 2;
@@ -427,11 +421,11 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	/* Submit bio for all physical addresses*/
 	DMDEBUG("logical_addr %llu numCopies=%u", (unsigned long long)l_addr, numCopies);
 	for(i = 0; i < numCopies; i++) {
-		openssd_write_execute_bio(os, bio, 0, &map_alloc_data);
+		nvm_write_execute_bio(nvmd, bio, 0, &map_alloc_data);
 
 		/* primary updated. trim old shadow */
-		if(os->config.flags & NVM_OPT_ENGINE_LATENCY && i == 0)
-			openssd_trim_map_shadow(os, l_addr);
+		if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY && i == 0)
+			nvm_trim_map_shadow(nvmd, l_addr);
 
 		map_alloc_data.flags = MAP_SHADOW;
 	}
@@ -450,11 +444,11 @@ static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
-void openssd_alloc_phys_addr_pack(struct openssd *os, struct nvm_block *block)
+void nvm_alloc_phys_addr_pack(struct nvmd *nvmd, struct nvm_block *block)
 {
 	/* pack ap's need an ap not related to any inode*/ 
 	if (block_is_full(block)){
-		DMDEBUG("__openssd_alloc_phys_addr - block is full. init ap_hint. block->parent_ap %p", block->ap);
+		DMDEBUG("__nvm_alloc_phys_addr - block is full. init ap_hint. block->parent_ap %p", block->ap);
 		BUG_ON(!block->ap);
 		if(block->ap->hint_private)
 			init_ap_hint(block->ap);
@@ -462,18 +456,19 @@ void openssd_alloc_phys_addr_pack(struct openssd *os, struct nvm_block *block)
 	}
 }
 
-sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
-		nvm_block **ret_victim_block, struct openssd_hint_map_private *map_alloc_data)
+sector_t nvm_alloc_phys_pack_addr(struct nvmd *nvmd, struct
+		nvm_block **ret_victim_block, struct nvm_hint_map_private *map_alloc_data)
 {
 	struct nvm_ap *ap;
 	sector_t addr = LTOP_EMPTY;
-	struct openssd_ap_hint* ap_pack_data = NULL;
+	struct nvm_ap_hint* ap_pack_data = NULL;
 	struct timeval curr_tv;
 	unsigned long diff;
 	int i;
 
-	/* find open ap for requested inode number*/
-	for (i = 0, ap = &os->aps[0]; i < os->nr_pools; i++, ap = &os->aps[i]){
+	/* find open ap for requested inode number */
+	for (i = 0; i < nvmd->nr_pools; i++) {
+		ap = &nvmd->aps[i];
 		/* not hint related */
 		if(!ap->hint_private)
 			continue;
@@ -483,7 +478,7 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 		/* got it */
 		if(ap_pack_data->ino == map_alloc_data->hint_info->hint.ino){
 			DMDEBUG("ap with block_addr %ld associated to requested inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
-			addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
+			addr = nvm_alloc_addr_from_ap(ap, ret_victim_block, 0);
 			break;
 		}
 	}
@@ -496,14 +491,14 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 	/* no ap associated to requested inode.
 	   find some empty pack ap, and use it*/
 	DMDEBUG("no ap associated to inode %lu", map_alloc_data->hint_info->hint.ino);
-	for (i = 0; addr == LTOP_EMPTY && i < os->nr_pools; i++) {
-		ap = get_next_ap(os);
+	for (i = 0; addr == LTOP_EMPTY && i < nvmd->nr_pools; i++) {
+		ap = get_next_ap(nvmd);
 
 		/* not hint associated */
 		if(!ap->hint_private)
 			continue;
 
-		ap_pack_data = (struct openssd_ap_hint*)ap->hint_private;
+		ap_pack_data = (struct nvm_ap_hint*)ap->hint_private;
 
 		/* associated to an other inode */
 		if(ap_pack_data->ino != INODE_EMPTY && 
@@ -519,7 +514,7 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 
 		/* got it - empty ap not associated to any inode */
 		ap_pack_data->ino = map_alloc_data->hint_info->hint.ino; // do this before alloc_addr
-		addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
+		addr = nvm_alloc_addr_from_ap(ap, ret_victim_block, 0);
 		DMDEBUG("re-associated ap with block_addr %ld to new inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
 
 		break;
@@ -534,14 +529,14 @@ sector_t openssd_alloc_phys_pack_addr(struct openssd *os, struct
 	/* haven't found any relevant/empty pack ap. resort to regular allocation
 	   (from non-packed ap)*/
 	/* TODO: overtake "regular" ap? return error? */
-	do{
-		ap = get_next_ap(os);
-	}while(ap->hint_private);
+	do {
+		ap = get_next_ap(nvmd);
+	} while (ap->hint_private);
 
-	addr = openssd_alloc_addr_from_ap(ap, ret_victim_block, 0);
+	addr = nvm_alloc_addr_from_ap(ap, ret_victim_block, 0);
 
 pack_alloc_done:
-	if(ap_pack_data)
+	if (ap_pack_data)
 		do_gettimeofday(&ap_pack_data->tv);
 	return addr;
 }
@@ -554,9 +549,9 @@ pack_alloc_done:
  * If non-hinted write - resort to normal allocation
  * if GC write - no hint, but we use regular map_ltop() with GC addr
  */
-static struct nvm_addr *openssd_map_pack_hint_ltop_rr(struct openssd *os, sector_t l_addr, int is_gc, void *private)
+static struct nvm_addr *nvm_map_pack_hint_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc, void *private)
 {
-	struct openssd_hint_map_private *map_alloc_data = private;
+	struct nvm_hint_map_private *map_alloc_data = private;
 	struct nvm_block *block;
 	struct nvm_addr *p = NULL;
 	sector_t p_addr;
@@ -568,7 +563,7 @@ static struct nvm_addr *openssd_map_pack_hint_ltop_rr(struct openssd *os, sector
 	    map_alloc_data->old_p_addr != LTOP_EMPTY ||
 	    !map_alloc_data->hint_info) {
 		DMDEBUG("pack_rr: reclaimed or regular allocation");
-		p = openssd_alloc_map_ltop_rr(os, l_addr, 0, NULL);
+		p = nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
 
 		return p;
 	}
@@ -576,11 +571,11 @@ static struct nvm_addr *openssd_map_pack_hint_ltop_rr(struct openssd *os, sector
 	DMDEBUG("pack_ltop: regular request. allocate page");
 
 	/* 1) get addr.
-	      openssd_alloc_addr_from_pack_ap, finds ap AND allocates addr*/
-	p_addr = openssd_alloc_phys_pack_addr(os, &block, map_alloc_data);
+	      nvm_alloc_addr_from_pack_ap, finds ap AND allocates addr*/
+	p_addr = nvm_alloc_phys_pack_addr(nvmd, &block, map_alloc_data);
 	
 	if (block)
-		p = openssd_update_map(os, l_addr, p_addr, block);
+		p = nvm_update_map(nvmd, l_addr, p_addr, block);
 
 	DMDEBUG("pack_rr: for l_addr=%ld allocated p_addr=%ld ", l_addr, p_addr);
 
@@ -588,29 +583,29 @@ static struct nvm_addr *openssd_map_pack_hint_ltop_rr(struct openssd *os, sector
 }
 
 // do any shadow address updating required (real, none, or trim of old one)
-static struct nvm_addr *openssd_update_map_shadow(struct openssd *os,
+static struct nvm_addr *nvm_update_map_shadow(struct nvmd *nvmd,
                                       sector_t l_addr, sector_t p_addr,
                                       struct nvm_block *p_block, unsigned long flags)
 {
-	struct openssd_hint *hint = os->hint_private;
+	struct nvm_hint *hint = nvmd->hint_private;
 	struct nvm_addr *p;
 
-	BUG_ON(l_addr >= os->nr_pages);
-	BUG_ON(p_addr >= os->nr_pages);
+	BUG_ON(l_addr >= nvmd->nr_pages);
+	BUG_ON(p_addr >= nvmd->nr_pages);
 
-	DMDEBUG("openssd_update_map_shadow: flags=%lu", flags);
+	DMDEBUG("nvm_update_map_shadow: flags=%lu", flags);
 	/* Secondary mapping. update shadow */
 	if(flags & MAP_SHADOW) {
-		spin_lock(&os->trans_lock);
+		spin_lock(&nvmd->trans_lock);
 		p = &hint->shadow_map[l_addr];
 
-		invalidate_block_page(os, p);
+		invalidate_block_page(nvmd, p);
 
 		p->addr = p_addr;
 		p->block = p_block;
 
-		os->rev_trans_map[p_addr] = l_addr;
-		spin_unlock(&os->trans_lock);
+		nvmd->rev_trans_map[p_addr] = l_addr;
+		spin_unlock(&nvmd->trans_lock);
 
 		return p;
 	} else if (flags & MAP_PRIMARY) {
@@ -628,7 +623,7 @@ static struct nvm_addr *openssd_update_map_shadow(struct openssd *os,
 
 
 
-static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logical_addr, sector_t old_p_addr);
+static unsigned long nvm_get_mapping_flag(struct nvmd *, sector_t, sector_t);
 
 /* Latency-proned Logical to physical address translation.
  *
@@ -636,29 +631,29 @@ static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logic
  * If non-hinted write - resort to normal allocation
  * if GC write - no hint, but we use regular map_ltop() with GC addr
  */
-static struct nvm_addr *openssd_map_latency_hint_ltop_rr(struct openssd *os, sector_t l_addr, int is_gc, void *private)
+static struct nvm_addr *nvm_map_latency_hint_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc, void *private)
 {
-	struct openssd_hint_map_private *map_alloc_data = private;
+	struct nvm_hint_map_private *map_alloc_data = private;
 	struct nvm_block *block;
 	struct nvm_addr *p = NULL;
 	sector_t p_addr;
 
 	/* reclaimed write. need to know if we're reclaiming primary/shaddow*/
 	if (is_gc) {
-		map_alloc_data->flags = openssd_get_mapping_flag(os, l_addr, map_alloc_data->old_p_addr);
+		map_alloc_data->flags = nvm_get_mapping_flag(nvmd, l_addr, map_alloc_data->old_p_addr);
 		DMDEBUG("gc write. flags %x", map_alloc_data->flags);
 	}
 	DMDEBUG("latency_ltop: allocate primary and shaddow pages");
 
 	/* primary -> allcoate and update generic mapping */
 	if (map_alloc_data->flags & MAP_PRIMARY)
-		return openssd_alloc_map_ltop_rr(os, l_addr, is_gc, NULL);
+		return nvm_alloc_map_ltop_rr(nvmd, l_addr, is_gc, NULL);
 
 	/* shadow -> allocate and update shaddow mapping*/
-	p_addr = openssd_alloc_ltop_rr(os, l_addr, &block, is_gc, map_alloc_data);
+	p_addr = nvm_alloc_ltop_rr(nvmd, l_addr, &block, is_gc, map_alloc_data);
 	
 	if (block)
-		p = openssd_update_map_shadow(os, l_addr, p_addr, block, map_alloc_data->flags);
+		p = nvm_update_map_shadow(nvmd, l_addr, p_addr, block, map_alloc_data->flags);
 
 	DMDEBUG("got address of shadow page");
 
@@ -671,124 +666,131 @@ static struct nvm_addr *openssd_map_latency_hint_ltop_rr(struct openssd *os, sec
  * Then update the ap for the next write to the disk.
  * If no reelvant ap found, or non-swap write - resort to normal allocation
  */
-static struct nvm_addr *openssd_map_swap_hint_ltop_rr(struct openssd *os,
+static struct nvm_addr *nvm_map_swap_hint_ltop_rr(struct nvmd *nvmd,
                 sector_t l_addr, int is_gc, void *private)
 {
-	struct openssd_hint_map_private *map_alloc_data = private;
+	struct nvm_hint_map_private *map_alloc_data = private;
 	struct nvm_block *block;
 	sector_t p_addr;
 
 	/* Check if there is a hint for relevant sector
-	 * if not, resort to openssd_map_ltop_rr */
+	 * if not, resort to nvm_map_ltop_rr */
 	if (map_alloc_data) {
 		if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
 			DMDEBUG("swap_map: non-GC non-hinted write");
-			return openssd_alloc_map_ltop_rr(os, l_addr, 0, NULL);
+			return nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
 		}
 
 		/* GC write of a slow page */
-		if (map_alloc_data->old_p_addr != LTOP_EMPTY && !page_is_fast(physical_to_slot(os, map_alloc_data->old_p_addr), os)) {
-			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr %ld block offset %d)", map_alloc_data->old_p_addr, physical_to_slot(os, map_alloc_data->old_p_addr));
-			return openssd_alloc_map_ltop_rr(os, l_addr, 0, NULL);
+		if (map_alloc_data->old_p_addr != LTOP_EMPTY &&
+				!page_is_fast(nvmd, physical_to_slot(nvmd,
+						map_alloc_data->old_p_addr))) {
+			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr \
+				%ld block offset %d)",
+					map_alloc_data->old_p_addr,
+					physical_to_slot(nvmd, map_alloc_data->old_p_addr));
+			return nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
 		}
 	}
 
 	/* hinted write, or GC of FAST page*/
-	p_addr = openssd_alloc_phys_fastest_addr(os, &block);
+	p_addr = nvm_alloc_phys_fastest_addr(nvmd, &block);
 
 	/* no FAST page found. restort to regular allocation */
 	if (!block)
-		return openssd_alloc_map_ltop_rr(os, l_addr, 0, NULL);
+		return nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
 
 	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
 	DMDEBUG("write lba %ld to page %ld", l_addr, p_addr);
-	return openssd_update_map(os, l_addr, p_addr, block);
+	return nvm_update_map(nvmd, l_addr, p_addr, block);
 }
 
 // TODO: actually finding a non-busy pool is not enough. read should be moved up the request queue.
 //	 however, no queue maipulation impl. yet...
-static struct nvm_addr *openssd_latency_lookup_ltop(struct openssd *os, sector_t logical_addr) {
-	struct openssd_hint *hint = os->hint_private;
+static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr) {
+	struct nvm_hint *hint = nvmd->hint_private;
 	int pool_idx;
 
-	BUG_ON(!(logical_addr >= 0 && logical_addr < os->nr_pages));
+	BUG_ON(!(logical_addr >= 0 && logical_addr < nvmd->nr_pages));
 
 	// shadow is empty
 	if (hint->shadow_map[logical_addr].addr == LTOP_EMPTY) {
 		DMDEBUG("no shadow. read primary");
-		return openssd_lookup_ltop(os, logical_addr);
+		return nvm_lookup_ltop(nvmd, logical_addr);
 	}
 
 	// check if primary is busy
-	pool_idx = os->trans_map[logical_addr].addr / (os->nr_pages / os->nr_pools);
-	if (atomic_read(&os->pools[pool_idx].is_active)) {
+	pool_idx = nvmd->trans_map[logical_addr].addr / (nvmd->nr_pages / nvmd->nr_pools);
+	if (atomic_read(&nvmd->pools[pool_idx].is_active)) {
 		DMDEBUG("primary busy. read shadow");
-		return openssd_lookup_ltop_map(os, logical_addr, hint->shadow_map);
+		return nvm_lookup_ltop_map(nvmd, logical_addr, hint->shadow_map);
 	}
 
 	// primary not busy
 	DMDEBUG("primary not busy");
-	return openssd_lookup_ltop(os, logical_addr);
+	return nvm_lookup_ltop(nvmd, logical_addr);
 }
 
-static unsigned long openssd_get_mapping_flag(struct openssd *os, sector_t logical_addr, sector_t old_p_addr)
+static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_addr, sector_t old_p_addr)
 {
-	struct openssd_hint *hint = os->hint_private;
+	struct nvm_hint *hint = nvmd->hint_private;
 	unsigned long flag = MAP_PRIMARY;
 
 	if(old_p_addr != LTOP_EMPTY) {
-		DMDEBUG("get_flag old_p_addr %ld os->trans_map[%ld].addr %ld hint->shadow_map[%ld].addr %ld", old_p_addr, logical_addr, os->trans_map[logical_addr].addr, logical_addr, hint->shadow_map[logical_addr].addr);
-		spin_lock(&os->trans_lock);
-		if(os->trans_map[logical_addr].addr == old_p_addr)
+		DMDEBUG("get_flag old_p_addr %ld nvmd->trans_map[%ld].addr %ld \
+				hint->shadow_map[%ld].addr %ld", old_p_addr,
+				logical_addr, nvmd->trans_map[logical_addr].addr, logical_addr, hint->shadow_map[logical_addr].addr);
+		spin_lock(&nvmd->trans_lock);
+		if (nvmd->trans_map[logical_addr].addr == old_p_addr)
 			flag = MAP_PRIMARY;
-		else if(hint->shadow_map[logical_addr].addr == old_p_addr)
+		else if (hint->shadow_map[logical_addr].addr == old_p_addr)
 			flag = MAP_SHADOW;
 		else {
 			DMERR("Reclaiming a physical page %ld not mapped by any logical addr", old_p_addr);
 			WARN_ON(true);
 		}
-		spin_unlock(&os->trans_lock);
+		spin_unlock(&nvmd->trans_lock);
 	}
 
 	return flag;
 }
 
 // if we ever support trim, this may be unified with some generic function
-static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr)
+static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr)
 {
-	struct openssd_hint *hint = os->hint_private;
+	struct nvm_hint *hint = nvmd->hint_private;
 	struct nvm_addr *l;
 	struct nvm_block *block;
 	unsigned int page_offset;
 	sector_t p_addr;
 
-	BUG_ON(l_addr >= os->nr_pages);
+	BUG_ON(l_addr >= nvmd->nr_pages);
 
-	spin_lock(&os->trans_lock);
+	spin_lock(&nvmd->trans_lock);
 	l = &hint->shadow_map[l_addr];
 	block = l->block;
 	p_addr = l->addr;
 
 	DMDEBUG("trim old shaddow");
 	if (block) {
-		BUG_ON(p_addr >= os->nr_pages);
+		BUG_ON(p_addr >= nvmd->nr_pages);
 
-		page_offset = l->addr % (os->nr_host_pages_in_blk);
+		page_offset = l->addr % (nvmd->nr_host_pages_in_blk);
 		DMDEBUG("trim map shadow l_addr %ld p_addr %ld page_offset %ld ", l_addr, p_addr, page_offset);
 		spin_lock(&block->lock);
 		WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 		block->nr_invalid_pages++;
 		spin_unlock(&block->lock);
-	
-		os->rev_trans_map[p_addr] = LTOP_EMPTY;
+
+		nvmd->rev_trans_map[p_addr] = LTOP_EMPTY;
 	}
 
 	l->addr = 0;
 	l->block = 0;
-	spin_unlock(&os->trans_lock);
+	spin_unlock(&nvmd->trans_lock);
 }
 
-int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
+int nvm_ioctl_user_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
 	hint_data_t __user *uhint = (hint_data_t __user *)arg;
 	hint_data_t* hint_data;
@@ -808,57 +810,56 @@ int openssd_ioctl_user_hint_cmd(struct openssd *os, unsigned long arg)
 		return -EFAULT;
 
 	// send hint to device
-	ret = openssd_send_hint(os, hint_data);
+	ret = nvm_send_hint(nvmd, hint_data);
 	kfree(hint_data);
 
 	return ret;
 }
 
-int openssd_ioctl_kernel_hint_cmd(struct openssd *os, unsigned long arg)
+int nvm_ioctl_kernel_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
 	hint_data_t *hint = (hint_data_t *)arg;
 	// send hint to device
 	// TODO: do we need to free khint here? or is it freed by block layer?
-	return openssd_send_hint(os, hint);
+	return nvm_send_hint(nvmd, hint);
 }
 
-int openssd_ioctl_hint(struct openssd *os, unsigned int cmd, unsigned long arg)
+int nvm_ioctl_hint(struct nvmd *nvmd, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
-	case OPENSSD_IOCTL_SUBMIT_HINT:
-		return openssd_ioctl_user_hint_cmd(os, arg);
-	case OPENSSD_IOCTL_KERNEL_HINT:
-		return openssd_ioctl_kernel_hint_cmd(os, arg);
+	case LIGHTNVM_IOCTL_SUBMIT_HINT:
+		return nvm_ioctl_user_hint_cmd(nvmd, arg);
+	case LIGHTNVM_IOCTL_KERNEL_HINT:
+		return nvm_ioctl_kernel_hint_cmd(nvmd, arg);
 	default:
 		return 0;
-		//return __blkdev_driver_ioctl(os->dev->bdev, os->dev->mode, cmd, arg);
 	}
 
 	return 0;
 }
 
-int openssd_init_hint(struct openssd *os)
+int nvm_init_hint(struct nvmd *nvmd)
 {
 	return 0;
 }
 
-int openssd_alloc_hint(struct openssd *os)
+int nvm_alloc_hint(struct nvmd *nvmd)
 {
-	struct openssd_hint *hint;
+	struct nvm_hint *hint;
 	struct nvm_ap *ap;
 	struct nvm_pool *pool;
 	int i;
 
-	hint = kmalloc(sizeof(struct openssd_hint), GFP_KERNEL);
+	hint = kmalloc(sizeof(struct nvm_hint), GFP_KERNEL);
 	if (!hint)
 		return -ENOMEM;
 
-	hint->shadow_map = vmalloc(sizeof(struct nvm_addr) * os->nr_pages);
+	hint->shadow_map = vmalloc(sizeof(struct nvm_addr) * nvmd->nr_pages);
 	if (!hint->shadow_map)
 		goto err_shadow_map;
-	memset(hint->shadow_map, 0, sizeof(struct nvm_addr) * os->nr_pages);
+	memset(hint->shadow_map, 0, sizeof(struct nvm_addr) * nvmd->nr_pages);
 
-	for(i = 0; i < os->nr_pages; i++) {
+	for(i = 0; i < nvmd->nr_pages; i++) {
 		struct nvm_addr *p = &hint->shadow_map[i];
 		p->addr = LTOP_EMPTY;
 		atomic_set(&p->inflight, 0);
@@ -872,13 +873,13 @@ int openssd_alloc_hint(struct openssd *os)
 		goto err_hints;
 
 	/* mark all pack hint related ap's*/
-	ssd_for_each_pool(os, pool, i) {
+	ssd_for_each_pool(nvmd, pool, i) {
 		unsigned int last_ap;
 		/* choose the last ap in each pool */
-		last_ap = (i * os->nr_aps_per_pool) + os->nr_aps_per_pool - 1;
-		ap = &os->aps[last_ap];
+		last_ap = (i * nvmd->nr_aps_per_pool) + nvmd->nr_aps_per_pool - 1;
+		ap = &nvmd->aps[last_ap];
 
-		ap->hint_private = kmalloc(sizeof(struct openssd_ap_hint),
+		ap->hint_private = kmalloc(sizeof(struct nvm_ap_hint),
 								GFP_KERNEL);
 		if (!ap->hint_private) {
 			DMERR("Couldn't allocate hint private for ap.");
@@ -887,41 +888,41 @@ int openssd_alloc_hint(struct openssd *os)
 		init_ap_hint(ap);
 	}
 
-	if (os->config.flags & NVM_OPT_ENGINE_SWAP) {
+	if (nvmd->config.flags & NVM_OPT_ENGINE_SWAP) {
 		DMINFO("Swap hint support");
-		os->map_ltop = openssd_map_swap_hint_ltop_rr;
-		os->write_bio = openssd_write_bio_hint;
-		os->read_bio = openssd_read_bio_hint;
-		os->begin_gc_private = openssd_begin_gc_hint;
-		os->end_gc_private = openssd_end_gc_hint;
-	} else if (os->config.flags & NVM_OPT_ENGINE_LATENCY) {
+		nvmd->map_ltop = nvm_map_swap_hint_ltop_rr;
+		nvmd->write_bio = nvm_write_bio_hint;
+		nvmd->read_bio = nvm_read_bio_hint;
+		nvmd->begin_gc_private = nvm_begin_gc_hint;
+		nvmd->end_gc_private = nvm_end_gc_hint;
+	} else if (nvmd->config.flags & NVM_OPT_ENGINE_LATENCY) {
 		DMINFO("Latency hint support");
-		os->map_ltop = openssd_map_latency_hint_ltop_rr;
-		os->lookup_ltop = openssd_latency_lookup_ltop;
-		os->write_bio = openssd_write_bio_hint;
-		os->read_bio = openssd_read_bio_hint;
-		os->begin_gc_private = openssd_begin_gc_hint;
-		os->end_gc_private = openssd_end_gc_hint;
-	} else if (os->config.flags & NVM_OPT_ENGINE_PACK) {
+		nvmd->map_ltop = nvm_map_latency_hint_ltop_rr;
+		nvmd->lookup_ltop = nvm_latency_lookup_ltop;
+		nvmd->write_bio = nvm_write_bio_hint;
+		nvmd->read_bio = nvm_read_bio_hint;
+		nvmd->begin_gc_private = nvm_begin_gc_hint;
+		nvmd->end_gc_private = nvm_end_gc_hint;
+	} else if (nvmd->config.flags & NVM_OPT_ENGINE_PACK) {
 		DMINFO("Pack hint support");
-		os->map_ltop = openssd_map_pack_hint_ltop_rr;
-		os->alloc_phys_addr = openssd_alloc_phys_addr_pack;
-		os->write_bio = openssd_write_bio_hint;
-		os->read_bio = openssd_read_bio_hint;
-		os->begin_gc_private = openssd_begin_gc_hint;
-		os->end_gc_private = openssd_end_gc_hint;
+		nvmd->map_ltop = nvm_map_pack_hint_ltop_rr;
+		nvmd->alloc_phys_addr = nvm_alloc_phys_addr_pack;
+		nvmd->write_bio = nvm_write_bio_hint;
+		nvmd->read_bio = nvm_read_bio_hint;
+		nvmd->begin_gc_private = nvm_begin_gc_hint;
+		nvmd->end_gc_private = nvm_end_gc_hint;
 
-		if (os->nr_aps_per_pool < 2 ) {
+		if (nvmd->nr_aps_per_pool < 2 ) {
 			DMERR("Need at least 2 aps for pack hints");
 			goto err_hints;
 		}
 	}
 
-	os->hint_private = hint;
+	nvmd->hint_private = hint;
 
 	return 0;
 err_ap_hints:
-	ssd_for_each_ap(os, ap, i)
+	ssd_for_each_ap(nvmd, ap, i)
 		kfree(ap->hint_private);
 	kfree(hint->ino2fc);
 err_hints:
@@ -931,9 +932,9 @@ err_shadow_map:
 	return -ENOMEM;
 }
 
-void openssd_free_hint(struct openssd *os)
+void nvm_free_hint(struct nvmd *nvmd)
 {
-	struct openssd_hint *hint = os->hint_private;
+	struct nvm_hint *hint = nvmd->hint_private;
 	hint_info_t *hint_info, *next_hint_info;
 	struct nvm_ap *ap;
 	int i;
@@ -951,19 +952,18 @@ void openssd_free_hint(struct openssd *os)
 
 	/* mark all pack hint related ap's*/
 	DMINFO("deallocating hint private for pack ap's");
-	ssd_for_each_ap(os, ap, i) {
-		if(i % os->nr_aps_per_pool != os->nr_aps_per_pool -1){
+	ssd_for_each_ap(nvmd, ap, i) {
+		if(i % nvmd->nr_aps_per_pool != nvmd->nr_aps_per_pool -1)
 			continue;
-		}
 
 		// only last ap in pool
 		kfree(ap->hint_private);
 	}
 
-	kfree(os->hint_private);
+	kfree(nvmd->hint_private);
 }
 
-void openssd_exit_hint(struct openssd *os)
+void nvm_exit_hint(struct nvmd *nvmd)
 {
 	// release everything else needed
 }

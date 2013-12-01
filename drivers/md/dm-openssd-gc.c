@@ -6,18 +6,18 @@
 
 static void queue_pool_gc(struct nvm_pool *pool)
 {
-	struct openssd *os = pool->os;
-	queue_work(os->kgc_wq, &pool->gc_ws);
+	struct nvmd *nvmd = pool->nvmd;
+	queue_work(nvmd->kgc_wq, &pool->gc_ws);
 }
 
-void openssd_gc_cb(unsigned long data)
+void nvm_gc_cb(unsigned long data)
 {
-	struct openssd *os = (void*) data;
+	struct nvmd *nvmd = (void*) data;
 //	struct nvm_pool *pool;
 //	int i;
-//	ssd_for_each_pool(os, pool, i)
+//	ssd_for_each_pool(nvmd, pool, i)
 //		queue_pool_gc(pool);
-	mod_timer(&os->gc_timer, jiffies + msecs_to_jiffies(os->config.gc_time));
+	mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(nvmd->config.gc_time));
 }
 
 static void __erase_block(struct nvm_block *block)
@@ -56,7 +56,7 @@ static struct nvm_block* block_prio_find_max(struct nvm_pool *pool)
 /* Move data away from flash block to be erased. Additionally update the l to p and p to l
  * mappings.
  */
-static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block)
+static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 {
 	struct nvm_addr src;
 	struct bio *src_bio;
@@ -65,55 +65,55 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 	int slot = -1;
 	void *gc_private = NULL;
 
-	if (bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk))
+	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
 		return;
 
 	printk("o1\n");
-	while ((slot = find_first_zero_bit(block->invalid_pages, os->nr_host_pages_in_blk)) < os->nr_host_pages_in_blk) {
+	while ((slot = find_first_zero_bit(block->invalid_pages, nvmd->nr_host_pages_in_blk)) < nvmd->nr_host_pages_in_blk) {
 		/* Perform read */
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
 
 		/* TODO: check for memory failure */
 		src_bio = bio_alloc(GFP_NOIO, 1);
-		src_bio->bi_bdev = os->dev->bdev;
+		src_bio->bi_bdev = nvmd->dev->bdev;
 		src_bio->bi_sector = src.addr * NR_PHY_IN_LOG;
 
-		page = mempool_alloc(os->page_pool, GFP_NOIO);
+		page = mempool_alloc(nvmd->page_pool, GFP_NOIO);
 
 		/* TODO: check return value */
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
-		openssd_submit_bio(os, &src, READ, src_bio, 1);
+		nvm_submit_bio(nvmd, &src, READ, src_bio, 1);
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
-		l_addr = os->lookup_ptol(os, src.addr);
+		l_addr = nvmd->lookup_ptol(nvmd, src.addr);
 		/* remap src_bio to write the logical addr to new physical
 		 * place */
 		src_bio->bi_sector = l_addr;
 
 		//DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", src.addr, l_addr, l_addr, os->trans_map[l_addr].addr);
 
-		if (os->begin_gc_private)
-			gc_private = os->begin_gc_private(l_addr, src.addr, block);
+		if (nvmd->begin_gc_private)
+			gc_private = nvmd->begin_gc_private(l_addr, src.addr, block);
 
-		openssd_write_execute_bio(os, src_bio, 1, NULL);
+		nvm_write_execute_bio(nvmd, src_bio, 1, NULL);
 
-		if (os->end_gc_private)
-			os->end_gc_private(gc_private);
+		if (nvmd->end_gc_private)
+			nvmd->end_gc_private(gc_private);
 
 		bio_put(src_bio);
-		mempool_free(page, os->page_pool);
+		mempool_free(page, nvmd->page_pool);
 	}
-	WARN_ON(!bitmap_full(block->invalid_pages, os->nr_host_pages_in_blk));
+	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
 	printk("o2\n");
 }
 
 /* Push erase condition to automatically be executed when block goes to zero.
  * Only GC should do this */
-void openssd_block_release(struct kref *ref)
+void nvm_block_release(struct kref *ref)
 {
 	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
 
@@ -122,10 +122,10 @@ void openssd_block_release(struct kref *ref)
 	nvm_pool_put_block(block);
 }
 
-void openssd_gc_collect(struct work_struct *work)
+void nvm_gc_collect(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, gc_ws);
-	struct openssd *os = pool->os;
+	struct nvmd *nvmd = pool->nvmd;
 	struct nvm_block *block;
 	unsigned int nr_blocks_need;
 
@@ -163,21 +163,21 @@ void openssd_gc_collect(struct work_struct *work)
 		 * prepare multiple pages in parallel on the attached
 		 * device. */
 		DMDEBUG("moving block addr %ld", block_to_addr(block));
-		openssd_move_valid_pages(os, block);
+		nvm_move_valid_pages(nvmd, block);
 
-		kref_put(&block->ref_count, openssd_block_release);
+		kref_put(&block->ref_count, nvm_block_release);
 
 		spin_lock(&pool->gc_lock);
 	}
 	spin_unlock(&pool->gc_lock);
 	//DMERR("Freed %u blocks", i);
 
-	os->next_collect_pool++;
+	nvmd->next_collect_pool++;
 
-	queue_work(os->kbiod_wq, &os->deferred_ws);
+	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);
 }
 
-void openssd_gc_kick(struct nvm_pool *pool)
+void nvm_gc_kick(struct nvm_pool *pool)
 {
 	BUG_ON(!pool);
 	queue_pool_gc(pool);

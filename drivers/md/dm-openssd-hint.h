@@ -4,14 +4,14 @@
  * This file is released under the GPL.
  */
 
-#ifndef DM_OPENSSD_HINT_H_
-#define DM_OPENSSD_HINT_H_
+#ifndef DM_LIGHTNVM_HINT_H_
+#define DM_LIGHTNVM_HINT_H_
 
 #include <linux/types.h>
 #include "dm-openssd.h"
 
-#define OPENSSD_IOCTL_SUBMIT_HINT _IOW(OPENSSD_IOC_MAGIC, 0x41, hint_data_t)
-#define OPENSSD_IOCTL_KERNEL_HINT _IOW(OPENSSD_IOC_MAGIC, 0x42, hint_data_t)
+#define LIGHTNVM_IOCTL_SUBMIT_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x41, hint_data_t)
+#define LIGHTNVM_IOCTL_KERNEL_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x42, hint_data_t)
 
 #define HINT_MAX_INOS       (500000)
 #define HINT_DATA_MAX_INOS  (8)
@@ -56,7 +56,7 @@ typedef struct hint_data_s {
 } hint_data_t;
 
 #ifdef __KERNEL__
-struct openssd_hint {
+struct nvm_hint {
 	unsigned int hint_flags;
 	char* ino2fc; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
 	spinlock_t hintlock;
@@ -72,14 +72,14 @@ typedef struct hint_info_s {
 	struct list_head list_member;
 } hint_info_t;
 
-struct openssd_hint_map_private {
+struct nvm_hint_map_private {
 	sector_t old_p_addr;
 	struct nvm_ap *prev_ap;
 	unsigned long flags;
 	hint_info_t *hint_info;
 };
 
-struct openssd_ap_hint {
+struct nvm_ap_hint {
 	unsigned int ino;
 	struct timeval tv; // time of last allocation in this ap
 };
@@ -89,7 +89,7 @@ struct openssd_ap_hint {
 
 static inline void init_ap_hint(struct nvm_ap *ap)
 {
-	struct openssd_ap_hint *ap_hint = ap->hint_private;
+	struct nvm_ap_hint *ap_hint = ap->hint_private;
 	ap_hint->ino = INODE_EMPTY;
 }
 #endif
@@ -109,4 +109,4 @@ enum deploy_hint_flags {
 	 (LBA) <  ((HINT_INFO)->hint.start_lba+(HINT_INFO)->hint.count) && \
 	 ((HINT_INFO)->hint_flags & FLAGS))
 
-#endif /* DM_OPENSSD_HINT_H_ */
+#endif /* DM_LIGHTNVM_HINT_H_ */

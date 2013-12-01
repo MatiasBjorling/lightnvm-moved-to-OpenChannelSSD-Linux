@@ -46,7 +46,7 @@ void openssd_deferred_bio_submit(struct work_struct *work)
 	while (bio) {
 		struct bio *next = bio->bi_next;
 		bio->bi_next = NULL;
-		os->write_bio(os, bio, 1);
+		os->write_bio(os, bio);
 		bio = next;
 	}
 }
@@ -626,7 +626,7 @@ struct bio *openssd_write_init_bio(struct openssd *os, struct bio *bio,
 }
 
 /* returns 0 if deferred */
-int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
+void openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
 		void *private)
 {
 	struct nvm_addr *p;
@@ -640,17 +640,15 @@ int openssd_write_execute_bio(struct openssd *os, struct bio *bio, int is_gc,
 		issue_bio = openssd_write_init_bio(os, bio, p);
 		openssd_submit_bio(os, p, WRITE, issue_bio, is_gc);
 		bio_endio(bio, 0);
-		return 1;
 	} else {
 		BUG_ON(is_gc);
 		spin_lock(&os->deferred_lock);
 		bio_list_add(&os->deferred_bios, bio);
 		spin_unlock(&os->deferred_lock);
-		return 0;
 	}
 }
 
-int openssd_write_bio_generic(struct openssd *os, struct bio *bio, int deferred)
+int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
 {
 	openssd_write_execute_bio(os, bio, 0, NULL);
 	return DM_MAPIO_SUBMITTED;

@@ -76,7 +76,7 @@ static int openssd_map(struct dm_target *ti, struct bio *bio)
 			DMERR("Write: num of sectors not supported (%u)", bio_sectors(bio));
 			return DM_MAPIO_REQUEUE;
 		}
-		ret = os->write_bio(os, bio, 0);
+		ret = os->write_bio(os, bio);
 	} else {
 		ret = os->read_bio(os, bio);
 	}

@@ -51,6 +51,8 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	}
 }
 
+void __nvm_submit_bio(struct bio *bio);
+
 void nvm_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
@@ -60,7 +62,7 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 	bio = bio_list_pop(&pool->waiting_bios);
 	spin_unlock(&pool->waiting_lock);
 
-	generic_make_request(bio);
+	__nvm_submit_bio(bio);
 }
 
 /* requires lock on the translation map used */
@@ -480,8 +482,6 @@ static void nvm_endio(struct bio *bio, int err)
 			if (total_wait > 50)
 				udelay(total_wait);
 		}
-
-
 	}
 
 	// Remember that the IO is first officially finished from here
@@ -663,6 +663,19 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
+void __nvm_submit_bio(struct bio *bio)
+{
+	int sync = bio->bi_rw & REQ_SYNC;
+	if (sync) {
+		struct per_bio_data *pb = get_per_bio_data(bio);
+		init_completion(&pb->event);
+		submit_bio(bio->bi_rw, bio);
+		wait_for_completion_io(&pb->event);
+	} else {
+		submit_bio(bio->bi_rw, bio);
+	}
+}
+
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *bio, int sync)
 {
 	struct nvm_ap *ap = block_to_ap(nvmd, p->block);
@@ -675,35 +688,32 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 	pb->physical_addr = bio->bi_sector;
 	pb->sync = sync;
 
+	/* is set prematurely because we need it for deferred bios */
+	bio->bi_rw |= rw;
+	if (sync)
+		bio->bi_rw |= REQ_SYNC;
+
+	/* setup timings - remember overhead. */
+	getnstimeofday(&pb->start_tv);
+
 	if (rw == WRITE)
 		bio->bi_end_io = nvm_end_write_bio;
 	else
 		bio->bi_end_io = nvm_end_read_bio;
 
-	/* setup timings - remember overhead. */
-	getnstimeofday(&pb->start_tv);
+	kref_get(&p->block->ref_count);
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE
-					&& atomic_read(&pool->is_active)) {
+				&& atomic_inc_return(&pool->is_active) == 1) {
+		__nvm_submit_bio(bio);
+	} else {
+		atomic_dec(&pool->is_active);
 		spin_lock(&pool->waiting_lock);
 		ap->io_delayed++;
 		bio_list_add(&pool->waiting_bios, bio);
 		spin_unlock(&pool->waiting_lock);
-	} else {
-		atomic_set(&pool->is_active, 1);
 	}
 
 	// We allow counting to be semi-accurate as theres no locking for accounting.
 	ap->io_accesses[bio_data_dir(bio)]++;
-
-	kref_get(&p->block->ref_count);
-
-	if (sync) {
-		rw |= REQ_SYNC;
-		init_completion(&pb->event);
-		submit_bio(rw, bio);
-		wait_for_completion_io(&pb->event);
-	} else {
-		submit_bio(rw, bio);
-	}
 }

@@ -431,7 +431,7 @@ static void nvm_endio(struct bio *bio, int err)
 	struct nvm_pool *pool;
 	struct nvm_addr *p;
 	struct nvm_block *block;
-	struct timeval end_tv;
+	struct timespec end_tv, diff_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
 	unsigned int data_cnt;
 
@@ -472,13 +472,16 @@ static void nvm_endio(struct bio *bio, int err)
 	nvm_delay_endio_hint(nvmd, bio, pb, &dev_wait);
 
 	if (!(nvmd->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
-		do_gettimeofday(&end_tv);
-		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
-		if (dev_wait > diff)
+		getnstimeofday(&end_tv);
+		diff_tv = timespec_sub(end_tv, pb->start_tv);
+		diff = timespec_to_ns(&diff_tv) / 1000;
+		if (dev_wait > diff) {
 			total_wait = dev_wait - diff;
+			if (total_wait > 50)
+				udelay(total_wait);
+		}
 
-		if (total_wait > 50)
-			udelay(total_wait);
+
 	}
 
 	// Remember that the IO is first officially finished from here
@@ -678,7 +681,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 		bio->bi_end_io = nvm_end_read_bio;
 
 	/* setup timings - remember overhead. */
-	do_gettimeofday(&pb->start_tv);
+	getnstimeofday(&pb->start_tv);
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE
 					&& atomic_read(&pool->is_active)) {

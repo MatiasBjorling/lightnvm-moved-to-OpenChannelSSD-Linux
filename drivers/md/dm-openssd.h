@@ -294,7 +294,7 @@ struct nvmd {
 struct per_bio_data {
 	struct nvm_ap *ap;
 	struct nvm_addr *addr;
-	struct timeval start_tv;
+	struct timespec start_tv;
 	sector_t physical_addr;
 
 	// Hook up for our overwritten bio fields

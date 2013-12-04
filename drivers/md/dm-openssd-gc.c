@@ -75,7 +75,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		/* TODO: check return value */
 		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
 
-		openssd_submit_bio(os, block, READ, src_bio, 1);
+		openssd_submit_bio(os, block, READ, src_bio, 1, NULL);
 
 		/* Perform write */
 		/* We use the physical address to go to the logical page addr,
@@ -95,7 +95,7 @@ static void openssd_move_valid_pages(struct openssd *os, struct nvm_block *block
 		bio_for_each_segment(bv, src_bio, i) {
 			unsigned int size = openssd_handle_buffered_write(dst_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-				openssd_submit_write(os, dst_addr, victim_block, size);
+				openssd_submit_write(os, dst_addr, victim_block, size, NULL);
 		}
 
 		bio_put(src_bio);

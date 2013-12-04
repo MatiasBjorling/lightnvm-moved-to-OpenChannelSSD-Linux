@@ -452,7 +452,7 @@ retry:
 
 			size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-				openssd_submit_write(os, physical_addr, victim_block, size);
+				openssd_submit_write(os, physical_addr, victim_block, size, bio);
 		}
 	}
 

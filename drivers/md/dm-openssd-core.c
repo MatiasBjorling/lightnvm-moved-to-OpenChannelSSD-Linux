@@ -34,6 +34,8 @@ static void free_per_bio_data(struct openssd *os, struct per_bio_data *pb)
 	mempool_free(pb, os->per_bio_pool);
 }
 
+void __openssd_submit_bio(struct bio *bio);
+
 void openssd_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
@@ -43,7 +45,7 @@ void openssd_delayed_bio_submit(struct work_struct *work)
 	bio = bio_list_pop(&pool->waiting_bios);
 	spin_unlock(&pool->waiting_lock);
 
-	generic_make_request(bio);
+	__openssd_submit_bio(bio);
 }
 
 void openssd_update_map_generic(struct openssd *os,  sector_t l_addr,
@@ -387,7 +389,7 @@ static void openssd_endio(struct bio *bio, int err)
 	struct nvm_ap *ap;
 	struct nvm_pool *pool;
 	struct nvm_block *block;
-	struct timeval end_tv;
+	struct timespec end_tv, diff_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
 	unsigned int data_cnt;
 
@@ -421,8 +423,10 @@ static void openssd_endio(struct bio *bio, int err)
 	openssd_delay_endio_hint(os, bio, pb, &dev_wait);
 
 	if (!(os->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
-		do_gettimeofday(&end_tv);
-		diff = end_tv.tv_usec - pb->start_tv.tv_usec;
+		getnstimeofday(&end_tv);
+
+		diff_tv = timespec_sub(end_tv, pb->start_tv);
+		diff = timespec_to_ns(&diff_tv) / 1000;
 		if (dev_wait > diff)
 			total_wait = dev_wait - diff;
 
@@ -441,6 +445,9 @@ static void openssd_endio(struct bio *bio, int err)
 
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
+
+	if (pb->orig_bio)
+		bio_endio(pb->orig_bio, err);
 
 	if (pb->sync)
 		complete(&pb->event);
@@ -532,7 +539,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 		return DM_MAPIO_SUBMITTED;
 
 	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
-	openssd_submit_bio(os, phys->block, READ, bio, 0);
+	openssd_submit_bio(os, phys->block, READ, bio, 0, NULL);
 
 	return DM_MAPIO_SUBMITTED;
 }
@@ -556,7 +563,8 @@ int openssd_handle_buffered_write(sector_t p_addr, struct nvm_block *block,
 }
 
 void openssd_submit_write(struct openssd *os, sector_t physical_addr,
-                          struct nvm_block* victim_block, int size)
+                          struct nvm_block* victim_block, int size,
+			  struct bio *orig_bio)
 {
 	struct bio *issue_bio;
 	int i;
@@ -570,7 +578,7 @@ void openssd_submit_write(struct openssd *os, sector_t physical_addr,
 		unsigned int idx = size - NR_HOST_PAGES_IN_FLASH_PAGE + i;
 		bio_add_page(issue_bio, &victim_block->data[idx], PAGE_SIZE, 0);
 	}
-	openssd_submit_bio(os, victim_block, WRITE, issue_bio, 0);
+	openssd_submit_bio(os, victim_block, WRITE, issue_bio, 0, orig_bio);
 }
 
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio)
@@ -599,14 +607,29 @@ retry:
 
 		size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
 		if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-			openssd_submit_write(os, physical_addr, victim_block, size);
+			openssd_submit_write(os, physical_addr, victim_block,
+					size, bio);
 	}
 
-	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 
-void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, struct bio *bio, int sync)
+void __openssd_submit_bio(struct bio *bio)
+{
+	int sync = bio->bi_rw & REQ_SYNC;
+	if (sync) {
+		struct per_bio_data *pb = get_per_bio_data(bio);
+		init_completion(&pb->event);
+		submit_bio(bio->bi_rw, bio);
+		wait_for_completion_io(&pb->event);
+	} else {
+		submit_bio(bio->bi_rw, bio);
+	}
+
+}
+
+void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw,
+		struct bio *bio, int sync, struct bio *orig_bio)
 {
 	struct nvm_ap *ap = block_to_ap(os, block);
 	struct nvm_pool *pool = ap->pool;
@@ -616,7 +639,12 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 	pb->ap = ap;
 	pb->block = block;
 	pb->physical_addr = bio->bi_sector;
-	pb->sync = 0;
+	pb->sync = sync;
+	pb->orig_bio = orig_bio;
+
+	bio->bi_rw |= rw;
+	if (sync)
+		bio->bi_rw |= REQ_SYNC;
 
 	if (rw == WRITE)
 		bio->bi_end_io = openssd_end_write_bio;
@@ -624,30 +652,21 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, str
 		bio->bi_end_io = openssd_end_read_bio;
 
 	/* setup timings - remember overhead. */
-	do_gettimeofday(&pb->start_tv);
+	getnstimeofday(&pb->start_tv);
+
+	kref_get(&block->ref_count);
 
 	if (os->config.flags & NVM_OPT_POOL_SERIALIZE
-					&& atomic_read(&pool->is_active)) {
+				&& atomic_inc_return(&pool->is_active) == 1) {
+		__openssd_submit_bio(bio);
+	} else {
+		atomic_dec(&pool->is_active);
 		spin_lock(&pool->waiting_lock);
 		ap->io_delayed++;
 		bio_list_add(&pool->waiting_bios, bio);
 		spin_unlock(&pool->waiting_lock);
-	} else {
-		atomic_set(&pool->is_active, 1);
 	}
 
 	// We allow counting to be semi-accurate as theres no locking for accounting.
 	ap->io_accesses[bio_data_dir(bio)]++;
-
-	kref_get(&block->ref_count);
-
-	if (sync) {
-		rw |= REQ_SYNC;
-		pb->sync = 1;
-		init_completion(&pb->event);
-		submit_bio(rw, bio);
-		wait_for_completion_io_timeout(&pb->event, 2*HZ);
-	} else {
-		submit_bio(rw, bio);
-	}
 }

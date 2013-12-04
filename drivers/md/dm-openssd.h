@@ -272,11 +272,12 @@ struct openssd {
 struct per_bio_data {
 	struct nvm_ap *ap;
 	struct nvm_block *block;
-	struct timeval start_tv;
+	struct timespec start_tv;
 	sector_t physical_addr;
 
 	// Hook up for our overwritten bio fields
 	bio_end_io_t *bi_end_io;
+	struct bio *orig_bio;
 	void *bi_private;
 	struct completion event;
 	unsigned int sync;
@@ -309,9 +310,10 @@ struct nvm_addr *openssd_lookup_ltop(struct openssd *os, sector_t logical_addr);
 sector_t openssd_lookup_ptol(struct openssd *os, sector_t physical_addr);
 
 /*   I/O bio related */
-void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, struct bio *bio, int sync);
+void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw, struct bio *bio, int sync, struct bio *orig_bio);
 void openssd_submit_write(struct openssd *os, sector_t physical_addr,
-                          struct nvm_block* victim_block, int size);
+			  struct nvm_block* victim_block, int size,
+			  struct bio *orig_bio);
 int openssd_handle_buffered_write(sector_t physical_addr, struct nvm_block *victim_block, struct bio_vec *bv);
 int openssd_write_bio_generic(struct openssd *os, struct bio *bio);
 int openssd_read_bio_generic(struct openssd *os, struct bio *bio);

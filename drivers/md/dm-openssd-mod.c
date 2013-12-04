@@ -426,6 +426,8 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	       nvmd->nr_host_pages_in_blk,
 	       nvmd->nr_aps,
 	       nvmd->nr_aps_per_pool);
+	DMINFO("Timings: %u/%u/%u", nvmd->config.t_read, nvmd->config.t_write,
+			nvmd->config.t_erase);
 	DMINFO("Target sector size=%d", nvmd->sector_size);
 	DMINFO("Disk logical sector size=%d",
 	       bdev_logical_block_size(nvmd->dev->bdev));

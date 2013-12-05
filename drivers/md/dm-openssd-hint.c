@@ -408,6 +408,7 @@ static void openssd_trim_map_shadow(struct openssd *os, sector_t l_addr);
 static int openssd_write_bio_hint(struct openssd *os, struct bio *bio)
 {
 	struct openssd_hint *hint = os->hint_private;
+	struct bio *primary_bio = bio;
 	struct nvm_block *victim_block;
 	struct bio_vec *bv;
 	sector_t logical_addr, physical_addr;
@@ -452,7 +453,8 @@ retry:
 
 			size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
 			if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
-				openssd_submit_write(os, physical_addr, victim_block, size, bio);
+				openssd_submit_write(os, physical_addr, victim_block, size, primary_bio);
+			primary_bio = NULL;
 		}
 	}
 
@@ -466,7 +468,6 @@ retry:
 		spin_unlock(&hint->hintlock);
 	}
 
-	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 

@@ -435,10 +435,15 @@ static void openssd_endio(struct bio *bio, int err)
 	}
 
 	// Remember that the IO is first officially finished from here
-	if (bio_list_peek(&pool->waiting_bios))
+	spin_lock(&pool->waiting_lock);
+	if (bio_list_peek(&pool->waiting_bios)){
+		spin_unlock(&pool->waiting_lock);
 		queue_work(os->kbiod_wq, &pool->waiting_ws);
-	else
-		atomic_set(&pool->is_active, 0);
+	}
+	else{
+		spin_unlock(&pool->waiting_lock);
+		atomic_dec(&pool->is_active);
+	}
 
 	/* Finish up */
 	dedecorate_bio(pb, bio);
@@ -538,7 +543,7 @@ int openssd_read_bio_generic(struct openssd *os, struct bio *bio)
 				&& openssd_handle_buffered_read(os, bio, phys))
 		return DM_MAPIO_SUBMITTED;
 
-	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
+	//DMDEBUG("READ phys_addr: %lu pool %d blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, POOL_FROM_PHYS_ADDR(phys->block->pool->phy_addr_start), phys->block->id, bio->bi_sector, bio_sectors(bio));
 	openssd_submit_bio(os, phys->block, READ, bio, 0, NULL);
 
 	return DM_MAPIO_SUBMITTED;
@@ -603,7 +608,7 @@ retry:
 		}
 
 		/* Submit bio for all physical addresses*/
-		//DMINFO("WRITE Logical: %lu Physical: %lu OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, bio->bi_sector, bio_sectors(bio), bio->bi_size);
+		//DMDEBUG("WRITE Logical: %lu Physical: %lu pool: %d OS Sector addr: %ld Sectors: %u Size: %u", logical_addr, physical_addr, POOL_FROM_PHYS_ADDR(physical_addr), bio->bi_sector, bio_sectors(bio), bio->bi_size);
 
 		size = openssd_handle_buffered_write(physical_addr, victim_block, bv);
 		if (size % NR_HOST_PAGES_IN_FLASH_PAGE == 0)
@@ -660,7 +665,7 @@ void openssd_submit_bio(struct openssd *os, struct nvm_block *block, int rw,
 				&& atomic_inc_return(&pool->is_active) == 1) {
 		__openssd_submit_bio(bio);
 	} else {
-		atomic_dec(&pool->is_active);
+		atomic_dec(&pool->is_active);		
 		spin_lock(&pool->waiting_lock);
 		ap->io_delayed++;
 		bio_list_add(&pool->waiting_bios, bio);

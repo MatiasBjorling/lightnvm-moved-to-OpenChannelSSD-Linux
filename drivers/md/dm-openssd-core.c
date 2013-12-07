@@ -428,6 +428,7 @@ struct nvm_addr *nvm_alloc_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr,
 static void nvm_endio(struct bio *bio, int err)
 {
 	struct per_bio_data *pb;
+	struct bio *deferred_bio;
 	struct nvmd *nvmd;
 	struct nvm_ap *ap;
 	struct nvm_pool *pool;
@@ -484,11 +485,14 @@ static void nvm_endio(struct bio *bio, int err)
 		}
 	}
 
+	spin_lock(&pool->waiting_lock);
+	deferred_bio = bio_list_peek(&pool->waiting_bios);
+	spin_unlock(&pool->waiting_lock);
 	// Remember that the IO is first officially finished from here
-	if (bio_list_peek(&pool->waiting_bios))
+	if (deferred_bio)
 		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
 	else
-		atomic_set(&pool->is_active, 0);
+		atomic_dec(&pool->is_active);
 
 	/* Finish up */
 	dedecorate_bio(pb, bio);

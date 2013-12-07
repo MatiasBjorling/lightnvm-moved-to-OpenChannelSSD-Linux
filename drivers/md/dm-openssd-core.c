@@ -91,8 +91,7 @@ struct nvm_addr *nvm_update_map(struct nvmd *nvmd, sector_t l_addr,
 
 	while (atomic_inc_return(&p->inflight) != 1) {
 		atomic_dec(&p->inflight);
-		DMERR("w");
-		udelay(100);
+		schedule();
 	}
 
 	if (p->block)

@@ -85,7 +85,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
-		nvm_submit_bio(nvmd, &src, READ, src_bio, 1);
+		nvm_submit_bio(nvmd, &src, READ, src_bio, 1, NULL);
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */

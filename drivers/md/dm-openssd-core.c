@@ -92,6 +92,7 @@ struct nvm_addr *nvm_update_map(struct nvmd *nvmd, sector_t l_addr,
 	while (atomic_inc_return(&p->inflight) != 1) {
 		atomic_dec(&p->inflight);
 		schedule();
+		printk("f\n");
 	}
 
 	if (p->block)
@@ -499,6 +500,9 @@ static void nvm_endio(struct bio *bio, int err)
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
+	if (pb->orig_bio)
+		bio_endio(pb->orig_bio, err);
+
 	if (pb->sync)
 		complete(&pb->event);
 
@@ -589,7 +593,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 		return DM_MAPIO_SUBMITTED;
 
 	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
-	nvm_submit_bio(nvmd, p, READ, bio, 0);
+	nvm_submit_bio(nvmd, p, READ, bio, 0, NULL);
 
 	return DM_MAPIO_SUBMITTED;
 }
@@ -652,8 +656,7 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 
 	if (p) {
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
-		nvm_submit_bio(nvmd, p, WRITE, issue_bio, is_gc);
-		bio_endio(bio, 0);
+		nvm_submit_bio(nvmd, p, WRITE, issue_bio, is_gc, bio);
 	} else {
 		BUG_ON(is_gc);
 		nvm_defer_bio(nvmd, bio);
@@ -679,7 +682,7 @@ void __nvm_submit_bio(struct bio *bio)
 	}
 }
 
-void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *bio, int sync)
+void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *bio, int sync, struct bio *orig_bio)
 {
 	struct nvm_ap *ap = block_to_ap(nvmd, p->block);
 	struct nvm_pool *pool = ap->pool;
@@ -690,6 +693,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 	pb->addr = p;
 	pb->physical_addr = bio->bi_sector;
 	pb->sync = sync;
+	pb->orig_bio = orig_bio;
 
 	/* is set prematurely because we need it for deferred bios */
 	bio->bi_rw |= rw;
@@ -706,16 +710,16 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 
 	kref_get(&p->block->ref_count);
 
-	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE
-				&& atomic_inc_return(&pool->is_active) == 1) {
+	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+		if (atomic_inc_return(&pool->is_active) != 1) {
+			atomic_dec(&pool->is_active);
+			spin_lock(&pool->waiting_lock);
+			ap->io_delayed++;
+			bio_list_add(&pool->waiting_bios, bio);
+			spin_unlock(&pool->waiting_lock);
+		}
+	} else
 		__nvm_submit_bio(bio);
-	} else {
-		atomic_dec(&pool->is_active);
-		spin_lock(&pool->waiting_lock);
-		ap->io_delayed++;
-		bio_list_add(&pool->waiting_bios, bio);
-		spin_unlock(&pool->waiting_lock);
-	}
 
 	// We allow counting to be semi-accurate as theres no locking for accounting.
 	ap->io_accesses[bio_data_dir(bio)]++;

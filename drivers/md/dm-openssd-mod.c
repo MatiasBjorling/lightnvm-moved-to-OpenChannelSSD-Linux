@@ -65,7 +65,18 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 	struct nvmd *nvmd = ti->private;
 	int ret;
 
+	if(bio->bi_sector < 0 || bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages){
+		DMERR("ERROR - %s illegal address %ld", (bio_data_dir(bio) == WRITE) ? "WRITE" : "READ", bio->bi_sector / NR_PHY_IN_LOG );
+		bio_io_error(bio);
+		return DM_MAPIO_SUBMITTED;
+	};
+
 	bio->bi_bdev = nvmd->dev->bdev;
+
+	/*DMINFO("map: %s l: %llu size %d",
+			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ",
+			(unsigned long long) bio->bi_sector / NR_PHY_IN_LOG,
+			bio->bi_size);*/
 
 	if (bio_data_dir(bio) == WRITE) {
 		if (bio_sectors(bio) != NR_PHY_IN_LOG) {
@@ -76,12 +87,6 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 	} else {
 		ret = nvmd->read_bio(nvmd, bio);
 	}
-
-	/*DMINFO("map: %s l: %llu -> p: %llu sz: %u",
-			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ",
-			(unsigned long long) l_addr / NR_PHY_IN_LOG,
-			(unsigned long long) bio->bi_sector / NR_PHY_IN_LOG,
-			bio->bi_size);*/
 
 	return ret;
 }

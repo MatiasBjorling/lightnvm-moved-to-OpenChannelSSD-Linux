@@ -439,7 +439,6 @@ static void nvm_endio(struct bio *bio, int err)
 	unsigned int data_cnt;
 
 	pb = get_per_bio_data(bio);
-
 	BUG_ON(pb->physical_addr == LTOP_EMPTY);
 
 	p = pb->addr;
@@ -500,8 +499,9 @@ static void nvm_endio(struct bio *bio, int err)
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
-	if (pb->orig_bio)
+	if (pb->orig_bio){
 		bio_endio(pb->orig_bio, err);
+	}
 
 	if (pb->sync)
 		complete(&pb->event);
@@ -643,7 +643,6 @@ void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio)
 	spin_unlock(&nvmd->deferred_lock);
 }
 
-/* returns 0 if deferred */
 void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		void *private)
 {
@@ -718,6 +717,8 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 			bio_list_add(&pool->waiting_bios, bio);
 			spin_unlock(&pool->waiting_lock);
 		}
+		else
+			__nvm_submit_bio(bio);
 	} else
 		__nvm_submit_bio(bio);
 

@@ -454,7 +454,7 @@ static void nvm_dtr(struct dm_target *ti)
 	struct nvm_pool *pool;
 	int i;
 
-	dm_put_device(ti, nvmd->dev);
+	nvm_free_hint(nvmd);
 
 	ssd_for_each_pool(nvmd, pool, i) {
 		while (bio_list_peek(&pool->waiting_bios))
@@ -463,7 +463,7 @@ static void nvm_dtr(struct dm_target *ti)
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */
 	ssd_for_each_pool(nvmd, pool, i)
-	kfree(pool->blocks);
+		kfree(pool->blocks);
 
 	kfree(nvmd->pools);
 	kfree(nvmd->aps);
@@ -478,7 +478,7 @@ static void nvm_dtr(struct dm_target *ti)
 	mempool_destroy(nvmd->per_bio_pool);
 	mempool_destroy(nvmd->page_pool);
 
-	nvm_free_hint(nvmd);
+	dm_put_device(ti, nvmd->dev);
 
 	kfree(nvmd);
 

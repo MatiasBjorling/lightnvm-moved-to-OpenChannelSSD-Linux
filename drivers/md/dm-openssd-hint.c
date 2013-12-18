@@ -942,7 +942,6 @@ void nvm_free_hint(struct nvmd *nvmd)
 	spin_lock(&hint->hintlock);
 	list_for_each_entry_safe(hint_info, next_hint_info, &hint->hintlist, list_member) {
 		list_del(&hint_info->list_member);
-		DMINFO("dtr: deleted hint");
 		kfree(hint_info);
 	}
 	spin_unlock(&hint->hintlock);
@@ -951,14 +950,8 @@ void nvm_free_hint(struct nvmd *nvmd)
 	vfree(hint->shadow_map);
 
 	/* mark all pack hint related ap's*/
-	DMINFO("deallocating hint private for pack ap's");
-	ssd_for_each_ap(nvmd, ap, i) {
-		if(i % nvmd->nr_aps_per_pool != nvmd->nr_aps_per_pool -1)
-			continue;
-
-		// only last ap in pool
+	ssd_for_each_ap(nvmd, ap, i)
 		kfree(ap->hint_private);
-	}
 
 	kfree(nvmd->hint_private);
 }

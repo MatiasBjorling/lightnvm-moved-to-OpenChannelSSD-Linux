@@ -120,6 +120,7 @@ struct nvm_block {
 	/* Block state handling */
 	atomic_t gc_running;
 	struct kref ref_count; /* Outstanding IOs to be completed on block */
+	struct work_struct ws_gc;
 };
 
 struct nvm_addr {
@@ -318,6 +319,7 @@ sector_t nvm_alloc_phys_fastest_addr(struct nvmd *, struct nvm_block **ret_victi
 /*   Naive implementations */
 void nvm_delayed_bio_submit(struct work_struct *work);
 void nvm_deferred_bio_submit(struct work_struct *work);
+void nvm_gc_block(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
 sector_t nvm_alloc_addr_from_ap(struct nvm_ap *, struct nvm_block **ret_victim_block, int is_gc);

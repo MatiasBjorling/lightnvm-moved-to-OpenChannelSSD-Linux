@@ -162,6 +162,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			block->id = (i * nvmd->nr_blks_per_pool) + j;
 
 			list_add_tail(&block->list, &pool->free_list);
+			INIT_WORK(&block->ws_gc, nvm_gc_block);
 		}
 	}
 
@@ -192,7 +193,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		goto err_blocks;
 	}
 
-	nvmd->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 0);
+	nvmd->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
 	if (!nvmd->kgc_wq) {
 		DMERR("Couldn't start knvm-gc");
 		destroy_workqueue(nvmd->kgc_wq);

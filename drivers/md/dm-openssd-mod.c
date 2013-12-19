@@ -195,7 +195,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	nvmd->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 0);
 	if (!nvmd->kgc_wq) {
 		DMERR("Couldn't start knvm-gc");
-		destroy_workqueue(nvmd->kbiod_wq);
+		destroy_workqueue(nvmd->kgc_wq);
 		goto err_blocks;
 	}
 

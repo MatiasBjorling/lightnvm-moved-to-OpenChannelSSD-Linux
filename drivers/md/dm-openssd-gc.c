@@ -116,6 +116,12 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 void nvm_block_release(struct kref *ref)
 {
 	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
+	struct nvmd *nvmd = block->pool->nvmd;
+	/* rewrite to have moves outside lock. i.e. so we can
+	 * prepare multiple pages in parallel on the attached
+	 * device. */
+	DMDEBUG("moving block addr %ld", block_to_addr(block));
+	nvm_move_valid_pages(nvmd, block);
 
 	__erase_block(block);
 
@@ -158,12 +164,6 @@ void nvm_gc_collect(struct work_struct *work)
 		/* take the lock. But also make sure that we haven't messed up the
 		 * gc routine, by removing the global gc lock. */
 		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
-
-		/* rewrite to have moves outside lock. i.e. so we can
-		 * prepare multiple pages in parallel on the attached
-		 * device. */
-		DMDEBUG("moving block addr %ld", block_to_addr(block));
-		nvm_move_valid_pages(nvmd, block);
 
 		kref_put(&block->ref_count, nvm_block_release);
 

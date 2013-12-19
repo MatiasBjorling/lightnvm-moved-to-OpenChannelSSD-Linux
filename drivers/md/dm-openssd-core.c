@@ -448,9 +448,6 @@ static void nvm_endio(struct bio *bio, int err)
 	nvmd = ap->parent;
 	pool = ap->pool;
 
-	/* TODO: This can be optimized to only account on read */
-	kref_put(&block->ref_count, nvm_block_release);
-
 	if (bio_data_dir(bio) == WRITE) {
 		/* mark addr landed (persisted) */
 		atomic_dec(&p->inflight);
@@ -470,6 +467,8 @@ static void nvm_endio(struct bio *bio, int err)
 		dev_wait = ap->t_write;
 	} else {
 		dev_wait = ap->t_read;
+		if (likely(pb->ref_put))
+			kref_put(&block->ref_count, nvm_block_release);
 	}
 
 	nvm_delay_endio_hint(nvmd, bio, pb, &dev_wait);
@@ -705,10 +704,11 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 
 	if (rw == WRITE)
 		bio->bi_end_io = nvm_end_write_bio;
-	else
+	else {
+		pb->ref_put = kref_get_unless_zero(&p->block->ref_count);
 		bio->bi_end_io = nvm_end_read_bio;
+	}
 
-	kref_get(&p->block->ref_count);
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		if (atomic_inc_return(&pool->is_active) != 1) {

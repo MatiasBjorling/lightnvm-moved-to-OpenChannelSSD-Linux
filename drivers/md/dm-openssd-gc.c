@@ -7,7 +7,7 @@
 static void queue_pool_gc(struct nvm_pool *pool)
 {
 	struct nvmd *nvmd = pool->nvmd;
-	queue_work(nvmd->kgc_wq, &pool->gc_ws);
+	queue_work(nvmd->kbiod_wq, &pool->gc_ws);
 }
 
 void nvm_gc_cb(unsigned long data)
@@ -69,7 +69,9 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		return;
 
 	printk("o1\n");
-	while ((slot = find_first_zero_bit(block->invalid_pages, nvmd->nr_host_pages_in_blk)) < nvmd->nr_host_pages_in_blk) {
+	while ((slot = find_first_zero_bit(block->invalid_pages,
+					   nvmd->nr_host_pages_in_blk)) <
+						nvmd->nr_host_pages_in_blk) {
 		/* Perform read */
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
@@ -92,7 +94,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		l_addr = nvmd->lookup_ptol(nvmd, src.addr);
 		/* remap src_bio to write the logical addr to new physical
 		 * place */
-		src_bio->bi_sector = l_addr;
+		src_bio->bi_sector = l_addr * NR_PHY_IN_LOG;
 
 		//DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", src.addr, l_addr, l_addr, os->trans_map[l_addr].addr);
 
@@ -106,6 +108,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		bio_put(src_bio);
 		mempool_free(page, nvmd->page_pool);
+		//printk("p slot %u block %u\n", slot, block->id);
 	}
 	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
 	printk("o2\n");
@@ -117,15 +120,8 @@ void nvm_block_release(struct kref *ref)
 {
 	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
 	struct nvmd *nvmd = block->pool->nvmd;
-	/* rewrite to have moves outside lock. i.e. so we can
-	 * prepare multiple pages in parallel on the attached
-	 * device. */
-	DMDEBUG("moving block addr %ld", block_to_addr(block));
-	nvm_move_valid_pages(nvmd, block);
 
-	__erase_block(block);
-
-	nvm_pool_put_block(block);
+	queue_work(nvmd->kgc_wq, &block->ws_gc);
 }
 
 void nvm_gc_collect(struct work_struct *work)
@@ -141,12 +137,8 @@ void nvm_gc_collect(struct work_struct *work)
 	 * pid, nr_blocks_need, pool->nr_free_blocks);*/
 	//printk("i need %u %u\n", nr_blocks_need, pool->nr_free_blocks);
 	spin_lock(&pool->gc_lock);
-	if (list_empty(&pool->prio_list)) {
-		spin_unlock(&pool->gc_lock);
-		return;
-	}
-
-	while (nr_blocks_need > pool->nr_free_blocks) {
+	while (nr_blocks_need > pool->nr_free_blocks &&
+						!list_empty(&pool->prio_list)) {
 		block = block_prio_find_max(pool);
 
 		/* this should never happen. Its just here for an extra check */
@@ -156,25 +148,31 @@ void nvm_gc_collect(struct work_struct *work)
 		}
 
 		list_del(&block->prio);
-		spin_unlock(&pool->gc_lock);
 
-		/* this should never happen. Anyway, lets check for it.*/
 		BUG_ON(!block_is_full(block));
-
-		/* take the lock. But also make sure that we haven't messed up the
-		 * gc routine, by removing the global gc lock. */
 		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
 
 		kref_put(&block->ref_count, nvm_block_release);
-
-		spin_lock(&pool->gc_lock);
 	}
 	spin_unlock(&pool->gc_lock);
-	//DMERR("Freed %u blocks", i);
-
 	nvmd->next_collect_pool++;
-
 	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);
+}
+
+void nvm_gc_block(struct work_struct *work)
+{
+	struct nvm_block *block = container_of(work, struct nvm_block, ws_gc);
+	struct nvmd *nvmd = block->pool->nvmd;
+
+	/* rewrite to have moves outside lock. i.e. so we can
+	 * prepare multiple pages in parallel on the attached
+	 * device. */
+	DMDEBUG("moving block addr %ld", block_to_addr(block));
+	nvm_move_valid_pages(nvmd, block);
+
+	__erase_block(block);
+
+	nvm_pool_put_block(block);
 }
 
 void nvm_gc_kick(struct nvm_pool *pool)

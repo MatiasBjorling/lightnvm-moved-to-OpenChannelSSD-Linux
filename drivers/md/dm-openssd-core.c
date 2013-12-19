@@ -51,18 +51,19 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	}
 }
 
-void __nvm_submit_bio(struct bio *bio);
+void __nvm_submit_bio(struct bio *bio, unsigned int sync);
 
 void nvm_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
+	unsigned int sync = bio->bi_rw & REQ_SYNC;
 
 	spin_lock(&pool->waiting_lock);
 	bio = bio_list_pop(&pool->waiting_bios);
 	spin_unlock(&pool->waiting_lock);
 
-	__nvm_submit_bio(bio);
+	__nvm_submit_bio(bio, sync);
 }
 
 /* requires lock on the translation map used */
@@ -668,9 +669,8 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
-void __nvm_submit_bio(struct bio *bio)
+void __nvm_submit_bio(struct bio *bio, unsigned int sync)
 {
-	int sync = bio->bi_rw & REQ_SYNC;
 	if (sync) {
 		struct per_bio_data *pb = get_per_bio_data(bio);
 		init_completion(&pb->event);
@@ -709,7 +709,6 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 		bio->bi_end_io = nvm_end_read_bio;
 	}
 
-
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);
@@ -719,9 +718,9 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 			spin_unlock(&pool->waiting_lock);
 		}
 		else
-			__nvm_submit_bio(bio);
+			__nvm_submit_bio(bio, sync);
 	} else
-		__nvm_submit_bio(bio);
+		__nvm_submit_bio(bio, sync);
 
 	// We allow counting to be semi-accurate as theres no locking for accounting.
 	ap->io_accesses[bio_data_dir(bio)]++;

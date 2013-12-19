@@ -303,6 +303,7 @@ struct per_bio_data {
 	struct completion event;
 	struct bio *orig_bio;
 	unsigned int sync;
+	unsigned int ref_put;
 };
 
 /* dm-lightnvm-c */

@@ -57,12 +57,13 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
-	unsigned int sync = bio->bi_rw & REQ_SYNC;
+	unsigned int sync;
 
 	spin_lock(&pool->waiting_lock);
 	bio = bio_list_pop(&pool->waiting_bios);
 	spin_unlock(&pool->waiting_lock);
 
+	sync = bio->bi_rw & REQ_SYNC;
 	__nvm_submit_bio(bio, sync);
 }
 

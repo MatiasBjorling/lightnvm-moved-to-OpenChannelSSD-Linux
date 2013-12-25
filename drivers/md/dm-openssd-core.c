@@ -1,5 +1,33 @@
 #include "dm-openssd.h"
 
+static void show_pool(struct nvm_pool *pool)
+{
+	struct list_head *head, *cur;
+	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
+
+	spin_lock(&pool->lock);
+	list_for_each_safe(head, cur, &pool->free_list)
+		free_cnt++;
+	list_for_each_safe(head, cur, &pool->used_list)
+		used_cnt++;
+	list_for_each_safe(head, cur, &pool->prio_list)
+		prio_cnt++;
+	spin_unlock(&pool->lock);
+
+	DMERR("Pool info %u %u %u %p",
+			free_cnt, used_cnt, prio_cnt, pool);
+}
+
+static void show_all_pools(struct nvmd *nvmd)
+{
+	struct nvm_pool *pool;
+	unsigned int i;
+
+	ssd_for_each_pool(nvmd, pool, i) {
+		show_pool(pool);
+	}
+}
+
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
 	struct per_bio_data *pbd = bio->bi_private;
@@ -141,24 +169,15 @@ inline void nvm_reset_block(struct nvm_block *block)
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 	struct nvmd *nvmd = pool->nvmd;
 	struct nvm_block *block = NULL;
-	struct list_head *head, *i;
-	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
 
 	BUG_ON(!pool);
 
 	spin_lock(&pool->lock);
 
 	if (list_empty(&pool->free_list)) {
-		list_for_each_safe(head, i, &pool->free_list)
-			free_cnt++;
-		list_for_each_safe(head, i, &pool->used_list)
-			used_cnt++;
-		list_for_each_safe(head, i, &pool->prio_list)
-			prio_cnt++;
-
+		DMERR_LIMIT("Pool have no free pages available");
 		spin_unlock(&pool->lock);
-		DMERR_LIMIT("Pool have no free pages available %u %u %u %p",
-				free_cnt, used_cnt, prio_cnt, pool);
+		show_pool(pool);
 		return NULL;
 	}
 
@@ -312,17 +331,17 @@ sector_t nvm_alloc_addr_from_ap(struct nvm_ap *ap,
 				p_addr = nvm_alloc_phys_addr(ap->gc_cur);
 				if (p_addr == LTOP_EMPTY) {
 					block = nvm_pool_get_block(pool, 1);
-					if (!block) {
-						DMERR("No more blocks");
-						BUG_ON(1);
-					}
 					ap->gc_cur = block;
 					ap->gc_cur->ap = ap;
 					p_addr =
+					if (!block) {
+						show_all_pools(ap->parent);
+						DMERR("No more blocks");
+					} else {
 						nvm_alloc_phys_addr(ap->gc_cur);
+					}
 				}
 				*ret_victim_block = ap->gc_cur;
-				BUG_ON(!ap->gc_cur);
 			}
 			goto finished;
 		}
@@ -419,11 +438,6 @@ struct nvm_addr *nvm_alloc_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr,
 
 	if (block)
 		addr = nvm_update_map(nvmd, l_addr, p_addr, block);
-
-	if (is_gc) {
-		//printk("l: %llu b: %u\n", p_addr, block->id);
-	}
-
 
 	return addr;
 }

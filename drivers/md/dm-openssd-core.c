@@ -500,14 +500,15 @@ static void nvm_endio(struct bio *bio, int err)
 		}
 	}
 
-	spin_lock(&pool->waiting_lock);
-	deferred_bio = bio_list_peek(&pool->waiting_bios);
-	spin_unlock(&pool->waiting_lock);
-	// Remember that the IO is first officially finished from here
-	if (deferred_bio)
-		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
-	else
-		atomic_dec(&pool->is_active);
+	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+		spin_lock(&pool->waiting_lock);
+		deferred_bio = bio_list_peek(&pool->waiting_bios);
+		spin_unlock(&pool->waiting_lock);
+		if (deferred_bio)
+			queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
+		else
+			atomic_dec(&pool->is_active);
+	}
 
 	/* Finish up */
 	dedecorate_bio(pb, bio);

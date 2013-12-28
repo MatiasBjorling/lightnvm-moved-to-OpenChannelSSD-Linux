@@ -147,6 +147,8 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		pool->phy_addr_end = (i + 1) * nvmd->nr_blks_per_pool - 1;
 		pool->nr_free_blocks = pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
 
+		pool->nr_gc_blocks = 0; /* no blocks in GC on start */
+
 		bio_list_init(&pool->waiting_bios);
 		atomic_set(&pool->is_active, 0);
 
@@ -280,8 +282,8 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 		goto err_block_page_pool;
 
 	// FIXME: Clean up pool init on failure.
-	setup_timer(&nvmd->gc_timer, nvm_gc_cb, (unsigned long)nvmd);
-	mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(1000));
+	//setup_timer(&nvmd->gc_timer, nvm_gc_cb, (unsigned long)nvmd);
+	//mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(1000));
 
 	return 0;
 err_block_page_pool:
@@ -472,7 +474,7 @@ static void nvm_dtr(struct dm_target *ti)
 	vfree(nvmd->trans_map);
 	vfree(nvmd->rev_trans_map);
 
-	del_timer(&nvmd->gc_timer);
+	//del_timer(&nvmd->gc_timer);
 
 	destroy_workqueue(nvmd->kbiod_wq);
 	destroy_workqueue(nvmd->kgc_wq);

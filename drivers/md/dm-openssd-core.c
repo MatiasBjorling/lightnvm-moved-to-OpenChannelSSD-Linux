@@ -1,4 +1,5 @@
 #include "dm-openssd.h"
+#include <linux/completion.h>
 
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
@@ -36,19 +37,27 @@ static void free_per_bio_data(struct nvmd *nvmd, struct per_bio_data *pb)
 
 void nvm_deferred_bio_submit(struct work_struct *work)
 {
-	struct nvmd *nvmd = container_of(work, struct nvmd, deferred_ws);
-	struct bio *bio;
+        struct nvmd *nvmd = container_of(work, struct nvmd, deferred_ws);
+        struct bio *bio;
 
-	spin_lock(&nvmd->deferred_lock);
-	bio = bio_list_get(&nvmd->deferred_bios);
-	spin_unlock(&nvmd->deferred_lock);
+        spin_lock(&nvmd->deferred_lock);
+        bio = bio_list_get(&nvmd->deferred_bios);
+        spin_unlock(&nvmd->deferred_lock);
 
-	while (bio) {
-		struct bio *next = bio->bi_next;
-		bio->bi_next = NULL;
-		nvmd->write_bio(nvmd, bio);
-		bio = next;
-	}
+        while (bio) {
+                struct bio *next = bio->bi_next;
+                bio->bi_next = NULL;
+                nvmd->write_bio(nvmd, bio);
+		/*if(nvm_write_execute_bio(nvmd, bio, 0, NULL) == -1){
+			DMERR("nvm_deferred_bio_submit: resubmit deferred bio %p failed. schedule", bio);
+			schedule();
+		}*/
+
+		if( bio->bi_rw & REQ_SYNC)
+			DMERR("nvm_deferred_bio_submit: resubmit sync bio %p", bio);
+
+                bio = next;
+        }
 }
 
 void __nvm_submit_bio(struct bio *bio, unsigned int sync);
@@ -57,14 +66,22 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
-	unsigned int sync;
+	struct per_bio_data *pb;
 
 	spin_lock(&pool->waiting_lock);
 	bio = bio_list_pop(&pool->waiting_bios);
 	spin_unlock(&pool->waiting_lock);
 
-	sync = bio->bi_rw & REQ_SYNC;
-	__nvm_submit_bio(bio, sync);
+	BUG_ON(!bio);
+
+	pb = get_per_bio_data(bio);
+	if(pb && pb->sync){
+		
+		DMERR("%p: complete serial wait of sync serialized waiting bio %p", current, bio);
+		complete(&pb->event);
+	}
+	else
+		__nvm_submit_bio(bio, 0);
 }
 
 /* requires lock on the translation map used */
@@ -197,6 +214,11 @@ void nvm_pool_put_block(struct nvm_block *block)
 
 	spin_unlock(&pool->lock);
 
+	spin_lock(&pool->gc_lock);
+	pool->nr_gc_blocks--;
+	DMERR("pool %ld put block. nr_gc_blocks %d nr_free_blocks %d", pool->phy_addr_start, pool->nr_gc_blocks, pool->nr_free_blocks);
+	spin_unlock(&pool->gc_lock);
+	schedule();
 }
 
 static sector_t __nvm_alloc_phys_addr(struct nvm_block *block, int req_fast)
@@ -318,12 +340,12 @@ sector_t nvm_alloc_addr_from_ap(struct nvm_ap *ap,
 					}
 					ap->gc_cur = block;
 					ap->gc_cur->ap = ap;
-					p_addr =
-						nvm_alloc_phys_addr(ap->gc_cur);
+					p_addr = nvm_alloc_phys_addr(ap->gc_cur);
 				}
 				*ret_victim_block = ap->gc_cur;
 				BUG_ON(!ap->gc_cur);
 			}
+			DMERR("ap io_accesses [%ld][%ld]", ap->io_accesses[0], ap->io_accesses[1]);
 			goto finished;
 		}
 
@@ -395,6 +417,12 @@ sector_t nvm_alloc_ltop_rr(struct nvmd *nvmd, sector_t l_addr,
 
 	ap = get_next_ap(nvmd);
 
+	if(!is_gc && (ap->pool->nr_gc_blocks || ap->pool->nr_free_blocks < (ap->pool->nr_blocks / 10))){
+		DMERR("pool in %ld nr_free_blocks %d. cant allocate addr", ap->pool->phy_addr_start, ap->pool->nr_free_blocks);
+		nvm_gc_kick(ap->pool);
+		return LTOP_EMPTY;
+	}
+
 	p_addr = nvm_alloc_addr_from_ap(ap, block, is_gc);
 
 	if (p_addr != LTOP_EMPTY)
@@ -462,6 +490,7 @@ static void nvm_endio(struct bio *bio, int err)
 
 			spin_lock(&pool->gc_lock);
 			list_add_tail(&block->prio, &pool->prio_list);
+			DMERR("nvm_endio %p: done writing ap bio paddr %ld, add block %d pool %ld to prio list", current, bio->bi_sector/8, block->id, block->pool->phy_addr_start);
 			spin_unlock(&pool->gc_lock);
 		}
 
@@ -498,15 +527,20 @@ static void nvm_endio(struct bio *bio, int err)
 	/* Finish up */
 	dedecorate_bio(pb, bio);
 
-	if (bio->bi_end_io)
+	if (bio->bi_end_io){
+		if(pb->sync)
+			DMERR("nvm_endio %p: bi_end_io %p", current, bio);
 		bio->bi_end_io(bio, err);
+	}
 
 	if (pb->orig_bio){
 		bio_endio(pb->orig_bio, err);
 	}
 
-	if (pb->sync)
+	if (pb->sync){
+		DMERR("nvm_endio %p: complete event for bio %p", current, bio);
 		complete(&pb->event);
+	}
 
 	free_per_bio_data(nvmd, pb);
 }
@@ -645,7 +679,7 @@ void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio)
 	spin_unlock(&nvmd->deferred_lock);
 }
 
-void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
+int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		void *private)
 {
 	struct nvm_addr *p;
@@ -655,12 +689,20 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 	p = nvm_alloc_addr(nvmd, l_addr, is_gc, private);
 
+	if(is_gc){
+		DMERR("nvm_write_execute_bio %p: allocated GC WRITE paddr %ld for l_addr %ld", current, p->addr, l_addr);
+	}
+
 	if (p) {
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		nvm_submit_bio(nvmd, p, WRITE, issue_bio, is_gc, bio);
+		return DM_MAPIO_SUBMITTED;
 	} else {
 		BUG_ON(is_gc);
+		if(bio->bi_rw & REQ_SYNC)
+			DMERR("nvm_write_execute_bio sync bio %p: (%s) no free address for l_addr %ld. defer %p", current, (is_gc)?"GC":"non-GC", l_addr, bio);
 		nvm_defer_bio(nvmd, bio);
+		return -1;
 	}
 }
 
@@ -672,11 +714,22 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
 
 void __nvm_submit_bio(struct bio *bio, unsigned int sync)
 {
+	struct per_bio_data *pb;
+	struct nvm_pool *pool;
+	int pb_sync, data_dir;
 	if (sync) {
-		struct per_bio_data *pb = get_per_bio_data(bio);
+		DMERR("__nvm_submit_bio %p: sync bio %p %s addr %ld. wait for final completion", current, bio, (bio->bi_rw==WRITE)?"WRITE":"READ", bio->bi_sector/8);
+		pb = get_per_bio_data(bio);
+		pool = pb->ap->pool;
+		pb_sync = pb->sync;
+		data_dir = bio_data_dir(bio);
+
 		init_completion(&pb->event);
 		submit_bio(bio->bi_rw, bio);
+		DMERR("__nvm_submit_bio %p: wait for completion sync bio %p %s paddr %ld", current, bio, (bio->bi_rw & WRITE)?"WRITE":"READ", bio->bi_sector/8);
+
 		wait_for_completion_io(&pb->event);
+		DMERR("completion done for sync bio %p %s paddr %ld", bio, (bio->bi_rw & WRITE)?"WRITE":"READ", bio->bi_sector/8);
 	} else {
 		submit_bio(bio->bi_rw, bio);
 	}
@@ -697,8 +750,10 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 
 	/* is set prematurely because we need it for deferred bios */
 	bio->bi_rw |= rw;
-	if (sync)
+	if (sync){
+		DMERR("nvm_submit_bio %p: nvm_submit_bio sync %s bio %p addr %ld. ap->io_accesses[0][1]=%ld][%ld] delayed=%ld", current, (rw==WRITE)?"WRITE":"READ",bio, bio->bi_sector/8, ap->io_accesses[0], ap->io_accesses[1], ap->io_delayed);
 		bio->bi_rw |= REQ_SYNC;
+	}
 
 	/* setup timings - remember overhead. */
 	getnstimeofday(&pb->start_tv);
@@ -712,17 +767,35 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		if (atomic_inc_return(&pool->is_active) != 1) {
+			if(sync){
+				DMERR("nvm_submit_bio %p: serialize sync bio %p. prepare event", current, bio);
+				// prepare for serialization done event
+				init_completion(&pb->event);
+			}
 			atomic_dec(&pool->is_active);
 			spin_lock(&pool->waiting_lock);
 			ap->io_delayed++;
 			bio_list_add(&pool->waiting_bios, bio);
 			spin_unlock(&pool->waiting_lock);
+			
+			/* sync IO (GC!) cant return without actually doing the r/wd, causes too much mess*/
+			if(sync){
+				DMERR("nvm_submit_bio %p: event wait (serialize sync bio %p)", current, bio);
+				wait_for_completion_io(&pb->event);
+				DMERR("nvm_submit_bio %p: event done for serialize sync bio %s bio %p addr %ld. ap->io_accesses[0][1]=%ld][%ld] delayed=%ld", current, (rw==WRITE)?"WRITE":"READ",bio, bio->bi_sector/8, ap->io_accesses[0], ap->io_accesses[1], ap->io_delayed);
+			}
+			else
+				goto submit_done;
 		}
-		else
-			__nvm_submit_bio(bio, sync);
-	} else
-		__nvm_submit_bio(bio, sync);
+	}
+	__nvm_submit_bio(bio, sync);
 
+	if(sync){
+		DMERR("nvm_submit_bio %p: event done for serialize sync bio %s bio %p addr %ld. ap->io_accesses[0][1]=%ld][%ld] delayed=%ld", current, (rw==WRITE)?"WRITE":"READ",bio, bio->bi_sector/8, ap->io_accesses[0], ap->io_accesses[1], ap->io_delayed);
+
+	}
+
+submit_done:
 	// We allow counting to be semi-accurate as theres no locking for accounting.
 	ap->io_accesses[bio_data_dir(bio)]++;
 }

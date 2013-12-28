@@ -149,6 +149,9 @@ struct nvm_pool {
 	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
+	unsigned int nr_gc_blocks; /* number of blocks undergoing GC */ 
+	struct completion event;
+
 	struct nvm_block *blocks;
 	struct nvmd *nvmd;
 
@@ -338,7 +341,8 @@ sector_t nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 void nvm_submit_bio(struct nvmd *, struct nvm_addr *, int rw, struct bio *, int sync, struct bio *orig_bio);
 struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
-void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private);
+//void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private);
+int nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private);
 int nvm_write_bio(struct nvmd *, struct bio *bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
 struct nvm_addr *nvm_update_map(struct nvmd *,  sector_t l_addr,

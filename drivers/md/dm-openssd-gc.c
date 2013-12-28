@@ -68,7 +68,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
 		return;
 
-	printk("o1\n");
+	DMERR("o1 - start moving pages");
 	while ((slot = find_first_zero_bit(block->invalid_pages,
 					   nvmd->nr_host_pages_in_blk)) <
 						nvmd->nr_host_pages_in_blk) {
@@ -87,6 +87,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
+		DMERR("%p: slot %d block %u pool %ld submit GC READ sync bio %p paddr %ld (pool->nr_free_blocks %d nr_blocks %d", current, slot, block->id, block->pool->phy_addr_start, src_bio, src_bio->bi_sector/8, block->pool->nr_free_blocks, block->pool->nr_blocks);
 		nvm_submit_bio(nvmd, &src, READ, src_bio, 1, NULL);
 
 		/* We use the physical address to go to the logical page addr,
@@ -101,17 +102,19 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (nvmd->begin_gc_private)
 			gc_private = nvmd->begin_gc_private(l_addr, src.addr, block);
 
+		DMERR("%p: slot %d block %u pool %ld block %u execute GC WRITE sync bio %p l_addr %ld paddr %ld", current, slot, block->id, block->pool->phy_addr_start, block->id, src_bio, l_addr/8 , src.addr);
 		nvm_write_execute_bio(nvmd, src_bio, 1, NULL);
 
 		if (nvmd->end_gc_private)
 			nvmd->end_gc_private(gc_private);
 
+		DMERR("%p: bio_put %p", current, src_bio);
 		bio_put(src_bio);
 		mempool_free(page, nvmd->page_pool);
 		//printk("p slot %u block %u\n", slot, block->id);
 	}
 	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
-	printk("o2\n");
+	DMERR("o2 - done moving pages");
 }
 
 /* Push erase condition to automatically be executed when block goes to zero.
@@ -137,8 +140,11 @@ void nvm_gc_collect(struct work_struct *work)
 	 * pid, nr_blocks_need, pool->nr_free_blocks);*/
 	//printk("i need %u %u\n", nr_blocks_need, pool->nr_free_blocks);
 	spin_lock(&pool->gc_lock);
-	while (nr_blocks_need > pool->nr_free_blocks &&
+        nr_blocks_need -= pool->nr_gc_blocks;
+	DMERR("gc kicked! pool addr %ld need %u blocks, got %u free (gc_blocks %d)\n", pool->phy_addr_start, nr_blocks_need, pool->nr_free_blocks, pool->nr_gc_blocks);
+	while (!pool->nr_gc_blocks && nr_blocks_need > pool->nr_free_blocks &&
 						!list_empty(&pool->prio_list)) {
+		DMERR("gc iteration - pool addr %ld i need %u blocks, got %u free (gc_blocks %d)\n", pool->phy_addr_start, nr_blocks_need, pool->nr_free_blocks, pool->nr_gc_blocks);
 		block = block_prio_find_max(pool);
 
 		/* this should never happen. Its just here for an extra check */
@@ -148,10 +154,12 @@ void nvm_gc_collect(struct work_struct *work)
 		}
 
 		list_del(&block->prio);
+		pool->nr_gc_blocks++;
+		nr_blocks_need--;
 
 		BUG_ON(!block_is_full(block));
 		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
-
+		DMERR("nvm_gc_collect %p: choose for GC block %d pool %ld", current, block->id, block->pool->phy_addr_start);
 		kref_put(&block->ref_count, nvm_block_release);
 	}
 	spin_unlock(&pool->gc_lock);
@@ -167,7 +175,7 @@ void nvm_gc_block(struct work_struct *work)
 	/* rewrite to have moves outside lock. i.e. so we can
 	 * prepare multiple pages in parallel on the attached
 	 * device. */
-	DMDEBUG("moving block addr %ld", block_to_addr(block));
+	DMERR("moving block addr %ld", block_to_addr(block));
 	nvm_move_valid_pages(nvmd, block);
 
 	__erase_block(block);
@@ -178,5 +186,14 @@ void nvm_gc_block(struct work_struct *work)
 void nvm_gc_kick(struct nvm_pool *pool)
 {
 	BUG_ON(!pool);
+
+	spin_lock(&pool->gc_lock);
+	if(pool->nr_gc_blocks > 0){
+		spin_unlock(&pool->gc_lock);
+		DMERR("pool %ld gc_blocks %d free_blocks %dno need to kick GC anymore", pool->phy_addr_start, pool->nr_gc_blocks, pool->nr_free_blocks);
+		return;
+	}
+	spin_unlock(&pool->gc_lock);
+
 	queue_pool_gc(pool);
 }

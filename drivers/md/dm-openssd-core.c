@@ -333,11 +333,11 @@ sector_t nvm_alloc_addr_from_ap(struct nvm_ap *ap,
 					block = nvm_pool_get_block(pool, 1);
 					ap->gc_cur = block;
 					ap->gc_cur->ap = ap;
-					p_addr =
 					if (!block) {
 						show_all_pools(ap->parent);
 						DMERR("No more blocks");
 					} else {
+						p_addr =
 						nvm_alloc_phys_addr(ap->gc_cur);
 					}
 				}

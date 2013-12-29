@@ -29,15 +29,17 @@ static void __erase_block(struct nvm_block *block)
 static struct nvm_block* block_max_invalid(struct nvm_block *a,
 					   struct nvm_block *b)
 {
+	BUG_ON(!a || !b);
+
 	if (a->nr_invalid_pages == b->nr_invalid_pages)
 		return a;
 
 	return (a->nr_invalid_pages < b->nr_invalid_pages) ? b : a;
 }
 
-/* linearly find the block with highest number of invalid pages 
+/* linearly find the block with highest number of invalid pages
  * requires pool->gc_lock */
-static struct nvm_block* block_prio_find_max(struct nvm_pool *pool)
+static struct nvm_block *block_prio_find_max(struct nvm_pool *pool)
 {
 	struct list_head *list = &pool->prio_list;
 	struct nvm_block *block, *max;
@@ -121,6 +123,8 @@ void nvm_block_release(struct kref *ref)
 	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
 	struct nvmd *nvmd = block->pool->nvmd;
 
+	//BUG_ON(atomic_read(&block->gc_running) != 1); Enable me to fix
+
 	queue_work(nvmd->kgc_wq, &block->ws_gc);
 }
 
@@ -137,23 +141,24 @@ void nvm_gc_collect(struct work_struct *work)
 	 * pid, nr_blocks_need, pool->nr_free_blocks);*/
 	//printk("i need %u %u\n", nr_blocks_need, pool->nr_free_blocks);
 	spin_lock(&pool->gc_lock);
+	spin_lock(&nvmd->trans_lock);
 	while (nr_blocks_need > pool->nr_free_blocks &&
 						!list_empty(&pool->prio_list)) {
 		block = block_prio_find_max(pool);
 
-		/* this should never happen. Its just here for an extra check */
 		if (!block->nr_invalid_pages) {
-			//printk("o\n");
+			printk("o\n");
 			break;
 		}
 
-		list_del(&block->prio);
+		list_del_init(&block->prio);
 
 		BUG_ON(!block_is_full(block));
 		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
 
 		kref_put(&block->ref_count, nvm_block_release);
 	}
+	spin_unlock(&nvmd->trans_lock);
 	spin_unlock(&pool->gc_lock);
 	nvmd->next_collect_pool++;
 	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);

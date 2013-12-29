@@ -389,22 +389,26 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 	spin_lock(&nvmd->trans_lock);
 	addr = &l2p_map[l_addr];
 
+	if (atomic_read(&addr->inflight) == 1) {
+		addr = NULL;
+		goto finished;
+	}
+
 	block = addr->block;
 	/* if it has not been written, addr is inited to 0. */
 	if (!block)
 		goto finished;
 
 	pool = block->pool;
-
 	BUG_ON(!pool);
 	/* during gc, the mapping will be updated accordently. We
 	 * therefore stop submitting new reads to the address, until it
 	 * is copied to the new place. */
-	spin_lock(&pool->gc_lock);
 	if (atomic_read(&block->gc_running))
 		addr = NULL;
-	spin_unlock(&pool->gc_lock);
 
+	if (!kref_get_unless_zero(&block->ref_count))
+		addr = NULL;
 finished:
 	spin_unlock(&nvmd->trans_lock);
 	return addr;
@@ -499,8 +503,9 @@ static void nvm_endio(struct bio *bio, int err)
 		dev_wait = ap->t_write;
 	} else {
 		dev_wait = ap->t_read;
-		if (likely(pb->ref_put))
-			kref_put(&block->ref_count, nvm_block_release);
+		spin_lock(&nvmd->trans_lock);
+		kref_put(&block->ref_count, nvm_block_release);
+		spin_unlock(&nvmd->trans_lock);
 	}
 
 	nvm_delay_endio_hint(nvmd, bio, pb, &dev_wait);
@@ -714,7 +719,8 @@ void __nvm_submit_bio(struct bio *bio, unsigned int sync)
 
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *bio, int sync, struct bio *orig_bio)
 {
-	struct nvm_ap *ap = block_to_ap(nvmd, p->block);
+	struct nvm_block *block = p->block;
+	struct nvm_ap *ap = block_to_ap(nvmd, block);
 	struct nvm_pool *pool = ap->pool;
 	struct per_bio_data *pb;
 
@@ -736,9 +742,11 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 	if (rw == WRITE)
 		bio->bi_end_io = nvm_end_write_bio;
 	else {
-		pb->ref_put = kref_get_unless_zero(&p->block->ref_count);
 		bio->bi_end_io = nvm_end_read_bio;
 	}
+
+	// We allow counting to be semi-accurate as theres no locking for accounting.
+	ap->io_accesses[bio_data_dir(bio)]++;
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		if (atomic_inc_return(&pool->is_active) != 1) {
@@ -753,6 +761,4 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 	} else
 		__nvm_submit_bio(bio, sync);
 
-	// We allow counting to be semi-accurate as theres no locking for accounting.
-	ap->io_accesses[bio_data_dir(bio)]++;
 }

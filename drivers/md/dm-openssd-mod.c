@@ -154,9 +154,12 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		if (!pool->blocks)
 			goto err_blocks;
 
+		spin_lock(&pool->lock);
 		pool_for_each_block(pool, block, j) {
 			spin_lock_init(&block->lock);
 			atomic_set(&block->gc_running, 0);
+			INIT_LIST_HEAD(&block->list);
+			INIT_LIST_HEAD(&block->prio);
 
 			block->pool = pool;
 			block->id = (i * nvmd->nr_blks_per_pool) + j;
@@ -164,6 +167,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			list_add_tail(&block->list, &pool->free_list);
 			INIT_WORK(&block->ws_gc, nvm_gc_block);
 		}
+		spin_unlock(&pool->lock);
 	}
 
 	nvmd->nr_aps = nvmd->nr_aps_per_pool * nvmd->nr_pools;

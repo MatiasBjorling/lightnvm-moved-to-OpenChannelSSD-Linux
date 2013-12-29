@@ -47,17 +47,17 @@ void nvm_deferred_bio_submit(struct work_struct *work)
         while (bio) {
                 struct bio *next = bio->bi_next;
                 bio->bi_next = NULL;
-                nvmd->write_bio(nvmd, bio);
-		/*if(nvm_write_execute_bio(nvmd, bio, 0, NULL) == -1){
-			DMERR("nvm_deferred_bio_submit: resubmit deferred bio %p failed. schedule", bio);
-			schedule();
-		}*/
-
-		if( bio->bi_rw & REQ_SYNC)
-			DMERR("nvm_deferred_bio_submit: resubmit sync bio %p", bio);
+		DMERR("nvm_deferred_bio_submit: resubmited %s bio %p", (bio->bi_rw & REQ_SYNC)?"SYNC":"regular", bio);
+		//bio_endio(bio, 0);
+		//nvmd->write_bio(nvmd, bio);
+		if(nvm_write_execute_bio(nvmd, bio, 0, NULL) == -1){
+			DMERR("nvm_deferred_bio_submit: resubmit deferred bio %p failed. return", bio);
+			return;
+		}
 
                 bio = next;
         }
+	DMERR("nvm_deferred_bio_submit: no more, returning");
 }
 
 void __nvm_submit_bio(struct bio *bio, unsigned int sync);
@@ -181,6 +181,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 
 	while(!is_gc && pool->nr_free_blocks <= nvmd->nr_pools * 2) {
 		spin_unlock(&pool->lock);
+		DMERR("too few free blocks");
 		return NULL;
 	}
 
@@ -334,13 +335,14 @@ sector_t nvm_alloc_addr_from_ap(struct nvm_ap *ap,
 				p_addr = nvm_alloc_phys_addr(ap->gc_cur);
 				if (p_addr == LTOP_EMPTY) {
 					block = nvm_pool_get_block(pool, 1);
-					if (!block) {
-						DMERR("No more blocks");
-						BUG_ON(1);
-					}
 					ap->gc_cur = block;
 					ap->gc_cur->ap = ap;
-					p_addr = nvm_alloc_phys_addr(ap->gc_cur);
+					if (!block) {
+						DMERR("No more blocks");
+					}
+					else{
+						p_addr = nvm_alloc_phys_addr(ap->gc_cur);
+					}
 				}
 				*ret_victim_block = ap->gc_cur;
 				BUG_ON(!ap->gc_cur);
@@ -515,14 +517,15 @@ static void nvm_endio(struct bio *bio, int err)
 		}
 	}
 
-	spin_lock(&pool->waiting_lock);
-	deferred_bio = bio_list_peek(&pool->waiting_bios);
-	spin_unlock(&pool->waiting_lock);
-	// Remember that the IO is first officially finished from here
-	if (deferred_bio)
-		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
-	else
-		atomic_dec(&pool->is_active);
+	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+		spin_lock(&pool->waiting_lock);
+		deferred_bio = bio_list_peek(&pool->waiting_bios);
+		spin_unlock(&pool->waiting_lock);
+		if (deferred_bio)
+			queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
+		else
+			atomic_dec(&pool->is_active);
+	}
 
 	/* Finish up */
 	dedecorate_bio(pb, bio);
@@ -542,6 +545,7 @@ static void nvm_endio(struct bio *bio, int err)
 		complete(&pb->event);
 	}
 
+	//DMERR("bio %p done", bio);
 	free_per_bio_data(nvmd, pb);
 }
 
@@ -687,6 +691,9 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	sector_t l_addr;
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+
+	if(bio->bi_rw & REQ_SYNC)
+		DMERR("nvm_write_execute_bio %p: SYNC bio %p try to allocate adre", current, bio);
 	p = nvm_alloc_addr(nvmd, l_addr, is_gc, private);
 
 	if(is_gc){
@@ -694,13 +701,15 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	}
 
 	if (p) {
+		if(bio->bi_rw & REQ_SYNC)
+			DMERR("nvm_write_execute_bio %p: SYNC bio %p allocated addr %ld", current, bio, p->addr);
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		nvm_submit_bio(nvmd, p, WRITE, issue_bio, is_gc, bio);
 		return DM_MAPIO_SUBMITTED;
 	} else {
 		BUG_ON(is_gc);
 		if(bio->bi_rw & REQ_SYNC)
-			DMERR("nvm_write_execute_bio sync bio %p: (%s) no free address for l_addr %ld. defer %p", current, (is_gc)?"GC":"non-GC", l_addr, bio);
+			DMERR("nvm_write_execute_bio %p: SYNC bio (%s) no free address for l_addr %ld. defer %p", current, (is_gc)?"GC":"non-GC", l_addr, bio);
 		nvm_defer_bio(nvmd, bio);
 		return -1;
 	}
@@ -718,18 +727,19 @@ void __nvm_submit_bio(struct bio *bio, unsigned int sync)
 	struct nvm_pool *pool;
 	int pb_sync, data_dir;
 	if (sync) {
-		DMERR("__nvm_submit_bio %p: sync bio %p %s addr %ld. wait for final completion", current, bio, (bio->bi_rw==WRITE)?"WRITE":"READ", bio->bi_sector/8);
+		DMERR("__nvm_submit_bio %p: sync bio %p %s addr %ld. wait for final completion", current, bio, (bio->bi_rw & WRITE)?"WRITE":"READ", bio->bi_sector/8);
 		pb = get_per_bio_data(bio);
 		pool = pb->ap->pool;
 		pb_sync = pb->sync;
 		data_dir = bio_data_dir(bio);
 
 		init_completion(&pb->event);
-		submit_bio(bio->bi_rw, bio);
 		DMERR("__nvm_submit_bio %p: wait for completion sync bio %p %s paddr %ld", current, bio, (bio->bi_rw & WRITE)?"WRITE":"READ", bio->bi_sector/8);
+		submit_bio(bio->bi_rw, bio);
+
 
 		wait_for_completion_io(&pb->event);
-		DMERR("completion done for sync bio %p %s paddr %ld", bio, (bio->bi_rw & WRITE)?"WRITE":"READ", bio->bi_sector/8);
+		DMERR("__nvm_submit_bio %p: sync event done for sync bio %p", current, bio);
 	} else {
 		submit_bio(bio->bi_rw, bio);
 	}
@@ -780,20 +790,21 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, int rw, struct bio *b
 			
 			/* sync IO (GC!) cant return without actually doing the r/wd, causes too much mess*/
 			if(sync){
-				DMERR("nvm_submit_bio %p: event wait (serialize sync bio %p)", current, bio);
+				DMERR("nvm_submit_bio %p: serialize event wait - sync bio %p", current, bio);
 				wait_for_completion_io(&pb->event);
-				DMERR("nvm_submit_bio %p: event done for serialize sync bio %s bio %p addr %ld. ap->io_accesses[0][1]=%ld][%ld] delayed=%ld", current, (rw==WRITE)?"WRITE":"READ",bio, bio->bi_sector/8, ap->io_accesses[0], ap->io_accesses[1], ap->io_delayed);
+				DMERR("nvm_submit_bio %p: serialize event done - sync bio %s bio %p addr %ld. ap->io_accesses[0][1]=%ld][%ld] delayed=%ld", current, (rw==WRITE)?"WRITE":"READ",bio, bio->bi_sector/8, ap->io_accesses[0], ap->io_accesses[1], ap->io_delayed);
 			}
 			else
 				goto submit_done;
 		}
 	}
-	__nvm_submit_bio(bio, sync);
-
-	if(sync){
-		DMERR("nvm_submit_bio %p: event done for serialize sync bio %s bio %p addr %ld. ap->io_accesses[0][1]=%ld][%ld] delayed=%ld", current, (rw==WRITE)?"WRITE":"READ",bio, bio->bi_sector/8, ap->io_accesses[0], ap->io_accesses[1], ap->io_delayed);
+	if(nvmd->config.flags & NVM_OPT_POOL_SERIALIZE && sync){
+		DMERR("nvm_submit_bio %p: serizlie event done sync bio %s bio %p addr %ld. ap->io_accesses[0][1]=%ld][%ld] delayed=%ld", current, (rw==WRITE)?"WRITE":"READ",bio, bio->bi_sector/8, ap->io_accesses[0], ap->io_accesses[1], ap->io_delayed);
 
 	}
+
+	__nvm_submit_bio(bio, sync);
+
 
 submit_done:
 	// We allow counting to be semi-accurate as theres no locking for accounting.

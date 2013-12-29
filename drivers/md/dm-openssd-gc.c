@@ -87,7 +87,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
-		DMERR("%p: slot %d block %u pool %ld submit GC READ sync bio %p paddr %ld (pool->nr_free_blocks %d nr_blocks %d", current, slot, block->id, block->pool->phy_addr_start, src_bio, src_bio->bi_sector/8, block->pool->nr_free_blocks, block->pool->nr_blocks);
+		//DMERR("%p: slot %d block %u pool %ld submit GC READ sync bio %p paddr %ld (pool->nr_free_blocks %d nr_blocks %d", current, slot, block->id, block->pool->phy_addr_start, src_bio, src_bio->bi_sector/8, block->pool->nr_free_blocks, block->pool->nr_blocks);
 		nvm_submit_bio(nvmd, &src, READ, src_bio, 1, NULL);
 
 		/* We use the physical address to go to the logical page addr,
@@ -102,13 +102,13 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (nvmd->begin_gc_private)
 			gc_private = nvmd->begin_gc_private(l_addr, src.addr, block);
 
-		DMERR("%p: slot %d block %u pool %ld block %u execute GC WRITE sync bio %p l_addr %ld paddr %ld", current, slot, block->id, block->pool->phy_addr_start, block->id, src_bio, l_addr/8 , src.addr);
+		//DMERR("%p: slot %d block %u pool %ld block %u execute GC WRITE sync bio %p l_addr %ld paddr %ld", current, slot, block->id, block->pool->phy_addr_start, block->id, src_bio, l_addr/8 , src.addr);
 		nvm_write_execute_bio(nvmd, src_bio, 1, NULL);
 
 		if (nvmd->end_gc_private)
 			nvmd->end_gc_private(gc_private);
 
-		DMERR("%p: bio_put %p", current, src_bio);
+		//DMERR("%p: bio_put %p", current, src_bio);
 		bio_put(src_bio);
 		mempool_free(page, nvmd->page_pool);
 		//printk("p slot %u block %u\n", slot, block->id);
@@ -190,7 +190,7 @@ void nvm_gc_kick(struct nvm_pool *pool)
 	spin_lock(&pool->gc_lock);
 	if(pool->nr_gc_blocks > 0){
 		spin_unlock(&pool->gc_lock);
-		DMERR("pool %ld gc_blocks %d free_blocks %dno need to kick GC anymore", pool->phy_addr_start, pool->nr_gc_blocks, pool->nr_free_blocks);
+		DMERR("pool %ld no need to kick GC anymore (gc_blocks %d free_blocks %d)", pool->phy_addr_start, pool->nr_gc_blocks, pool->nr_free_blocks);
 		return;
 	}
 	spin_unlock(&pool->gc_lock);

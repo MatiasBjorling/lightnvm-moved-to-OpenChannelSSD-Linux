@@ -378,6 +378,8 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		}
 	}
 
+	printk("nvmd->config.flags & NVM_OPT_POOL_SERIALIZE %d\n", nvmd->config.flags & NVM_OPT_POOL_SERIALIZE);
+
 	nvmd->config.gc_time = GC_TIME;
 	if (argc > 7) {
 		if (sscanf(argv[7], "%u%c", &tmp, &dummy) == 1) {
@@ -427,13 +429,14 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	DMINFO("Configured with");
 	DMINFO("Pools: %u Blocks: %u Pages: %u Host Pages: %u \
-			Aps: %u Aps Pool: %u",
+			Aps: %u Aps Pool: %u Flags: %ld",
 	       nvmd->nr_pools,
 	       nvmd->nr_blks_per_pool,
 	       nvmd->nr_pages_per_blk,
 	       nvmd->nr_host_pages_in_blk,
 	       nvmd->nr_aps,
-	       nvmd->nr_aps_per_pool);
+	       nvmd->nr_aps_per_pool,
+	       nvmd->config.flags);
 	DMINFO("Timings: %u/%u/%u", nvmd->config.t_read, nvmd->config.t_write,
 			nvmd->config.t_erase);
 	DMINFO("Target sector size=%d", nvmd->sector_size);

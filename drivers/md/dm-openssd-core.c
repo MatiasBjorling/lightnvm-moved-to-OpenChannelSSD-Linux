@@ -164,7 +164,9 @@ inline void nvm_reset_block(struct nvm_block *block)
 	atomic_set(&block->gc_running, 0);
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
+	spin_lock(&nvmd->trans_lock);
 	kref_init(&block->ref_count);
+	spin_unlock(&nvmd->trans_lock);
 	spin_unlock(&block->lock);
 }
 
@@ -404,11 +406,16 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 	/* during gc, the mapping will be updated accordently. We
 	 * therefore stop submitting new reads to the address, until it
 	 * is copied to the new place. */
-	if (atomic_read(&block->gc_running))
+	if (atomic_read(&block->gc_running)) {
 		addr = NULL;
+		goto finished;
+	}
 
-	if (!kref_get_unless_zero(&block->ref_count))
+	if (!kref_get_unless_zero(&block->ref_count)) {
 		addr = NULL;
+		goto finished;
+	}
+
 finished:
 	spin_unlock(&nvmd->trans_lock);
 	return addr;

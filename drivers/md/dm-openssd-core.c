@@ -62,6 +62,13 @@ static void free_per_bio_data(struct nvmd *nvmd, struct per_bio_data *pb)
 	mempool_free(pb, nvmd->per_bio_pool);
 }
 
+void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio)
+{
+	spin_lock(&nvmd->deferred_lock);
+	bio_list_add(&nvmd->deferred_bios, bio);
+	spin_unlock(&nvmd->deferred_lock);
+}
+
 void nvm_deferred_bio_submit(struct work_struct *work)
 {
 	struct nvmd *nvmd = container_of(work, struct nvmd, deferred_ws);
@@ -74,7 +81,10 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	while (bio) {
 		struct bio *next = bio->bi_next;
 		bio->bi_next = NULL;
-		nvmd->write_bio(nvmd, bio);
+		if (bio_data_dir(bio) == WRITE)
+			nvmd->write_bio(nvmd, bio);
+		else
+			nvmd->read_bio(nvmd, bio);
 		bio = next;
 	}
 }
@@ -371,25 +381,33 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 						struct nvm_addr *l2p_map)
 {
 	struct nvm_addr *addr;
+	struct nvm_block *block;
+	struct nvm_pool *pool;
 
 	BUG_ON(!(l_addr >= 0 && l_addr < nvmd->nr_pages));
 
-	while (1) {
-		spin_lock(&nvmd->trans_lock);
-		addr = &l2p_map[l_addr];
-		spin_unlock(&nvmd->trans_lock);
+	spin_lock(&nvmd->trans_lock);
+	addr = &l2p_map[l_addr];
 
-		if (!addr->block)
-			return addr;
+	block = addr->block;
+	/* if it has not been written, addr is inited to 0. */
+	if (!block)
+		goto finished;
 
-		/* during gc, the mapping will be updated accordently. We
-		 * therefore stop submitting new reads to the address, until it
-		 * is copied to the new place. */
-		if (!atomic_read(&addr->block->gc_running))
-			return addr;
+	pool = block->pool;
 
-		schedule();
-	}
+	BUG_ON(!pool);
+	/* during gc, the mapping will be updated accordently. We
+	 * therefore stop submitting new reads to the address, until it
+	 * is copied to the new place. */
+	spin_lock(&pool->gc_lock);
+	if (atomic_read(&block->gc_running))
+		addr = NULL;
+	spin_unlock(&pool->gc_lock);
+
+finished:
+	spin_unlock(&nvmd->trans_lock);
+	return addr;
 }
 
 /* lookup the primary translation table. If there isn't an associated block to
@@ -418,8 +436,6 @@ sector_t nvm_alloc_ltop_rr(struct nvmd *nvmd, sector_t l_addr,
 
 	if (p_addr != LTOP_EMPTY)
 		return p_addr;
-
-	nvm_gc_kick(ap->pool);
 
 	WARN_ON(is_gc);
 	WARN_ON((*block));
@@ -592,14 +608,19 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 	p = nvmd->lookup_ltop(nvmd, l_addr);
 
+	if (!p) {
+		nvm_defer_bio(nvmd, bio);
+		nvm_gc_kick(nvmd);
+		goto finished;
+	}
+
 	bio->bi_sector = p->addr * NR_PHY_IN_LOG +
 					(bio->bi_sector % NR_PHY_IN_LOG);
 
-	
 	if (!p->block) {
 		bio->bi_sector = 0;
 		nvm_fill_bio_and_end(bio);
-		return DM_MAPIO_SUBMITTED;
+		goto finished;
 	}
 
 	/* When physical page contains several logical pages, we may need to
@@ -607,11 +628,11 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	 * there */
 	if (NR_HOST_PAGES_IN_FLASH_PAGE > 1
 				&& nvm_handle_buffered_read(nvmd, bio, p))
-		return DM_MAPIO_SUBMITTED;
+		goto finished;
 
 	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
 	nvm_submit_bio(nvmd, p, READ, bio, 0, NULL);
-
+finished:
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -653,13 +674,6 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 	return issue_bio;
 }
 
-void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio)
-{
-	spin_lock(&nvmd->deferred_lock);
-	bio_list_add(&nvmd->deferred_bios, bio);
-	spin_unlock(&nvmd->deferred_lock);
-}
-
 void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		void *private)
 {
@@ -676,6 +690,7 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	} else {
 		BUG_ON(is_gc);
 		nvm_defer_bio(nvmd, bio);
+		nvm_gc_kick(nvmd);
 	}
 }
 

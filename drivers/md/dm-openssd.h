@@ -356,7 +356,7 @@ void nvm_reset_block(struct nvm_block *);
 void nvm_block_erase(struct kref *);
 void nvm_gc_cb(unsigned long data);
 void nvm_gc_collect(struct work_struct *work);
-void nvm_gc_kick(struct nvm_pool *pool);
+void nvm_gc_kick(struct nvmd *nvmd);
 
 
 /* dm-lightnvm-hint.c */

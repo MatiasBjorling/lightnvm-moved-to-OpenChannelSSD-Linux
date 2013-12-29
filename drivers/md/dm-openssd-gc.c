@@ -143,7 +143,7 @@ void nvm_gc_collect(struct work_struct *work)
 
 		/* this should never happen. Its just here for an extra check */
 		if (!block->nr_invalid_pages) {
-			printk("o\n");
+			//printk("o\n");
 			break;
 		}
 
@@ -175,8 +175,12 @@ void nvm_gc_block(struct work_struct *work)
 	nvm_pool_put_block(block);
 }
 
-void nvm_gc_kick(struct nvm_pool *pool)
+void nvm_gc_kick(struct nvmd *nvmd)
 {
-	BUG_ON(!pool);
-	queue_pool_gc(pool);
+	struct nvm_pool *pool;
+	unsigned int i;
+	BUG_ON(!nvmd);
+
+	ssd_for_each_pool(nvmd, pool, i)
+		queue_pool_gc(pool);
 }

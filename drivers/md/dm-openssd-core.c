@@ -239,8 +239,9 @@ static sector_t __nvm_alloc_phys_addr(struct nvm_block *block, int req_fast)
 
 	spin_lock(&block->lock);
 
-	if (block_is_full(block))
+	if (block_is_full(block)){
 		goto out;
+	}
 
 	/* If there is multiple host pages within a flash page, we add the
 	 * the offset to the address, instead of requesting a new page
@@ -331,7 +332,7 @@ sector_t nvm_lookup_ptol(struct nvmd *nvmd, sector_t p_addr)
 struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 {
 	struct nvmd *nvmd = ap->parent;
-	struct nvm_block *p_block, *victim_block;
+	struct nvm_block *p_block;
 	struct nvm_pool *pool;
 	struct nvm_addr *p;
 	sector_t p_addr;
@@ -362,7 +363,7 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 						nvm_alloc_phys_addr(ap->gc_cur);
 					}
 				}
-				victim_block = ap->gc_cur;
+				p_block = ap->gc_cur;
 			}
 			goto finished;
 		}
@@ -370,7 +371,7 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 		nvm_set_ap_cur(ap, p_block);
 		p_addr = nvm_alloc_phys_addr(p_block);
 	}
-	victim_block = p_block;
+
 finished:
 	if (p_addr == LTOP_EMPTY) {
 		mempool_free(p, nvmd->addr_pool);
@@ -464,8 +465,9 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	spin_lock(&ap->lock);
 	p = nvm_alloc_addr_from_ap(ap, is_gc);
 	spin_unlock(&ap->lock);
-	if (p != NULL)
+	if (p != NULL){
 		nvm_update_map(nvmd, l_addr, p);
+	}
 
 	return p;
 }
@@ -551,7 +553,10 @@ static void nvm_endio(struct bio *bio, int err)
 	if (pb->sync)
 		complete(&pb->event);
 
-	mempool_free(pb->addr, nvmd->addr_pool);
+	/* all submitted bios allocate their own addr, except GC reads*/
+	if(!(pb->sync && bio_data_dir(bio) == READ)) 
+		mempool_free(pb->addr, nvmd->addr_pool);
+
 	free_per_bio_data(nvmd, pb);
 }
 

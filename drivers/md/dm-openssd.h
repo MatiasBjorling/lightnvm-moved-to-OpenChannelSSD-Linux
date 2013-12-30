@@ -126,7 +126,6 @@ struct nvm_block {
 struct nvm_addr {
 	sector_t addr;
 	struct nvm_block *block;
-	struct hlist_node *list;
 	atomic_t inflight;
 };
 

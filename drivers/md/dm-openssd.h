@@ -241,6 +241,7 @@ struct nvmd {
 	struct nvm_ap *aps;
 
 	mempool_t *per_bio_pool;
+	mempool_t *addr_pool;
 	mempool_t *page_pool;
 	mempool_t *block_page_pool;
 

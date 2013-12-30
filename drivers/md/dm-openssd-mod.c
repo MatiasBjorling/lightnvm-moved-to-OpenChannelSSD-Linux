@@ -43,6 +43,7 @@
 #define MIN_POOL_PAGES 16
 
 static struct kmem_cache *_per_bio_cache;
+static struct kmem_cache *_addr_cache;
 
 static int nvm_ioctl(struct dm_target *ti, unsigned int cmd,
                          unsigned long arg)
@@ -254,9 +255,13 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	if (!nvmd->page_pool)
 		goto err_per_bio_pool;
 
+	nvmd->addr_pool = mempool_create_slab_pool(64, _addr_cache);
+	if (!nvmd->addr_pool)
+		goto err_page_pool;
+
 	nvmd->block_page_pool = mempool_create_page_pool(nvmd->nr_aps, order);
 	if (!nvmd->block_page_pool)
-		goto err_page_pool;
+		goto err_addr_pool;
 
 	if (bdev_physical_block_size(nvmd->dev->bdev) > EXPOSED_PAGE_SIZE) {
 		ti->error = "dm-lightnvm: Got bad sector size. Device sector size \
@@ -290,6 +295,8 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	return 0;
 err_block_page_pool:
 	mempool_destroy(nvmd->block_page_pool);
+err_addr_pool:
+	mempool_destroy(nvmd->addr_pool);
 err_page_pool:
 	mempool_destroy(nvmd->page_pool);
 err_per_bio_pool:
@@ -482,6 +489,7 @@ static void nvm_dtr(struct dm_target *ti)
 	destroy_workqueue(nvmd->kgc_wq);
 	mempool_destroy(nvmd->per_bio_pool);
 	mempool_destroy(nvmd->page_pool);
+	mempool_destroy(nvmd->addr_pool);
 
 	dm_put_device(ti, nvmd->dev);
 
@@ -506,20 +514,33 @@ static int __init dm_lightnvm_init(void)
 	int ret = -ENOMEM;
 
 	_per_bio_cache = kmem_cache_create("lightnvm_per_bio_cache",
-	                                   sizeof(struct per_bio_data), 0, 0, NULL);
+				sizeof(struct per_bio_data), 0, 0, NULL);
 	if (!_per_bio_cache)
 		return ret;
 
-	ret = dm_register_target(&lightnvm_target);
-	if (ret < 0)
-		DMERR("register failed %d", ret);
+	_addr_cache = kmem_cache_create("lightnvm_addr_cache",
+				sizeof(struct nvm_addr), 0, 0, NULL);
+	if (!_addr_cache)
+		goto err_pbc;
 
+	ret = dm_register_target(&lightnvm_target);
+	if (ret < 0) {
+		DMERR("register failed %d", ret);
+		goto err_adp;
+	}
+
+	return ret;
+err_adp:
+	kmem_cache_destroy(_addr_cache);
+err_pbc:
+	kmem_cache_destroy(_per_bio_cache);
 	return ret;
 }
 
 static void __exit dm_lightnvm_exit(void)
 {
 	kmem_cache_destroy(_per_bio_cache);
+	kmem_cache_destroy(_addr_cache);
 	dm_unregister_target(&lightnvm_target);
 }
 

@@ -32,6 +32,7 @@
 
 #define DM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
+#define LTOP_POISON 111111111111
 /*
  * For now we hardcode some of the configuration for the LightNVM device that we
  * have. In the future this should be made configurable.
@@ -296,7 +297,7 @@ struct per_bio_data {
 	struct nvm_ap *ap;
 	struct nvm_addr *addr;
 	struct timespec start_tv;
-	sector_t physical_addr;
+	sector_t l_addr;
 
 	// Hook up for our overwritten bio fields
 	bio_end_io_t *bi_end_io;
@@ -314,7 +315,7 @@ void invalidate_block_page(struct nvmd *, struct nvm_addr *);
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
 sector_t nvm_alloc_phys_addr(struct nvm_block *);
-sector_t nvm_alloc_phys_fastest_addr(struct nvmd *, struct nvm_block **ret_victim_block);
+struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *);
 
 /*   Naive implementations */
 void nvm_delayed_bio_submit(struct work_struct *work);
@@ -322,12 +323,8 @@ void nvm_deferred_bio_submit(struct work_struct *work);
 void nvm_gc_block(struct work_struct *work);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
-sector_t nvm_alloc_addr_from_ap(struct nvm_ap *, struct nvm_block **ret_victim_block, int is_gc);
-struct nvm_addr *nvm_alloc_map_ltop_rr(struct nvmd *, sector_t l_addr, int is_gc, void *private);
-sector_t nvm_alloc_ltop_rr(struct nvmd *, sector_t l_addr, struct nvm_block **ret_victim_block, int is_gc, void *private);
-
-/* Calls map_ltop_rr. Cannot fail (FIXME: unless out of memory) */
-struct nvm_addr *nvm_alloc_addr(struct nvmd *, sector_t l_addr, int is_gc, void *private);
+struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *, int is_gc);
+struct nvm_addr *nvm_map_ltop_rr(struct nvmd *, sector_t l_addr, int is_gc, void *private);
 
 /* Gets an address from nvm->trans_map and take a ref count on the blocks usage. Remember to put later */
 struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *, sector_t l_addr, struct nvm_addr *l2p_map);
@@ -335,14 +332,13 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 sector_t nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
-void nvm_submit_bio(struct nvmd *, struct nvm_addr *, int rw, struct bio *, int sync, struct bio *orig_bio);
+void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, int sync, struct bio *orig_bio);
 struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
 void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private);
 int nvm_write_bio(struct nvmd *, struct bio *bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
-struct nvm_addr *nvm_update_map(struct nvmd *,  sector_t l_addr,
-				    sector_t p_addr, struct nvm_block *p_block);
+void nvm_update_map(struct nvmd *, sector_t l_addr, struct nvm_addr *p);
 
 /*   NVM device related */
 void nvm_block_release(struct kref *);

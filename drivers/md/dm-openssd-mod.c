@@ -275,7 +275,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 
 	nvmd->lookup_ltop = nvm_lookup_ltop;
 	nvmd->lookup_ptol = nvm_lookup_ptol;
-	nvmd->map_ltop = nvm_alloc_map_ltop_rr;
+	nvmd->map_ltop = nvm_map_ltop_rr;
 	nvmd->write_bio = nvm_write_bio;
 	nvmd->read_bio = nvm_read_bio;
 

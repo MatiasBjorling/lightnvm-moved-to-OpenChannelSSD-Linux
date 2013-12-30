@@ -75,6 +75,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 					   nvmd->nr_host_pages_in_blk)) <
 						nvmd->nr_host_pages_in_blk) {
 		/* Perform read */
+		printk("block %u %u\n", block->id, slot);
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
 
@@ -89,10 +90,11 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
-		nvm_submit_bio(nvmd, &src, READ, src_bio, 1, NULL);
+		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, 1, NULL);
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
+		printk("addr %llu\n", src.addr);
 		l_addr = nvmd->lookup_ptol(nvmd, src.addr);
 		/* remap src_bio to write the logical addr to new physical
 		 * place */
@@ -123,7 +125,7 @@ void nvm_block_release(struct kref *ref)
 	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
 	struct nvmd *nvmd = block->pool->nvmd;
 
-	//BUG_ON(atomic_read(&block->gc_running) != 1); Enable me to fix
+	BUG_ON(atomic_read(&block->gc_running) != 1);
 
 	queue_work(nvmd->kgc_wq, &block->ws_gc);
 }

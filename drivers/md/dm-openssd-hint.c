@@ -21,7 +21,7 @@ void nvm_delay_endio_hint(struct nvmd *nvmd, struct bio *bio,
 	if (bio_data_dir(bio) != WRITE)
 		return;
 
-	page_id = (pb->physical_addr / NR_HOST_PAGES_IN_FLASH_PAGE)
+	page_id = (pb->addr->addr / NR_HOST_PAGES_IN_FLASH_PAGE)
 	          % nvmd->nr_pages_per_blk;
 
 	/* different timings, roughly based on "Harey Tortoise" paper
@@ -456,12 +456,12 @@ void nvm_alloc_phys_addr_pack(struct nvmd *nvmd, struct nvm_block *block)
 	}
 }
 
-sector_t nvm_alloc_phys_pack_addr(struct nvmd *nvmd, struct
-		nvm_block **ret_victim_block, struct nvm_hint_map_private *map_alloc_data)
+struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
+				struct nvm_hint_map_private *map_alloc_data)
 {
 	struct nvm_ap *ap;
-	sector_t addr = LTOP_EMPTY;
 	struct nvm_ap_hint* ap_pack_data = NULL;
+	struct nvm_addr *p;
 	struct timeval curr_tv;
 	unsigned long diff;
 	int i;
@@ -478,12 +478,14 @@ sector_t nvm_alloc_phys_pack_addr(struct nvmd *nvmd, struct
 		/* got it */
 		if(ap_pack_data->ino == map_alloc_data->hint_info->hint.ino){
 			DMDEBUG("ap with block_addr %ld associated to requested inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
-			addr = nvm_alloc_addr_from_ap(ap, ret_victim_block, 0);
+			spin_lock(&ap->lock);
+			p = nvm_alloc_addr_from_ap(ap, 0);
+			spin_unlock(&ap->lock);
 			break;
 		}
 	}
 
-	if (addr != LTOP_EMPTY){
+	if (p){
 		DMDEBUG("allocated addr %ld from PREVIOUS associated ap ", addr);
 		goto pack_alloc_done;
 	}
@@ -491,7 +493,7 @@ sector_t nvm_alloc_phys_pack_addr(struct nvmd *nvmd, struct
 	/* no ap associated to requested inode.
 	   find some empty pack ap, and use it*/
 	DMDEBUG("no ap associated to inode %lu", map_alloc_data->hint_info->hint.ino);
-	for (i = 0; addr == LTOP_EMPTY && i < nvmd->nr_pools; i++) {
+	for (i = 0; i < nvmd->nr_pools; i++) {
 		ap = get_next_ap(nvmd);
 
 		/* not hint associated */
@@ -514,13 +516,15 @@ sector_t nvm_alloc_phys_pack_addr(struct nvmd *nvmd, struct
 
 		/* got it - empty ap not associated to any inode */
 		ap_pack_data->ino = map_alloc_data->hint_info->hint.ino; // do this before alloc_addr
-		addr = nvm_alloc_addr_from_ap(ap, ret_victim_block, 0);
+		spin_lock(&ap->lock);
+		p = nvm_alloc_addr_from_ap(ap, 0);
+		spin_unlock(&ap->lock);
 		DMDEBUG("re-associated ap with block_addr %ld to new inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
 
 		break;
 	}
 
-	if (addr != LTOP_EMPTY){
+	if (p) {
 		DMDEBUG("allocated addr %ld from NEW associated ap ", addr);
 		goto pack_alloc_done;
 	}
@@ -533,12 +537,14 @@ sector_t nvm_alloc_phys_pack_addr(struct nvmd *nvmd, struct
 		ap = get_next_ap(nvmd);
 	} while (ap->hint_private);
 
-	addr = nvm_alloc_addr_from_ap(ap, ret_victim_block, 0);
+	spin_lock(&ap->lock);
+	p = nvm_alloc_addr_from_ap(ap, 0);
+	spin_unlock(&ap->lock);
 
 pack_alloc_done:
 	if (ap_pack_data)
 		do_gettimeofday(&ap_pack_data->tv);
-	return addr;
+	return p;
 }
 
 
@@ -552,10 +558,7 @@ pack_alloc_done:
 static struct nvm_addr *nvm_map_pack_hint_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc, void *private)
 {
 	struct nvm_hint_map_private *map_alloc_data = private;
-	struct nvm_block *block;
-	struct nvm_addr *p = NULL;
-	sector_t p_addr;
-
+	struct nvm_addr *p;
 
 	/* If there is no hint, or this is a reclaimed ltop mapping,
 	 * use regular (single-page) map_ltop */
@@ -563,65 +566,60 @@ static struct nvm_addr *nvm_map_pack_hint_ltop_rr(struct nvmd *nvmd, sector_t l_
 	    map_alloc_data->old_p_addr != LTOP_EMPTY ||
 	    !map_alloc_data->hint_info) {
 		DMDEBUG("pack_rr: reclaimed or regular allocation");
-		p = nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
-
-		return p;
+		return nvm_map_ltop_rr(nvmd, l_addr, 0, NULL);
 	}
 
 	DMDEBUG("pack_ltop: regular request. allocate page");
 
 	/* 1) get addr.
 	      nvm_alloc_addr_from_pack_ap, finds ap AND allocates addr*/
-	p_addr = nvm_alloc_phys_pack_addr(nvmd, &block, map_alloc_data);
-	
-	if (block)
-		p = nvm_update_map(nvmd, l_addr, p_addr, block);
-
-	DMDEBUG("pack_rr: for l_addr=%ld allocated p_addr=%ld ", l_addr, p_addr);
+	/* FIXME: should rearrange code to take AP lock from here */
+	p = nvm_alloc_phys_pack_addr(nvmd, map_alloc_data);
+	if (p) {
+		DMDEBUG("pack_rr: for l_addr=%ld allocated p_addr=%ld ",
+							l_addr, p->addr);
+		nvm_update_map(nvmd, l_addr, p);
+	}
 
 	return p;
 }
 
 // do any shadow address updating required (real, none, or trim of old one)
-static struct nvm_addr *nvm_update_map_shadow(struct nvmd *nvmd,
-                                      sector_t l_addr, sector_t p_addr,
-                                      struct nvm_block *p_block, unsigned long flags)
+static void nvm_update_map_shadow(struct nvmd *nvmd,
+		sector_t l_addr, struct nvm_addr *p, unsigned long flags)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
-	struct nvm_addr *p;
+	struct nvm_addr *gp;
 
 	BUG_ON(l_addr >= nvmd->nr_pages);
-	BUG_ON(p_addr >= nvmd->nr_pages);
+	BUG_ON(p->addr >= nvmd->nr_pages);
 
 	DMDEBUG("nvm_update_map_shadow: flags=%lu", flags);
 	/* Secondary mapping. update shadow */
 	if(flags & MAP_SHADOW) {
 		spin_lock(&nvmd->trans_lock);
-		p = &hint->shadow_map[l_addr];
+		gp = &hint->shadow_map[l_addr];
 
 		invalidate_block_page(nvmd, p);
 
-		p->addr = p_addr;
-		p->block = p_block;
+		gp->addr = p->addr;
+		gp->block = p->block;
 
-		nvmd->rev_trans_map[p_addr] = l_addr;
+		nvmd->rev_trans_map[p->addr] = l_addr;
 		spin_unlock(&nvmd->trans_lock);
-
-		return p;
+		return;
 	} else if (flags & MAP_PRIMARY) {
 		DMDEBUG("should update primary only");
-		return NULL;
+		return;
 	}
 
 	/* Remove old shadow mapping from shadow map */
 	DMDEBUG("init shadow");
-	p = &hint->shadow_map[l_addr];
-	p->addr = LTOP_EMPTY;
-	p->block = NULL;
-	return NULL;
+	gp = &hint->shadow_map[l_addr];
+	gp->addr = LTOP_EMPTY;
+	gp->block = NULL;
+	return;
 }
-
-
 
 static unsigned long nvm_get_mapping_flag(struct nvmd *, sector_t, sector_t);
 
@@ -634,9 +632,7 @@ static unsigned long nvm_get_mapping_flag(struct nvmd *, sector_t, sector_t);
 static struct nvm_addr *nvm_map_latency_hint_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc, void *private)
 {
 	struct nvm_hint_map_private *map_alloc_data = private;
-	struct nvm_block *block;
 	struct nvm_addr *p = NULL;
-	sector_t p_addr;
 
 	/* reclaimed write. need to know if we're reclaiming primary/shaddow*/
 	if (is_gc) {
@@ -647,13 +643,13 @@ static struct nvm_addr *nvm_map_latency_hint_ltop_rr(struct nvmd *nvmd, sector_t
 
 	/* primary -> allcoate and update generic mapping */
 	if (map_alloc_data->flags & MAP_PRIMARY)
-		return nvm_alloc_map_ltop_rr(nvmd, l_addr, is_gc, NULL);
+		return nvm_map_ltop_rr(nvmd, l_addr, is_gc, NULL);
 
 	/* shadow -> allocate and update shaddow mapping*/
-	p_addr = nvm_alloc_ltop_rr(nvmd, l_addr, &block, is_gc, map_alloc_data);
-	
-	if (block)
-		p = nvm_update_map_shadow(nvmd, l_addr, p_addr, block, map_alloc_data->flags);
+	/* FIXME: take ap->lock around alloc and update */
+	p = nvm_map_ltop_rr(nvmd, l_addr, is_gc, map_alloc_data);
+	if (p)
+		nvm_update_map_shadow(nvmd, l_addr, p, map_alloc_data->flags);
 
 	DMDEBUG("got address of shadow page");
 
@@ -670,15 +666,13 @@ static struct nvm_addr *nvm_map_swap_hint_ltop_rr(struct nvmd *nvmd,
                 sector_t l_addr, int is_gc, void *private)
 {
 	struct nvm_hint_map_private *map_alloc_data = private;
-	struct nvm_block *block;
-	sector_t p_addr;
-
+	struct nvm_addr *p;
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to nvm_map_ltop_rr */
 	if (map_alloc_data) {
 		if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
 			DMDEBUG("swap_map: non-GC non-hinted write");
-			return nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
+			return nvm_map_ltop_rr(nvmd, l_addr, 0, NULL);
 		}
 
 		/* GC write of a slow page */
@@ -689,20 +683,21 @@ static struct nvm_addr *nvm_map_swap_hint_ltop_rr(struct nvmd *nvmd,
 				%ld block offset %d)",
 					map_alloc_data->old_p_addr,
 					physical_to_slot(nvmd, map_alloc_data->old_p_addr));
-			return nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
+			return nvm_map_ltop_rr(nvmd, l_addr, 0, NULL);
 		}
 	}
 
 	/* hinted write, or GC of FAST page*/
-	p_addr = nvm_alloc_phys_fastest_addr(nvmd, &block);
+	p = nvm_alloc_phys_fastest_addr(nvmd);
 
 	/* no FAST page found. restort to regular allocation */
-	if (!block)
-		return nvm_alloc_map_ltop_rr(nvmd, l_addr, 0, NULL);
+	if (!p)
+		return nvm_map_ltop_rr(nvmd, l_addr, 0, NULL);
 
 	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
-	DMDEBUG("write lba %ld to page %ld", l_addr, p_addr);
-	return nvm_update_map(nvmd, l_addr, p_addr, block);
+	DMDEBUG("write lba %ld to page %ld", l_addr, p->addr);
+	nvm_update_map(nvmd, l_addr, p);
+	return p;
 }
 
 // TODO: actually finding a non-busy pool is not enough. read should be moved up the request queue.

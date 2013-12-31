@@ -113,7 +113,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 			gc_private = nvmd->begin_gc_private(l_addr, src.addr, block);
 
 		//DMERR("move_valid_pages: submit GC WRITE");
-		nvm_write_execute_bio(nvmd, src_bio, 1, NULL);
+		nvm_write_execute_bio(nvmd, src_bio, 1+block->pool->id, NULL);
 
 		if (nvmd->end_gc_private)
 			nvmd->end_gc_private(gc_private);

@@ -14,8 +14,8 @@ static void show_pool(struct nvm_pool *pool)
 		prio_cnt++;
 	spin_unlock(&pool->lock);
 
-	DMERR("Pool info %u %u %u %p",
-			free_cnt, used_cnt, prio_cnt, pool);
+	DMERR("Pool %d info %u %u %u", pool->id, 
+			free_cnt, used_cnt, prio_cnt);
 }
 
 static void show_all_pools(struct nvmd *nvmd)
@@ -345,7 +345,7 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 	struct nvm_block *p_block;
 	struct nvm_pool *pool;
 	struct nvm_addr *p;
-	sector_t p_addr;
+	sector_t p_addr = LTOP_EMPTY;
 
 	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
 	if (!p)
@@ -368,6 +368,7 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 					if (!p_block) {
 						show_all_pools(ap->parent);
 						DMERR("No more blocks");
+						goto finished;
 					} else {
 						p_addr =
 						nvm_alloc_phys_addr(ap->gc_cur);
@@ -469,10 +470,30 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 {
 	struct nvm_ap *ap;
 	struct nvm_addr *p;
-	int ret;
+	int ret, i = 0;
 
 	ap = get_next_ap(nvmd);
 
+	if(is_gc){
+		/* prevent GC-ing pool from devouring pages of pool with little free blocks*/
+		spin_lock(&ap->pool->lock);
+		while(ap->pool->nr_free_blocks <= nvmd->nr_pools * 2 
+		      && ap->pool->id != (is_gc-1)) {
+			spin_unlock(&ap->pool->lock);
+
+			i++;
+			//DMERR("Pool %d trying to write GC data to pool %d which is too low on free pages", is_gc-1, ap->pool->id);
+			if(i==nvmd->nr_pools * 2 ){
+				DMERR("Pool %d has to write GC data to pool %d which is too low on free pages", is_gc-1, ap->pool->id);
+				spin_lock(&ap->pool->lock);
+				break;
+			}
+
+			ap = get_next_ap(nvmd);
+			spin_lock(&ap->pool->lock);
+		}
+		spin_unlock(&ap->pool->lock);
+	}
 	spin_lock(&ap->lock);
 	p = nvm_alloc_addr_from_ap(ap, is_gc);
 	spin_unlock(&ap->lock);

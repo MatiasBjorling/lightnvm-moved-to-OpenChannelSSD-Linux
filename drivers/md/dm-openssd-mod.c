@@ -143,6 +143,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		INIT_LIST_HEAD(&pool->used_list);
 		INIT_LIST_HEAD(&pool->prio_list);
 
+		pool->id = i;
 		pool->nvmd = nvmd;
 		pool->phy_addr_start = i * nvmd->nr_blks_per_pool;
 		pool->phy_addr_end = (i + 1) * nvmd->nr_blks_per_pool - 1;

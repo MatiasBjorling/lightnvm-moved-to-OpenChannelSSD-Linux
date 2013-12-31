@@ -33,6 +33,8 @@
 #define DM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
 #define LTOP_POISON 111111111111
+
+
 /*
  * For now we hardcode some of the configuration for the LightNVM device that we
  * have. In the future this should be made configurable.
@@ -143,6 +145,7 @@ struct nvm_pool {
 	struct list_head free_list;	/* Not used blocks i.e. released and ready for use */
 	struct list_head prio_list;	/* Blocks that may be GC'ed. */
 
+	unsigned int id;
 	unsigned long phy_addr_start;	/* References the physical start block */
 	unsigned int phy_addr_end;		/* References the physical end block */
 

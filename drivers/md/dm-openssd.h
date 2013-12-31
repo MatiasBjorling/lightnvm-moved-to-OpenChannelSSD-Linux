@@ -149,6 +149,8 @@ struct nvm_pool {
 	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
+	unsigned int nr_gc_blocks;	/* Number of blocks undergoing gc*/
+
 	struct nvm_block *blocks;
 	struct nvmd *nvmd;
 
@@ -338,7 +340,7 @@ int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
 void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private);
 int nvm_write_bio(struct nvmd *, struct bio *bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
-void nvm_update_map(struct nvmd *, sector_t l_addr, struct nvm_addr *p);
+int nvm_update_map(struct nvmd *, sector_t l_addr, struct nvm_addr *p, int is_gc);
 
 /*   NVM device related */
 void nvm_block_release(struct kref *);

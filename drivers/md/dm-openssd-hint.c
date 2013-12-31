@@ -578,7 +578,7 @@ static struct nvm_addr *nvm_map_pack_hint_ltop_rr(struct nvmd *nvmd, sector_t l_
 	if (p) {
 		DMDEBUG("pack_rr: for l_addr=%ld allocated p_addr=%ld ",
 							l_addr, p->addr);
-		nvm_update_map(nvmd, l_addr, p);
+		nvm_update_map(nvmd, l_addr, p, is_gc);
 	}
 
 	return p;
@@ -696,7 +696,7 @@ static struct nvm_addr *nvm_map_swap_hint_ltop_rr(struct nvmd *nvmd,
 
 	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
 	DMDEBUG("write lba %ld to page %ld", l_addr, p->addr);
-	nvm_update_map(nvmd, l_addr, p);
+	nvm_update_map(nvmd, l_addr, p, is_gc);
 	return p;
 }
 

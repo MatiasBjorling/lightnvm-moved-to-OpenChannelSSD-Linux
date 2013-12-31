@@ -147,6 +147,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		pool->phy_addr_start = i * nvmd->nr_blks_per_pool;
 		pool->phy_addr_end = (i + 1) * nvmd->nr_blks_per_pool - 1;
 		pool->nr_free_blocks = pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
+		pool->nr_gc_blocks = 0;
 
 		bio_list_init(&pool->waiting_bios);
 		atomic_set(&pool->is_active, 0);

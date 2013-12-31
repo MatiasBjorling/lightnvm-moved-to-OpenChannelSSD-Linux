@@ -118,7 +118,7 @@ void invalidate_block_page(struct nvmd *nvmd, struct nvm_addr *p)
 	spin_unlock(&block->lock);
 }
 
-void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p)
+int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc)
 {
 	struct nvm_addr *gp;
 
@@ -131,6 +131,10 @@ void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p)
 	while (atomic_inc_return(&gp->inflight) != 1) {
 		atomic_dec(&gp->inflight);
 		spin_unlock(&nvmd->trans_lock);
+
+		if(is_gc)
+			return -1;
+
 		schedule();
 		spin_lock(&nvmd->trans_lock);
 	}
@@ -146,6 +150,8 @@ void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p)
 
 	nvmd->rev_trans_map[p->addr] = l_addr;
 	spin_unlock(&nvmd->trans_lock);
+
+	return 0;
 }
 
 /* requires pool->lock taken */
@@ -155,6 +161,7 @@ inline void nvm_reset_block(struct nvm_block *block)
 
 	BUG_ON(!block);
 
+	//DMERR("nvm_reset_block: reset block %d", block->id);
 	spin_lock(&block->lock);
 	bitmap_zero(block->invalid_pages, nvmd->nr_host_pages_in_blk);
 	block->ap = NULL;
@@ -197,6 +204,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 	}
 
 	block = list_first_entry(&pool->free_list, struct nvm_block, list);
+	//DMERR("nvm_pool_get_block: move block %d from free to used", block->id);
 	list_move_tail(&block->list, &pool->used_list);
 
 	pool->nr_free_blocks--;
@@ -221,8 +229,10 @@ void nvm_pool_put_block(struct nvm_block *block)
 
 	spin_lock(&pool->lock);
 
+	//DMERR("nvm_put_block: move block %d to free", block->id);
 	list_move_tail(&block->list, &pool->free_list);
 	pool->nr_free_blocks++;
+	pool->nr_gc_blocks--;
 
 	spin_unlock(&pool->lock);
 
@@ -459,6 +469,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 {
 	struct nvm_ap *ap;
 	struct nvm_addr *p;
+	int ret;
 
 	ap = get_next_ap(nvmd);
 
@@ -466,7 +477,15 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	p = nvm_alloc_addr_from_ap(ap, is_gc);
 	spin_unlock(&ap->lock);
 	if (p != NULL){
-		nvm_update_map(nvmd, l_addr, p);
+		ret = nvm_update_map(nvmd, l_addr, p, is_gc);
+	
+		if(ret){
+			DMERR("Cant update map");
+			BUG_ON(!is_gc);
+			invalidate_block_page(nvmd, p);			
+
+			return (struct nvm_addr *)LTOP_POISON;
+		}
 	}
 
 	return p;
@@ -503,6 +522,7 @@ static void nvm_endio(struct bio *bio, int err)
 			mempool_free(block->data, nvmd->block_page_pool);
 			block->data = NULL;
 
+			//DMERR("nvm_endio: add block %d to prio", block->id);
 			spin_lock(&pool->gc_lock);
 			list_add_tail(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->gc_lock);
@@ -700,6 +720,12 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	p = nvmd->map_ltop(nvmd, l_addr, is_gc, private);
 
 	if (p) {
+		if(p == LTOP_POISON){
+			BUG_ON(!is_gc);
+			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
+			return;
+		}
+		
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, is_gc, bio);
 	} else {

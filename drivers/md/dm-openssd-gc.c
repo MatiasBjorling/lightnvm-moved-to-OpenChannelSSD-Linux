@@ -70,12 +70,12 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
 		return;
 
-	printk("o1\n");
+	//DMERR("o1\n");
 	while ((slot = find_first_zero_bit(block->invalid_pages,
 					   nvmd->nr_host_pages_in_blk)) <
 						nvmd->nr_host_pages_in_blk) {
 		/* Perform read */
-		printk("block %u %u\n", block->id, slot);
+		//DMERR("move_valid_pages: block %u slot %u\n", block->id, slot);
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
 
@@ -90,21 +90,29 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
+		//DMERR("move_valid_pages: submit GC READ src block %d addr %ld", src.block->id, src.addr);
 		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, 1, NULL);
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
-		printk("addr %llu\n", src.addr);
+		//DMERR("move_valid_pages: lookup_ptol addr %ld\n", src.addr);
 		l_addr = nvmd->lookup_ptol(nvmd, src.addr);
+		//DMERR("move_valid_pages: reclaim l_addr %ld\n", l_addr);
 		/* remap src_bio to write the logical addr to new physical
 		 * place */
+
+		/* already updated by concurrent regular write*/
+		if(l_addr == LTOP_POISON)
+			continue;
+
 		src_bio->bi_sector = l_addr * NR_PHY_IN_LOG;
 
-		//DMDEBUG("move page p_addr=%ld l_addr=%ld (map[%ld]=%ld)", src.addr, l_addr, l_addr, os->trans_map[l_addr].addr);
+		//DMERR("move page l_addr=%ld (map[%ld]=%ld)", src.addr, l_addr, nvmd->trans_map[l_addr].addr);
 
 		if (nvmd->begin_gc_private)
 			gc_private = nvmd->begin_gc_private(l_addr, src.addr, block);
 
+		//DMERR("move_valid_pages: submit GC WRITE");
 		nvm_write_execute_bio(nvmd, src_bio, 1, NULL);
 
 		if (nvmd->end_gc_private)
@@ -112,10 +120,10 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		bio_put(src_bio);
 		mempool_free(page, nvmd->page_pool);
-		//printk("p slot %u block %u\n", slot, block->id);
+		//DMERR("move_valid_pages: p slot %u block %u\n", slot, block->id);
 	}
 	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
-	printk("o2\n");
+	//DMERR("o2\n");
 }
 
 /* Push erase condition to automatically be executed when block goes to zero.
@@ -125,6 +133,7 @@ void nvm_block_release(struct kref *ref)
 	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
 	struct nvmd *nvmd = block->pool->nvmd;
 
+	//DMERR("nvm_block_release: release block %d", block->id);
 	BUG_ON(atomic_read(&block->gc_running) != 1);
 
 	queue_work(nvmd->kgc_wq, &block->ws_gc);
@@ -144,22 +153,26 @@ void nvm_gc_collect(struct work_struct *work)
 	//printk("i need %u %u\n", nr_blocks_need, pool->nr_free_blocks);
 	spin_lock(&pool->gc_lock);
 	spin_lock(&nvmd->trans_lock);
-	while (nr_blocks_need > pool->nr_free_blocks &&
+	spin_lock(&pool->lock);
+	while (nr_blocks_need > (pool->nr_gc_blocks + pool->nr_free_blocks) &&
 						!list_empty(&pool->prio_list)) {
 		block = block_prio_find_max(pool);
 
 		if (!block->nr_invalid_pages) {
-			printk("o\n");
+			DMERR("o NO INVALID PAGES IN PRIO\n");
 			break;
 		}
 
+		//DMERR("nvm_gc_collect: delete block %d from prio (nr_invalid_pages %d)", block->id, block->nr_invalid_pages);
 		list_del_init(&block->prio);
+		pool->nr_gc_blocks++;
 
 		BUG_ON(!block_is_full(block));
 		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
 
 		kref_put(&block->ref_count, nvm_block_release);
 	}
+	spin_unlock(&pool->lock);
 	spin_unlock(&nvmd->trans_lock);
 	spin_unlock(&pool->gc_lock);
 	nvmd->next_collect_pool++;
@@ -170,15 +183,16 @@ void nvm_gc_block(struct work_struct *work)
 {
 	struct nvm_block *block = container_of(work, struct nvm_block, ws_gc);
 	struct nvmd *nvmd = block->pool->nvmd;
+	//DMERR("nvm_gc_block: gc block %d", block->id);
 
 	/* rewrite to have moves outside lock. i.e. so we can
 	 * prepare multiple pages in parallel on the attached
 	 * device. */
-	DMDEBUG("moving block addr %ld", block_to_addr(block));
+	//DMERR("moving block %d", block->id);
 	nvm_move_valid_pages(nvmd, block);
-
+	//DMERR("erase block %d", block->id);
 	__erase_block(block);
-
+	//DMERR("nvm_gc_block: put block %d", block->id);
 	nvm_pool_put_block(block);
 }
 

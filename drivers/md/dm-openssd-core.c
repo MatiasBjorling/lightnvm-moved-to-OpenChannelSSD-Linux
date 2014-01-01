@@ -14,7 +14,7 @@ static void show_pool(struct nvm_pool *pool)
 		prio_cnt++;
 	spin_unlock(&pool->lock);
 
-	DMERR("Pool %d info %u %u %u", pool->id, 
+	DMERR("Pool %d info %u %u %u", pool->id,
 			free_cnt, used_cnt, prio_cnt);
 }
 
@@ -132,7 +132,7 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int i
 		atomic_dec(&gp->inflight);
 		spin_unlock(&nvmd->trans_lock);
 
-		if(is_gc)
+		if (is_gc)
 			return -1;
 
 		schedule();
@@ -474,17 +474,19 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 
 	ap = get_next_ap(nvmd);
 
-	if(is_gc){
+	if (is_gc) {
 		/* prevent GC-ing pool from devouring pages of pool with little free blocks*/
 		spin_lock(&ap->pool->lock);
-		while(ap->pool->nr_free_blocks <= nvmd->nr_pools * 2 
-		      && ap->pool->id != (is_gc-1)) {
+		while(ap->pool->nr_free_blocks <= nvmd->nr_pools * 2 &&
+						ap->pool->id != (is_gc-1)) {
 			spin_unlock(&ap->pool->lock);
 
 			i++;
 			//DMERR("Pool %d trying to write GC data to pool %d which is too low on free pages", is_gc-1, ap->pool->id);
-			if(i==nvmd->nr_pools * 2 ){
-				DMERR("Pool %d has to write GC data to pool %d which is too low on free pages", is_gc-1, ap->pool->id);
+			if (i == nvmd->nr_pools * 2) {
+				DMERR("Pool %d has to write GC data to pool %d
+						which is too low on free pages",
+							is_gc-1, ap->pool->id);
 				spin_lock(&ap->pool->lock);
 				break;
 			}
@@ -499,11 +501,11 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	spin_unlock(&ap->lock);
 	if (p != NULL){
 		ret = nvm_update_map(nvmd, l_addr, p, is_gc);
-	
-		if(ret){
+
+		if (ret) {
 			DMERR("Cant update map");
 			BUG_ON(!is_gc);
-			invalidate_block_page(nvmd, p);			
+			invalidate_block_page(nvmd, p);
 
 			return (struct nvm_addr *)LTOP_POISON;
 		}
@@ -595,7 +597,7 @@ static void nvm_endio(struct bio *bio, int err)
 		complete(&pb->event);
 
 	/* all submitted bios allocate their own addr, except GC reads*/
-	if(!(pb->sync && bio_data_dir(bio) == READ)) 
+	if (!(pb->sync && bio_data_dir(bio) == READ))
 		mempool_free(pb->addr, nvmd->addr_pool);
 
 	free_per_bio_data(nvmd, pb);
@@ -741,7 +743,7 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	p = nvmd->map_ltop(nvmd, l_addr, is_gc, private);
 
 	if (p) {
-		if(p == LTOP_POISON){
+		if (p == LTOP_POISON) {
 			BUG_ON(!is_gc);
 			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
 			return;

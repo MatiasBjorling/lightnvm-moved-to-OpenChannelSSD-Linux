@@ -10,73 +10,58 @@
 #include <linux/types.h>
 #include "dm-openssd.h"
 
-#define LIGHTNVM_IOCTL_SUBMIT_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x41, hint_data_t)
-#define LIGHTNVM_IOCTL_KERNEL_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x42, hint_data_t)
+#define LIGHTNVM_IOCTL_SUBMIT_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x41, struct hint_payload)
+#define LIGHTNVM_IOCTL_KERNEL_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x42, struct hint_payload)
 
 #define HINT_MAX_INOS       (500000)
 #define HINT_DATA_MAX_INOS  (8)
-#define HINT_DATA_SIZE (HINT_DATA_MAX_INOS*128) /* > 16 * 128 files at most */
-#define GET_HINT_FROM_PAYLOAD(PAYLOAD, IDX) (((ino_hint_t*)((PAYLOAD)->data))[IDX])
-#define CAST_TO_PAYLOAD(HINT_DATA) ((hint_payload_t*)((HINT_DATA)->hint_payload))
-#define INO_HINT_FROM_DATA(HINT_DATA, IDX) ((ino_hint_t*)(CAST_TO_PAYLOAD(HINT_DATA)->data))[IDX]
-#define INO_HINT_SET(HINT_DATA, IDX, INO, START, COUNT, FC) \
-			     INO_HINT_FROM_DATA(HINT_DATA, IDX).ino = INO; \
-                             INO_HINT_FROM_DATA(HINT_DATA, IDX).start_lba = START; \
-                             INO_HINT_FROM_DATA(HINT_DATA, IDX).count = COUNT; \
-                             INO_HINT_FROM_DATA(HINT_DATA, IDX).fc = FC;
-typedef enum {
+#define HINT_DATA_SIZE (HINT_DATA_MAX_INOS * 128) /* > 16 * 128 files at most */
+
+enum fclass {
 	FC_EMPTY,
 	FC_UNKNOWN,
 	FC_VIDEO_SLOW,
 	FC_IMAGE_SLOW,
 	FC_DB_INDEX
-} fclass;
+};
 
-typedef struct ino_hint_s {
+struct ino_hint {
 	unsigned long ino; // inode number
 	uint32_t start_lba; // start lba relevant in sc
 	uint32_t count; //number of sequential lba's related to ino (starting from start_lba)
-	fclass fc;
-} ino_hint_t;
+	enum fclass fc;
+};
 
-typedef struct hint_payload_s {
-	char     data[HINT_DATA_SIZE];
+struct hint_payload {
 	uint32_t is_write;
-	uint32_t hint_flags;
+	uint32_t flags;
 	uint32_t lba;
 	uint32_t sectors_count;
-	uint32_t count; // number of ino_hint_t in data
-} hint_payload_t;
-
-#define HINT_PAYLOAD_SIZE sizeof(hint_payload_t)
-
-typedef struct hint_data_s {
-	uint32_t hint_payload_size;
-	char hint_payload[HINT_PAYLOAD_SIZE];
-} hint_data_t;
+	struct ino_hint ino;
+};
 
 #ifdef __KERNEL__
 struct nvm_hint {
-	unsigned int hint_flags;
-	char* ino2fc; // TODO: 500k inodes == ~0.5MB. for extra-efficiency use hash/bits table
-	spinlock_t hintlock;
-	struct list_head hintlist;
-	struct nvm_addr *shadow_map; // TODO should be hash table for efficiency? (but then we also need to use a lock...)
+	unsigned int flags;
+	char *ino2fc;
+	spinlock_t lock;
+	struct list_head hints;
+	struct nvm_addr *shadow_map;
 };
 
-typedef struct hint_info_s {
-	ino_hint_t hint; // if NULL, none
+struct hint_info {
+	struct ino_hint hint; // if NULL, none
 	char is_write;
-	unsigned int hint_flags;
+	unsigned int flags;
 	uint32_t processed; // how many related LBAs were indeed processed
 	struct list_head list_member;
-} hint_info_t;
+};
 
 struct nvm_hint_map_private {
 	sector_t old_p_addr;
 	struct nvm_ap *prev_ap;
 	unsigned long flags;
-	hint_info_t *hint_info;
+	struct hint_info *info;
 };
 
 struct nvm_ap_hint {
@@ -94,6 +79,7 @@ static inline void init_ap_hint(struct nvm_ap *ap)
 }
 #endif
 
+/* make sure these follow target_flags defined in dm-openssd.h */
 enum deploy_hint_flags {
 	HINT_NONE	= 0 << 0, /* No hints applied */
 	HINT_SWAP	= 1 << 0, /* Swap aware hints. Detected from block request type */
@@ -107,6 +93,8 @@ enum deploy_hint_flags {
 	((HINT_INFO)->is_write == (IS_WRITE) && \
 	 (LBA) >= (HINT_INFO)->hint.start_lba && \
 	 (LBA) <  ((HINT_INFO)->hint.start_lba+(HINT_INFO)->hint.count) && \
-	 ((HINT_INFO)->hint_flags & FLAGS))
+	 ((HINT_INFO)->flags & FLAGS))
+
+#define nvm_engine(nvmd, engine) (nvmd->config.flags & engine)
 
 #endif /* DM_LIGHTNVM_HINT_H_ */

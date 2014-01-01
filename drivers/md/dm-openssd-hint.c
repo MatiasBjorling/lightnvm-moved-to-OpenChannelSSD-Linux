@@ -3,7 +3,7 @@
 
 static inline unsigned long diff_tv(struct timeval *curr_tv, struct timeval *ap_tv)
 {
-	if(curr_tv->tv_sec == ap_tv->tv_sec)
+	if (curr_tv->tv_sec == ap_tv->tv_sec)
 		return curr_tv->tv_usec - ap_tv->tv_usec;
 
 	return (curr_tv->tv_sec - ap_tv->tv_sec -1) * 1000000
@@ -37,9 +37,12 @@ void *nvm_begin_gc_hint(sector_t l_addr, sector_t p_addr, struct
                             nvm_block *block)
 {
 	struct nvm_hint_map_private *private =
-	        kzalloc(sizeof(struct nvm_hint_map_private), GFP_NOIO);
+			kzalloc(sizeof(struct nvm_hint_map_private), GFP_NOIO);
 
-	private->old_p_addr = p_addr;
+	if (!private)
+		DMERR("kmalloc err nvm_begin_gc_hint");
+	else
+		private->old_p_addr = p_addr;
 
 	return private;
 }
@@ -50,37 +53,37 @@ void nvm_end_gc_hint(void *private)
 }
 
 // iterate hints list, and check if lba of current req is covered by some hint
-hint_info_t* nvm_find_hint(struct nvmd *nvmd, sector_t logical_addr, bool is_write)
+struct hint_info *nvm_find_hint(struct nvmd *nvmd, sector_t l_addr, bool is_write)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
-	hint_info_t *hint_info;
+	struct hint_info *info;
 	struct list_head *node;
 
-	//DMINFO("find hint for lba %ld is_write %d", logical_addr, is_write);
-	spin_lock(&hint->hintlock);
+	//DMINFO("find hint for lba %ld is_write %d", l_addr, is_write);
+	spin_lock(&hint->lock);
 	/*see if hint is already in list*/
-	list_for_each(node, &hint->hintlist) {
-		hint_info = list_entry(node, hint_info_t, list_member);
-		//DMINFO("hint start_lba=%d count=%d", hint_info->hint.start_lba, hint_info->hint.count);
+	list_for_each(node, &hint->hints) {
+		info = list_entry(node, struct hint_info, list_member);
+		//DMINFO("hint start_lba=%d count=%d", info->hint.start_lba, info->hint.count);
 		//continue;
 		/* verify lba covered by hint*/
-		if (is_hint_relevant(logical_addr, hint_info, is_write, nvmd->config.flags)) {
+		if (is_hint_relevant(l_addr, info, is_write, nvmd->config.flags)) {
 			DMDEBUG("found hint for lba %ld (ino %ld)",
-				logical_addr, hint_info->hint.ino);
-			hint_info->processed++;
-			spin_unlock(&hint->hintlock);
-			return hint_info;
+				l_addr, info->hint.ino);
+			info->processed++;
+			spin_unlock(&hint->lock);
+			return info;
 		}
 	}
-	spin_unlock(&hint->hintlock);
-	DMDEBUG("no hint found for %s lba %ld", (is_write)?"WRITE":"READ",logical_addr);
+	spin_unlock(&hint->lock);
+	DMDEBUG("no hint found for %s lba %ld", (is_write) ? "WRITE" : "READ", l_addr);
 
 	return NULL;
 }
 
-fclass file_classify(struct bio_vec* bvec)
+enum fclass file_classify(struct bio_vec *bvec)
 {
-	fclass fc = FC_UNKNOWN;
+	enum fclass fc = FC_UNKNOWN;
 	char *sec_in_mem;
 	char byte[4];
 
@@ -89,6 +92,9 @@ fclass file_classify(struct bio_vec* bvec)
 		return fc;
 	}
 
+	/* identifies a video file
+	 * FIXME: MB: Aviad, can you elaborate on what file format, etc.? 
+	 */
 	byte[0] = 0x66;
 	byte[1] = 0x74;
 	byte[2] = 0x79;
@@ -101,13 +107,14 @@ fclass file_classify(struct bio_vec* bvec)
 		return fc;
 	}
 
-	if (!memcmp(sec_in_mem+4, byte,4)) {
+	if (!memcmp(sec_in_mem + 4, byte, 4)) {
 		//hint_log("VIDEO classified");
 		DMINFO("VIDEO classified");
 		fc = FC_VIDEO_SLOW;
 	}
 
-	if(sec_in_mem[0]==0xfffffffe && sec_in_mem[1]==0xfffffffe && sec_in_mem[2]==0x07 && sec_in_mem[3]==0x01){
+	if (sec_in_mem[0] == 0xfffffffe && sec_in_mem[1] == 0xfffffffe &&
+				sec_in_mem[2] == 0x07 && sec_in_mem[3] == 0x01) {
 		DMINFO("identified DB_INDEX file");
 		fc = FC_DB_INDEX;
 	}
@@ -116,94 +123,95 @@ fclass file_classify(struct bio_vec* bvec)
 	return fc;
 }
 
-int nvm_is_fc_latency(fclass fc)
+int nvm_is_fc_latency(enum fclass fc)
 {
 	return (fc == FC_DB_INDEX);
 }
 
-int nvm_is_fc_packable(fclass fc)
+int nvm_is_fc_packable(enum fclass fc)
 {
 	return (fc == FC_VIDEO_SLOW);
 }
 
 /* no real sending for now, in prototype just put it directly in FTL's hints list
    and update ino_hint map when necessary*/
-static int nvm_send_hint(struct nvmd *nvmd, hint_data_t *hint_data)
+static int nvm_send_hint(struct nvmd *nvmd, struct hint_payload *d)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
-	int i;
-	hint_info_t* hint_info;
+	struct hint_info *info;
 
 	if (!(nvmd->config.flags &
-	      (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_SWAP | NVM_OPT_ENGINE_PACK))){
+		(NVM_OPT_ENGINE_LATENCY |
+		NVM_OPT_ENGINE_SWAP |
+		NVM_OPT_ENGINE_PACK))) {
 		DMERR("got unsupported hint");
 		goto send_done;
 	}
 
 	DMDEBUG("first %s hint count=%d lba=%d fc=%d",
-	       CAST_TO_PAYLOAD(hint_data)->is_write ? "WRITE" : "READ",
-	       CAST_TO_PAYLOAD(hint_data)->count,
-	       INO_HINT_FROM_DATA(hint_data, 0).start_lba,
-	       INO_HINT_FROM_DATA(hint_data, 0).fc);
+		d->is_write ? "WRITE" : "READ",
+		d->count,
+		d->ino.start_lba,
+		d->ino.fc);
 
 	// assert relevant hint support
-	if ((CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP && !(nvmd->config.flags & NVM_OPT_ENGINE_SWAP)) ||
-	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_LATENCY && !(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY)) ||
-	    (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_PACK && !(nvmd->config.flags & NVM_OPT_ENGINE_PACK))) {
+	/* FIXME: replace with shift of correct flags in nvmd->config.flags */
+	if ((d->flags & NVM_OPT_ENGINE_SWAP && !(nvm_engine(nvmd, NVM_OPT_ENGINE_SWAP))) ||
+	    (d->flags & NVM_OPT_ENGINE_LATENCY && !(nvm_engine(nvmd, NVM_OPT_ENGINE_LATENCY))) ||
+	    (d->flags & NVM_OPT_ENGINE_PACK && !(nvm_engine(nvmd,
+							    NVM_OPT_ENGINE_PACK)))) {
 		DMERR("hint of types %x not supported (1st entry ino %lu lba %u count %u)",
-		       CAST_TO_PAYLOAD(hint_data)->hint_flags,
-		       INO_HINT_FROM_DATA(hint_data, 0).ino,
-		       INO_HINT_FROM_DATA(hint_data, 0).start_lba,
-		       INO_HINT_FROM_DATA(hint_data, 0).count);
+			d->flags,
+			d->ino.ino,
+			d->ino.start_lba,
+			d->ino.count);
+		goto send_done;
+	}
+
+	// handle file type  for
+	// 1) identified latency writes
+	// 2) identified pack writes
+	if ((nvm_engine(nvmd, NVM_OPT_ENGINE_LATENCY) ||
+	     nvm_engine(nvmd, NVM_OPT_ENGINE_PACK)) && d->ino.fc != FC_EMPTY) {
+		DMINFO("ino %lu got new fc %d", d->ino.ino, d->ino.fc);
+		hint->ino2fc[d->ino.ino] = d->ino.fc;
+	}
+
+	/* non-packable file. ignore hint*/
+	if(nvm_engine(nvmd, NVM_OPT_ENGINE_PACK) &&
+	   !nvm_is_fc_packable(hint->ino2fc[d->ino.ino])) {
+		DMDEBUG("non-packable file. ignore hint");
+		goto send_done;
+	}
+
+	/* non-latency file. ignore hint*/
+	if(nvm_engine(nvmd, NVM_OPT_ENGINE_LATENCY) &&
+				d->ino.fc == FC_EMPTY &&
+				!nvm_is_fc_latency(hint->ino2fc[d->ino.ino])) {
+		DMDEBUG("non-latency file. ignore hint");
 		goto send_done;
 	}
 
 	// insert to hints list
-	for(i = 0; i < CAST_TO_PAYLOAD(hint_data)->count; i++) {
-		// handle file type  for
-		// 1) identified latency writes
-		// 2) identified pack writes
-		if ((nvmd->config.flags & NVM_OPT_ENGINE_LATENCY || nvmd->config.flags & NVM_OPT_ENGINE_PACK)
-		    && INO_HINT_FROM_DATA(hint_data, i).fc != FC_EMPTY) {
-			DMINFO("ino %lu got new fc %d", INO_HINT_FROM_DATA(hint_data, i).ino,
-			       INO_HINT_FROM_DATA(hint_data, i).fc);
-			hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino] = INO_HINT_FROM_DATA(hint_data, 0).fc;
-		}
-
-		/* non-packable file. ignore hint*/
-		if(nvmd->config.flags & NVM_OPT_ENGINE_PACK &&
-		   !nvm_is_fc_packable(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
-			DMDEBUG("non-packable file. ignore hint");
-			continue;
-		}
-
-		/* non-latency file. ignore hint*/
-		if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY && INO_HINT_FROM_DATA(hint_data, i).fc == FC_EMPTY &&
-		   !nvm_is_fc_latency(hint->ino2fc[INO_HINT_FROM_DATA(hint_data, i).ino])){
-			DMDEBUG("non-latency file. ignore hint");
-			continue;
-		}
-
-		// insert to hints list
-		hint_info = kmalloc(sizeof(hint_info_t), GFP_KERNEL);
-		if (!hint_info) {
-			DMERR("can't allocate hint info");
-			return -ENOMEM;
-		}
-		memcpy(&hint_info->hint, &INO_HINT_FROM_DATA(hint_data, i), sizeof(ino_hint_t));
-		hint_info->processed  = 0;
-		hint_info->is_write   = CAST_TO_PAYLOAD(hint_data)->is_write;
-		hint_info->hint_flags = CAST_TO_PAYLOAD(hint_data)->hint_flags;
-
-		DMDEBUG("about to add hint_info to list. %s %s",
-		       (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_SWAP) ? "SWAP" :
-		       (CAST_TO_PAYLOAD(hint_data)->hint_flags & HINT_LATENCY)?"LATENCY":"REGULAR",
-		       (CAST_TO_PAYLOAD(hint_data)->is_write) ? "WRITE" : "READ");
-
-		spin_lock(&hint->hintlock);
-		list_add_tail(&hint_info->list_member, &hint->hintlist);
-		spin_unlock(&hint->hintlock);
+	info = kmalloc(sizeof(struct hint_info), GFP_KERNEL);
+	if (!info) {
+		DMERR("can't allocate hint info");
+		return -ENOMEM;
 	}
+
+	memcpy(&info->hint, &d->ino, sizeof(struct ino_hint));
+	info->processed  = 0;
+	info->is_write   = d->is_write;
+	info->flags = d->flags;
+
+	DMDEBUG("about to add hint_info to list. %s %s",
+	       (d->flags & HINT_SWAP) ? "SWAP" :
+	       (d->flags & HINT_LATENCY)? "LATENCY" : "REGULAR",
+	       (d->is_write) ? "WRITE" : "READ");
+
+	spin_lock(&hint->lock);
+	list_add_tail(&info->list_member, &hint->hints);
+	spin_unlock(&hint->lock);
 
 send_done:
 	return 0;
@@ -213,15 +221,18 @@ send_done:
 /**
  * automatically extract hint from a bio, and send to target.
  * iterate all pages, look into inode. There are several cases:
- * 1) swap - stop and send hint on entire bio (assuming swap LBAs are not mixed with regular LBAs in one bio)
- * 2) read - iterate all pages and send hint_data composed of multiple hints, one for each inode number and
- *           relevant range of LBAs covered by a page
- * 3) write - check if a page is the first sector of a file, classify it and set in hint. rest same as read
+ * 1) swap - stop and send hint on entire bio (assuming swap LBAs are not mixed
+ *    with regular LBAs in one bio)
+ *
+ * 2) read - go through page and send hint_payload, one for each inode number and
+ *    relevant range of LBAs covered by a page
+ *
+ * 3) write - check if a page is the first sector of a file, classify it and set
+ *    in hint. rest same as read
  */
 void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 {
-	hint_data_t *hint_data;
-	fclass fc = FC_EMPTY;
+	enum fclass fc = FC_EMPTY;
 	unsigned ino = -1;
 	struct page *bv_page;
 	struct address_space *mapping;
@@ -229,9 +240,10 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	struct bio_vec *bvec;
 	uint32_t sector_size = nvmd->sector_size;
 	uint32_t sectors_count = 0;
-	uint32_t lba = 0, bio_len = 0, hint_idx;
+	uint32_t lba = 0, bio_len = 0;
 	unsigned long prev_ino = -1, first_sector = -1;
-	int i, ret;
+	struct hint_payload *d;
+	int ret;
 	bool is_write = 0;
 
 	return;
@@ -250,146 +262,87 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	lba = bio->bi_sector;
 	sectors_count = bio->bi_size / sector_size;
 
-	/* allocate hint_data */
-	hint_data = kzalloc(sizeof(hint_data_t), GFP_NOIO);
-	if (!hint_data) {
-		DMERR("hint_data_t kmalloc failed");
+	d = kzalloc(sizeof(struct hint_payload), GFP_NOIO);
+	if (!d) {
+		DMERR("hint_payload kmalloc failed");
 		return;
 	}
 
-	CAST_TO_PAYLOAD(hint_data)->lba = lba;
-	CAST_TO_PAYLOAD(hint_data)->sectors_count = sectors_count;
-	CAST_TO_PAYLOAD(hint_data)->is_write = is_write;
-	ino = -1;
+	d->lba = lba;
+	d->sectors_count = sectors_count;
+	d->is_write = is_write;
+
 	DMDEBUG("%s lba=%d sectors_count=%d",
 	       is_write ? "WRITE" : "READ",
 	       lba, sectors_count);
-#if 0
-	hint_log("free hint_data dont look in bvec. simply return");
-	kfree(hint_data);
-	return;
-#endif
 
-	bio_for_each_segment(bvec, bio, i) {
-		bv_page = bvec[0].bv_page;
+	bvec = bio_iovec(bio);
+	bv_page = bvec->bv_page;
 
-		if (bv_page && !PageSlab(bv_page)) {
-			// swap hint
-			if (PageSwapCache(bv_page)) {
-				DMDEBUG("swap bio");
-				// TODO - not tested
-				CAST_TO_PAYLOAD(hint_data)->hint_flags |= HINT_SWAP;
+	if (!bv_page || PageSlab(bv_page))
+		goto done;
 
-				// for compatibility add one hint
-				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count,
-				             0, lba, sectors_count, fc);
-				CAST_TO_PAYLOAD(hint_data)->count++;
-				break;
-			}
+	// swap hint
+	if (PageSwapCache(bv_page)) {
+		DMDEBUG("swap bio");
+		d->flags |= HINT_SWAP;
 
-			mapping = bv_page->mapping;
-
-			if (mapping && ((unsigned long)mapping & PAGE_MAPPING_ANON) == 0) {
-				host = mapping->host;
-				if (!host) {
-					DMCRIT("page without mapping->host. shouldn't happen");
-					bio_len += bvec[0].bv_len;
-					continue; // no host
-				}
-
-				prev_ino = ino;
-				ino = host->i_ino;
-
-				if (!host->i_sb || !host->i_sb->s_type || !host->i_sb->s_type->name) {
-					DMDEBUG("not related to file system");
-					bio_len += bvec[0].bv_len;
-					continue;
-				}
-
-				if (!ino) {
-					DMDEBUG("not inode related");
-					bio_len += bvec[0].bv_len;
-					continue;
-				}
-				//if (bvec[0].bv_offset)
-				//   DMINFO("bv_page->index %d offset %d len %d", bv_page->index, bvec[0].bv_offset, bvec[0].bv_len);
-
-				/* classify if we can.
-				 * can only classify writes to file's first sector */
-				fc = FC_EMPTY;
-				if (is_write && bv_page->index == 0 && bvec[0].bv_offset ==0) {
-					// should be first sector in file. classify
-					first_sector = lba + (bio_len / sector_size);
-					fc = file_classify(&bvec[0]);
-				}
-
-				/* change previous hint, unless this is a new inode
-				   and then simply increment count in existing hint */
-				if (prev_ino == ino) {
-					hint_idx = CAST_TO_PAYLOAD(hint_data)->count - 1;
-					if (INO_HINT_FROM_DATA(hint_data, hint_idx).ino != ino) {
-						DMERR("updating hint of wrong ino (ino=%u expected=%lu)", ino,
-						      INO_HINT_FROM_DATA(hint_data, hint_idx).ino);
-						bio_len += bvec[0].bv_len;
-						continue;
-					}
-
-					INO_HINT_FROM_DATA(hint_data, hint_idx).count +=
-					        bvec[0].bv_len / sector_size;
-					DMDEBUG("increase count for hint %u. new count=%u",
-					       hint_idx, INO_HINT_FROM_DATA(hint_data, hint_idx).count);
-					bio_len+= bvec[0].bv_len;
-					continue;
-				}
-
-				if (HINT_DATA_MAX_INOS == CAST_TO_PAYLOAD(hint_data)->count) {
-					DMERR("too many inos in hint");
-					bio_len+= bvec[0].bv_len;
-					continue;
-				}
-
-				DMDEBUG("add %s hint here - ino=%u lba=%u fc=%s count=%d hint_count=%u",
-				       is_write ? "WRITE":"READ",
-				       ino,
-				       lba + (bio_len / sector_size),
-				       (fc == FC_VIDEO_SLOW) ? "VIDEO" : (fc == FC_EMPTY) ? "EMPTY" : "UNKNOWN",
-				       bvec[0].bv_len / sector_size,
-				       CAST_TO_PAYLOAD(hint_data)->count+1);
-
-				// add new hint to hint_data. lba count=bvec[0].bv_len / sector_size, will add more later on
-				INO_HINT_SET(hint_data, CAST_TO_PAYLOAD(hint_data)->count,
-				             ino, lba + (bio_len / sector_size), bvec[0].bv_len / sector_size, fc);
-				CAST_TO_PAYLOAD(hint_data)->count++;
-			}
-		}
-
-		// increment len
-		bio_len += bvec[0].bv_len;
-	}
-#if 0
-	// TESTING
-	// dont send hints yet. just print whatever we got, and free
-	hint_log("send nothing free hint_data and simply return.");
-	kfree(hint_data);
-	hint_log("return");
-	return;
-#endif
-	// hint empty - return.
-	// Note: not error, maybe we're not doing file-related/swap I/O
-	if (CAST_TO_PAYLOAD(hint_data)->count == 0) {
-		//hint_log("request with no file data");
+		d->ino.ino = 0;
+		d->ino.start_lba = lba;
+		d->ino.count = sectors_count;
+		d->ino.fc = fc;
 		goto done;
 	}
 
-	/* non-empty hint_data, send to device */
-	//hint_log("hint count=%u. send to hint device", CAST_TO_PAYLOAD(hint_data)->count);
-	ret = nvm_send_hint(nvmd, hint_data);
+	mapping = page_mapping(bv_page);
+	if (!mapping || PageAnon(bv_page))
+		goto done;
 
-	if (ret != 0)
+	host = mapping->host;
+	if (!host) {
+		DMCRIT("page without mapping->host. shouldn't happen");
+		goto done; // no host
+	}
+
+	prev_ino = ino;
+	ino = host->i_ino;
+
+	if (!host->i_sb || !host->i_sb->s_type || !host->i_sb->s_type->name) {
+		DMDEBUG("not related to file system");
+		goto done;
+	}
+
+	if (!ino) {
+		DMDEBUG("not inode related");
+		goto done;
+	}
+
+	/* classify if we can.
+	 * can only classify writes to file's first sector */
+	if (is_write && bv_page->index == 0 && bvec->bv_offset == 0) {
+		// should be first sector in file. classify
+		first_sector = lba + (bio_len / sector_size);
+		fc = file_classify(&bvec[0]);
+	}
+
+	DMDEBUG("add %s hint here - ino=%u lba=%u fc=%s count=%d",
+	       is_write ? "WRITE" : "READ",
+	       ino,
+	       lba + (bio_len / sector_size),
+	       (fc == FC_VIDEO_SLOW) ? "VIDEO" : (fc == FC_EMPTY) ? "EMPTY" : "UNKNOWN",
+	       bvec[0].bv_len / sector_size);
+
+	d->ino.ino = ino;
+	d->ino.start_lba = lba;
+	d->ino.count = 1;
+	d->ino.fc = fc;
+
+	ret = nvm_send_hint(nvmd, d);
+	if (!ret)
 		DMERR("nvm_send_hint error %d", ret);
 
 done:
-	kfree(hint_data);
+	kfree(d);
 }
 
 static int nvm_read_bio_hint(struct nvmd *nvmd, struct bio *bio)
@@ -413,9 +366,9 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	//nvm_bio_hint(nvmd, bio);
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
-	map_alloc_data.hint_info = nvm_find_hint(nvmd, l_addr, 1);
+	map_alloc_data.info = nvm_find_hint(nvmd, l_addr, 1);
 
-	if (map_alloc_data.hint_info && map_alloc_data.hint_info->hint_flags & HINT_LATENCY)
+	if (map_alloc_data.info && map_alloc_data.info->flags & HINT_LATENCY)
 		numCopies = 2;
 
 	/* Submit bio for all physical addresses*/
@@ -431,13 +384,13 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	}
 
 	/* Processed entire hint */
-	if (map_alloc_data.hint_info) {
-		spin_lock(&hint->hintlock);
-		if (map_alloc_data.hint_info->processed == map_alloc_data.hint_info->hint.count) {
-			list_del(&map_alloc_data.hint_info->list_member);
-			kfree(map_alloc_data.hint_info);
+	if (map_alloc_data.info) {
+		spin_lock(&hint->lock);
+		if (map_alloc_data.info->processed == map_alloc_data.info->hint.count) {
+			list_del(&map_alloc_data.info->list_member);
+			kfree(map_alloc_data.info);
 		}
-		spin_unlock(&hint->hintlock);
+		spin_unlock(&hint->lock);
 	}
 
 	bio_endio(bio, 0);
@@ -461,7 +414,7 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 {
 	struct nvm_ap *ap;
 	struct nvm_ap_hint* ap_pack_data = NULL;
-	struct nvm_addr *p;
+	struct nvm_addr *p = NULL;
 	struct timeval curr_tv;
 	unsigned long diff;
 	int i;
@@ -476,7 +429,7 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 		ap_pack_data = ap->hint_private;
 
 		/* got it */
-		if(ap_pack_data->ino == map_alloc_data->hint_info->hint.ino){
+		if (ap_pack_data->ino == map_alloc_data->info->hint.ino) {
 			DMDEBUG("ap with block_addr %ld associated to requested inode %d", block_to_addr(ap->cur), ap_pack_data->ino);
 			spin_lock(&ap->lock);
 			p = nvm_alloc_addr_from_ap(ap, 0);
@@ -485,14 +438,14 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 		}
 	}
 
-	if (p){
+	if (p) {
 		DMDEBUG("allocated addr %ld from PREVIOUS associated ap ", addr);
 		goto pack_alloc_done;
 	}
 
 	/* no ap associated to requested inode.
 	   find some empty pack ap, and use it*/
-	DMDEBUG("no ap associated to inode %lu", map_alloc_data->hint_info->hint.ino);
+	DMDEBUG("no ap associated to inode %lu", map_alloc_data->info->hint.ino);
 	for (i = 0; i < nvmd->nr_pools; i++) {
 		ap = get_next_ap(nvmd);
 
@@ -503,8 +456,8 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 		ap_pack_data = (struct nvm_ap_hint*)ap->hint_private;
 
 		/* associated to an other inode */
-		if(ap_pack_data->ino != INODE_EMPTY && 
-		   ap_pack_data->ino != map_alloc_data->hint_info->hint.ino){
+		if(ap_pack_data->ino != INODE_EMPTY &&
+		   ap_pack_data->ino != map_alloc_data->info->hint.ino){
 			/* check threshold and decide whether to replace associated inode */
 			do_gettimeofday(&curr_tv);
 			diff = diff_tv(&curr_tv, &ap_pack_data->tv);
@@ -515,7 +468,7 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 		}
 
 		/* got it - empty ap not associated to any inode */
-		ap_pack_data->ino = map_alloc_data->hint_info->hint.ino; // do this before alloc_addr
+		ap_pack_data->ino = map_alloc_data->info->hint.ino; // do this before alloc_addr
 		spin_lock(&ap->lock);
 		p = nvm_alloc_addr_from_ap(ap, 0);
 		spin_unlock(&ap->lock);
@@ -564,7 +517,7 @@ static struct nvm_addr *nvm_map_pack_hint_ltop_rr(struct nvmd *nvmd, sector_t l_
 	 * use regular (single-page) map_ltop */
 	if (!map_alloc_data ||
 	    map_alloc_data->old_p_addr != LTOP_EMPTY ||
-	    !map_alloc_data->hint_info) {
+	    !map_alloc_data->info) {
 		DMDEBUG("pack_rr: reclaimed or regular allocation");
 		return nvm_map_ltop_rr(nvmd, l_addr, 0, NULL);
 	}
@@ -670,7 +623,8 @@ static struct nvm_addr *nvm_map_swap_hint_ltop_rr(struct nvmd *nvmd,
 	/* Check if there is a hint for relevant sector
 	 * if not, resort to nvm_map_ltop_rr */
 	if (map_alloc_data) {
-		if (map_alloc_data->old_p_addr == LTOP_EMPTY && !map_alloc_data->hint_info) {
+		if (map_alloc_data->old_p_addr == LTOP_EMPTY &&
+				!map_alloc_data->info) {
 			DMDEBUG("swap_map: non-GC non-hinted write");
 			return nvm_map_ltop_rr(nvmd, l_addr, 0, NULL);
 		}
@@ -787,36 +741,20 @@ static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr)
 
 int nvm_ioctl_user_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
-	hint_data_t __user *uhint = (hint_data_t __user *)arg;
-	hint_data_t* hint_data;
-	int ret;
+	struct hint_payload __user *uhint = (struct hint_payload *)arg;
+	struct hint_payload d;
 
-	DMDEBUG("send user hint");
+	DMDEBUG("recv user hint");
 
-	/* allocate hint_data */
-	hint_data = kmalloc(sizeof(hint_data_t), GFP_KERNEL);
-	if (!hint_data) {
-		DMERR("hint_data_t kmalloc failed");
-		return -ENOMEM;
-	}
-
-	// copy hint data from user space
-	if (copy_from_user(hint_data, uhint, sizeof(hint_data_t)))
+	if (copy_from_user(&d, uhint, sizeof(struct hint_payload)))
 		return -EFAULT;
 
-	// send hint to device
-	ret = nvm_send_hint(nvmd, hint_data);
-	kfree(hint_data);
-
-	return ret;
+	return nvm_send_hint(nvmd, &d);
 }
 
 int nvm_ioctl_kernel_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
-	hint_data_t *hint = (hint_data_t *)arg;
-	// send hint to device
-	// TODO: do we need to free khint here? or is it freed by block layer?
-	return nvm_send_hint(nvmd, hint);
+	return nvm_send_hint(nvmd, (struct hint_payload *)arg);
 }
 
 int nvm_ioctl_hint(struct nvmd *nvmd, unsigned int cmd, unsigned long arg)
@@ -826,8 +764,6 @@ int nvm_ioctl_hint(struct nvmd *nvmd, unsigned int cmd, unsigned long arg)
 		return nvm_ioctl_user_hint_cmd(nvmd, arg);
 	case LIGHTNVM_IOCTL_KERNEL_HINT:
 		return nvm_ioctl_kernel_hint_cmd(nvmd, arg);
-	default:
-		return 0;
 	}
 
 	return 0;
@@ -860,8 +796,8 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 		atomic_set(&p->inflight, 0);
 	}
 
-	spin_lock_init(&hint->hintlock);
-	INIT_LIST_HEAD(&hint->hintlist);
+	spin_lock_init(&hint->lock);
+	INIT_LIST_HEAD(&hint->hints);
 
 	hint->ino2fc = kzalloc(HINT_MAX_INOS, GFP_KERNEL);
 	if (!hint->ino2fc)
@@ -930,16 +866,16 @@ err_shadow_map:
 void nvm_free_hint(struct nvmd *nvmd)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
-	hint_info_t *hint_info, *next_hint_info;
+	struct hint_info *info, *next_info;
 	struct nvm_ap *ap;
 	int i;
 
-	spin_lock(&hint->hintlock);
-	list_for_each_entry_safe(hint_info, next_hint_info, &hint->hintlist, list_member) {
-		list_del(&hint_info->list_member);
-		kfree(hint_info);
+	spin_lock(&hint->lock);
+	list_for_each_entry_safe(info, next_info, &hint->hints, list_member) {
+		list_del(&info->list_member);
+		kfree(info);
 	}
-	spin_unlock(&hint->hintlock);
+	spin_unlock(&hint->lock);
 
 	kfree(hint->ino2fc);
 	vfree(hint->shadow_map);

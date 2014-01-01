@@ -144,7 +144,6 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int i
 		nvmd->rev_trans_map[gp->addr] = LTOP_POISON;
 	}
 
-
 	gp->addr = p->addr;
 	gp->block = p->block;
 
@@ -484,8 +483,8 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 			i++;
 			//DMERR("Pool %d trying to write GC data to pool %d which is too low on free pages", is_gc-1, ap->pool->id);
 			if (i == nvmd->nr_pools * 2) {
-				DMERR("Pool %d has to write GC data to pool %d
-						which is too low on free pages",
+				DMERR("Pool %d has to write GC data to pool %d"
+						"which is too low on free pages",
 							is_gc-1, ap->pool->id);
 				spin_lock(&ap->pool->lock);
 				break;
@@ -748,7 +747,7 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
 			return;
 		}
-		
+
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, is_gc, bio);
 	} else {

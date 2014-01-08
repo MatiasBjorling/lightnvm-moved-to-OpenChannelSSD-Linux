@@ -137,7 +137,8 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		init_completion(&pool->gc_finished);
 
 		INIT_WORK(&pool->gc_ws, nvm_gc_collect);
-		INIT_WORK(&pool->waiting_ws, nvm_delayed_bio_submit);
+		INIT_WORK(&pool->waiting_ws, nvm_delayed_bio_defer);
+		INIT_WORK(&pool->execute_ws, nvm_delayed_bio_submit);
 
 		INIT_LIST_HEAD(&pool->free_list);
 		INIT_LIST_HEAD(&pool->used_list);
@@ -194,7 +195,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		ap->t_erase = nvmd->config.t_erase;
 	}
 
-	nvmd->kbiod_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM, 0);
+	nvmd->kbiod_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
 	if (!nvmd->kbiod_wq) {
 		DMERR("Couldn't start knvm-worker");
 		goto err_blocks;

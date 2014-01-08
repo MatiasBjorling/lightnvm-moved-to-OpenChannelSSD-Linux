@@ -93,13 +93,56 @@ void __nvm_submit_bio(struct bio *bio, unsigned int sync);
 
 void nvm_delayed_bio_submit(struct work_struct *work)
 {
-	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
+	struct nvm_pool *pool = container_of(work, struct nvm_pool, execute_ws);
 	struct bio *bio;
+	struct per_bio_data *pb;
 	unsigned int sync;
 
 	spin_lock(&pool->waiting_lock);
 	bio = bio_list_pop(&pool->waiting_bios);
+
+	if (!bio) {
+		atomic_dec(&pool->is_active);
+		spin_unlock(&pool->waiting_lock);
+		return;
+	}
+
 	spin_unlock(&pool->waiting_lock);
+
+	/* setup timings - remember overhead. */
+	pb = bio->bi_private;
+	getnstimeofday(&pb->start_tv);
+
+	sync = bio->bi_rw & REQ_SYNC;
+	__nvm_submit_bio(bio, sync);
+}
+
+void nvm_delayed_bio_defer(struct work_struct *work)
+{
+	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
+	struct bio *bio;
+	struct per_bio_data *pb;
+	unsigned int sync;
+
+	spin_lock(&pool->waiting_lock);
+	if (atomic_inc_return(&pool->is_active) != 1) {
+		atomic_dec(&pool->is_active);
+		spin_unlock(&pool->waiting_lock);
+		return;
+	}
+
+	bio = bio_list_pop(&pool->waiting_bios);
+	spin_unlock(&pool->waiting_lock);
+
+	if (!bio) {
+		atomic_dec(&pool->is_active);
+		printk("father\n");
+		return;
+	}
+
+	/* setup timings - remember overhead. */
+	pb = bio->bi_private;
+	getnstimeofday(&pb->start_tv);
 
 	sync = bio->bi_rw & REQ_SYNC;
 	__nvm_submit_bio(bio, sync);
@@ -422,7 +465,7 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 	spin_lock(&nvmd->trans_lock);
 	gp = &map[l_addr];
 
-	if (atomic_read(&gp->inflight) == 1)
+	if (atomic_read(&gp->inflight))
 		goto err;
 
 	p->addr = gp->addr;
@@ -573,13 +616,7 @@ static void nvm_endio(struct bio *bio, int err)
 	}
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
-		spin_lock(&pool->waiting_lock);
-		deferred_bio = bio_list_peek(&pool->waiting_bios);
-		spin_unlock(&pool->waiting_lock);
-		if (deferred_bio)
-			queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
-		else
-			atomic_dec(&pool->is_active);
+		queue_work(nvmd->kbiod_wq, &pool->execute_ws);
 	}
 
 	/* Finish up */
@@ -795,9 +832,6 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	if (sync)
 		bio->bi_rw |= REQ_SYNC;
 
-	/* setup timings - remember overhead. */
-	getnstimeofday(&pb->start_tv);
-
 	if (rw == WRITE)
 		bio->bi_end_io = nvm_end_write_bio;
 	else {
@@ -808,16 +842,29 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	ap->io_accesses[bio_data_dir(bio)]++;
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+		spin_lock(&pool->waiting_lock);
+		bio_list_add(&pool->waiting_bios, bio);
+
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);
-			spin_lock(&pool->waiting_lock);
-			ap->io_delayed++;
-			bio_list_add(&pool->waiting_bios, bio);
 			spin_unlock(&pool->waiting_lock);
+			return;
 		}
-		else
-			__nvm_submit_bio(bio, sync);
+
+		bio = bio_list_pop(&pool->waiting_bios);
+		spin_unlock(&pool->waiting_lock);
+
+		if (!bio) {
+			atomic_dec(&pool->is_active);
+			return;
+		}
+
+		/* setup timings - remember overhead. */
+		pb = bio->bi_private;
+		getnstimeofday(&pb->start_tv);
+
+		sync = bio->bi_rw & REQ_SYNC;
+		__nvm_submit_bio(bio, sync);
 	} else
 		__nvm_submit_bio(bio, sync);
-
 }

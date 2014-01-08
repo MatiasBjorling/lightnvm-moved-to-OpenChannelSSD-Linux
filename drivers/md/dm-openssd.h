@@ -162,6 +162,7 @@ struct nvm_pool {
 
 	spinlock_t waiting_lock;
 	struct work_struct waiting_ws;
+	struct work_struct execute_ws;
 	struct bio_list waiting_bios;
 
 	unsigned int gc_running;
@@ -324,6 +325,7 @@ struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *);
 
 /*   Naive implementations */
 void nvm_delayed_bio_submit(struct work_struct *work);
+void nvm_delayed_bio_defer(struct work_struct *work);
 void nvm_deferred_bio_submit(struct work_struct *work);
 void nvm_gc_block(struct work_struct *work);
 

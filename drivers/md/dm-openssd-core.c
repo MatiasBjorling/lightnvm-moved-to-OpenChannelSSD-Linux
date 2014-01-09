@@ -624,13 +624,15 @@ static void nvm_endio(struct bio *bio, int err)
 		bio_endio(pb->orig_bio, err);
 	}
 
-	if (pb->event)
+	if (pb->event){
 		complete(pb->event);
+		/* all submitted bios allocate their own addr, except GC reads*/
+		if(bio_data_dir(bio) == READ)
+			goto free_pb;
+	}
 
-	/* all submitted bios allocate their own addr, except GC reads*/
-	if (!(pb->sync && bio_data_dir(bio) == READ))
-		mempool_free(pb->addr, nvmd->addr_pool);
-
+	mempool_free(pb->addr, nvmd->addr_pool);
+free_pb:
 	free_per_bio_data(nvmd, pb);
 }
 

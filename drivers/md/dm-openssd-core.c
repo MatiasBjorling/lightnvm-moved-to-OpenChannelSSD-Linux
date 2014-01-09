@@ -89,14 +89,11 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	}
 }
 
-void __nvm_submit_bio(struct bio *bio, unsigned int sync);
-
 void nvm_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, execute_ws);
 	struct bio *bio;
 	struct per_bio_data *pb;
-	unsigned int sync;
 
 	spin_lock(&pool->waiting_lock);
 	bio = bio_list_pop(&pool->waiting_bios);
@@ -113,8 +110,7 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 	pb = bio->bi_private;
 	getnstimeofday(&pb->start_tv);
 
-	sync = bio->bi_rw & REQ_SYNC;
-	__nvm_submit_bio(bio, sync);
+	submit_bio(bio->bi_rw, bio);
 }
 
 void nvm_delayed_bio_defer(struct work_struct *work)
@@ -144,8 +140,7 @@ void nvm_delayed_bio_defer(struct work_struct *work)
 	pb = bio->bi_private;
 	getnstimeofday(&pb->start_tv);
 
-	sync = bio->bi_rw & REQ_SYNC;
-	__nvm_submit_bio(bio, sync);
+	submit_bio(bio->bi_rw, bio);
 }
 
 /* requires lock on the translation map used */
@@ -629,8 +624,8 @@ static void nvm_endio(struct bio *bio, int err)
 		bio_endio(pb->orig_bio, err);
 	}
 
-	if (pb->sync)
-		complete(&pb->event);
+	if (pb->event)
+		complete(pb->event);
 
 	/* all submitted bios allocate their own addr, except GC reads*/
 	if (!(pb->sync && bio_data_dir(bio) == READ))
@@ -725,7 +720,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	}
 
 	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
-	nvm_submit_bio(nvmd, p, l_addr, READ, bio, 0, NULL);
+	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL);
 finished:
 	return DM_MAPIO_SUBMITTED;
 }
@@ -769,7 +764,7 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 }
 
 void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
-		void *private)
+		void *private, struct completion *sync)
 {
 	struct nvm_addr *p;
 	struct bio *issue_bio;
@@ -786,7 +781,7 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		}
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
-		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, is_gc, bio);
+		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio, sync);
 	} else {
 		BUG_ON(is_gc);
 		nvm_defer_bio(nvmd, bio);
@@ -796,24 +791,13 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 
 int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
 {
-	nvm_write_execute_bio(nvmd, bio, 0, NULL);
+	nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL);
 	return DM_MAPIO_SUBMITTED;
 }
 
-void __nvm_submit_bio(struct bio *bio, unsigned int sync)
-{
-	if (sync) {
-		struct per_bio_data *pb = get_per_bio_data(bio);
-		init_completion(&pb->event);
-		submit_bio(bio->bi_rw, bio);
-		wait_for_completion_io(&pb->event);
-	} else {
-		submit_bio(bio->bi_rw, bio);
-	}
-}
-
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
-			int rw, struct bio *bio, int sync, struct bio *orig_bio)
+			int rw, struct bio *bio,
+			struct bio *orig_bio, struct completion *sync)
 {
 	struct nvm_block *block = p->block;
 	struct nvm_ap *ap = block_to_ap(nvmd, block);
@@ -824,7 +808,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	pb->ap = ap;
 	pb->addr = p;
 	pb->l_addr = l_addr;
-	pb->sync = sync;
+	pb->event = sync;
 	pb->orig_bio = orig_bio;
 
 	/* is set prematurely because we need it for deferred bios */
@@ -862,9 +846,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 		/* setup timings - remember overhead. */
 		pb = bio->bi_private;
 		getnstimeofday(&pb->start_tv);
+	}
 
-		sync = bio->bi_rw & REQ_SYNC;
-		__nvm_submit_bio(bio, sync);
-	} else
-		__nvm_submit_bio(bio, sync);
+	submit_bio(bio->bi_rw, bio);
 }

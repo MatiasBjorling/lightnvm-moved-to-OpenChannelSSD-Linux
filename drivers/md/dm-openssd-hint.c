@@ -374,7 +374,7 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	/* Submit bio for all physical addresses*/
 	DMDEBUG("logical_addr %llu numCopies=%u", (unsigned long long)l_addr, numCopies);
 	for(i = 0; i < numCopies; i++) {
-		nvm_write_execute_bio(nvmd, bio, 0, &map_alloc_data);
+		nvm_write_execute_bio(nvmd, bio, 0, &map_alloc_data, NULL);
 
 		/* primary updated. trim old shadow */
 		if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY && i == 0)

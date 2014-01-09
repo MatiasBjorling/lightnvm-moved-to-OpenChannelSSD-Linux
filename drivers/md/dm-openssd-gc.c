@@ -66,6 +66,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	sector_t l_addr;
 	int slot = -1;
 	void *gc_private = NULL;
+	DECLARE_COMPLETION(sync);
 
 	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
 		return;
@@ -91,7 +92,11 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 			DMERR("Could not add page");
 
 		//DMERR("move_valid_pages: submit GC READ src block %d addr %ld", src.block->id, src.addr);
-		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, 1, NULL);
+		printk("t1\n");
+		init_completion(&sync);
+		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync);
+		wait_for_completion(&sync);
+		printk("t2\n");
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
@@ -113,7 +118,9 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 			gc_private = nvmd->begin_gc_private(l_addr, src.addr, block);
 
 		//DMERR("move_valid_pages: submit GC WRITE");
-		nvm_write_execute_bio(nvmd, src_bio, 1+block->pool->id, NULL);
+		init_completion(&sync);
+		nvm_write_execute_bio(nvmd, src_bio, 1, NULL, &sync);
+		wait_for_completion(&sync);
 
 		if (nvmd->end_gc_private)
 			nvmd->end_gc_private(gc_private);

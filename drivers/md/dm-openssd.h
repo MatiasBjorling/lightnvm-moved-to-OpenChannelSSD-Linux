@@ -308,7 +308,7 @@ struct per_bio_data {
 	// Hook up for our overwritten bio fields
 	bio_end_io_t *bi_end_io;
 	void *bi_private;
-	struct completion event;
+	struct completion *event;
 	struct bio *orig_bio;
 	unsigned int sync;
 	unsigned int ref_put;
@@ -339,10 +339,10 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 sector_t nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
-void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, int sync, struct bio *orig_bio);
+void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync);
 struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
-void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private);
+void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync);
 int nvm_write_bio(struct nvmd *, struct bio *bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
 int nvm_update_map(struct nvmd *, sector_t l_addr, struct nvm_addr *p, int is_gc);

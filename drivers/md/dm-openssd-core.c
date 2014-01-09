@@ -246,10 +246,10 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 
 	pool->nr_free_blocks--;
 
-	spin_unlock(&pool->lock);
+	//spin_unlock(&pool->lock);
 
 	nvm_reset_block(block);
-
+	spin_unlock(&pool->lock);
 	block->data = mempool_alloc(nvmd->block_page_pool, GFP_ATOMIC);
 	BUG_ON(!block->data);
 
@@ -779,7 +779,9 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		if (p == LTOP_POISON) {
 			BUG_ON(!is_gc);
 			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
-			return;
+			if(sync)
+				complete(sync);
+	 		return;
 		}
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);

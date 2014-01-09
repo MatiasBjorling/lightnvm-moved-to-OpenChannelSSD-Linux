@@ -71,7 +71,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
 		return;
 
-	//DMERR("o1\n");
+	//DMERR("move_pages: block %d", block->id);
 	while ((slot = find_first_zero_bit(block->invalid_pages,
 					   nvmd->nr_host_pages_in_blk)) <
 						nvmd->nr_host_pages_in_blk) {
@@ -92,11 +92,11 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 			DMERR("Could not add page");
 
 		//DMERR("move_valid_pages: submit GC READ src block %d addr %ld", src.block->id, src.addr);
-		printk("t1\n");
+		//DMERR("t1\n");
 		init_completion(&sync);
 		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync);
 		wait_for_completion(&sync);
-		printk("t2\n");
+		//DMERR("t2\n");
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
@@ -129,6 +129,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		mempool_free(page, nvmd->page_pool);
 		//DMERR("move_valid_pages: p slot %u block %u\n", slot, block->id);
 	}
+	//DMERR("move_pages: block %d done", block->id);
 	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
 	//DMERR("o2\n");
 }
@@ -183,7 +184,6 @@ void nvm_gc_collect(struct work_struct *work)
 	spin_unlock(&nvmd->trans_lock);
 	spin_unlock(&pool->gc_lock);
 	nvmd->next_collect_pool++;
-	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);
 }
 
 void nvm_gc_block(struct work_struct *work)
@@ -201,6 +201,8 @@ void nvm_gc_block(struct work_struct *work)
 	__erase_block(block);
 	//DMERR("nvm_gc_block: put block %d", block->id);
 	nvm_pool_put_block(block);
+	
+	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);
 }
 
 void nvm_gc_kick(struct nvmd *nvmd)

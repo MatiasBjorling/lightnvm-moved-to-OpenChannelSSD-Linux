@@ -59,12 +59,12 @@ struct hint_info *nvm_find_hint(struct nvmd *nvmd, sector_t l_addr, bool is_writ
 	struct hint_info *info;
 	struct list_head *node;
 
-	//DMINFO("find hint for lba %ld is_write %d", l_addr, is_write);
+	//DMERR("find hint for lba %ld is_write %d", l_addr, is_write);
 	spin_lock(&hint->lock);
 	/*see if hint is already in list*/
 	list_for_each(node, &hint->hints) {
 		info = list_entry(node, struct hint_info, list_member);
-		//DMINFO("hint start_lba=%d count=%d", info->hint.start_lba, info->hint.count);
+		//DMERR("hint start_lba=%d count=%d", info->hint.start_lba, info->hint.count);
 		//continue;
 		/* verify lba covered by hint*/
 		if (is_hint_relevant(l_addr, info, is_write, nvmd->config.flags)) {
@@ -76,7 +76,7 @@ struct hint_info *nvm_find_hint(struct nvmd *nvmd, sector_t l_addr, bool is_writ
 		}
 	}
 	spin_unlock(&hint->lock);
-	DMDEBUG("no hint found for %s lba %ld", (is_write) ? "WRITE" : "READ", l_addr);
+	//DMERR("no hint found for %s lba %ld", (is_write) ? "WRITE" : "READ", l_addr);
 
 	return NULL;
 }
@@ -148,9 +148,9 @@ static int nvm_send_hint(struct nvmd *nvmd, struct hint_payload *d)
 		goto send_done;
 	}
 
-	DMDEBUG("first %s hint count=%d lba=%d fc=%d",
+	//DMERR("first %s hint count=%d lba=%d fc=%d",
 		d->is_write ? "WRITE" : "READ",
-		d->count,
+		d->sectors_count,
 		d->ino.start_lba,
 		d->ino.fc);
 
@@ -173,7 +173,7 @@ static int nvm_send_hint(struct nvmd *nvmd, struct hint_payload *d)
 	// 2) identified pack writes
 	if ((nvm_engine(nvmd, NVM_OPT_ENGINE_LATENCY) ||
 	     nvm_engine(nvmd, NVM_OPT_ENGINE_PACK)) && d->ino.fc != FC_EMPTY) {
-		DMINFO("ino %lu got new fc %d", d->ino.ino, d->ino.fc);
+		DMERR("ino %lu got new fc %d", d->ino.ino, d->ino.fc);
 		hint->ino2fc[d->ino.ino] = d->ino.fc;
 	}
 
@@ -363,23 +363,29 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	map_alloc_data.old_p_addr = LTOP_EMPTY;
 	map_alloc_data.flags = MAP_PRIMARY;
 
+	/* extract hint from bio */
+	/**** disabled for testing ****/
 	//nvm_bio_hint(nvmd, bio);
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+	//DMERR("nvm_write_bio_hint: find hint l_addr %ld", l_addr);
 	map_alloc_data.info = nvm_find_hint(nvmd, l_addr, 1);
 
+	/* Got latency hint for l_addr */
 	if (map_alloc_data.info && map_alloc_data.info->flags & HINT_LATENCY)
 		numCopies = 2;
 
 	/* Submit bio for all physical addresses*/
-	DMDEBUG("logical_addr %llu numCopies=%u", (unsigned long long)l_addr, numCopies);
+	//DMERR("nvm_write_bio_hint: logical_addr %llu numCopies=%u", (unsigned long long)l_addr, numCopies);
 	for(i = 0; i < numCopies; i++) {
+		//DMERR("nvm_write_bio_hint: l_addr %ld write_execute copy %d", l_addr, i);
 		nvm_write_execute_bio(nvmd, bio, 0, &map_alloc_data, NULL);
 
-		/* primary updated. trim old shadow */
+		/* primary updated -> trim old shadow */
 		if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY && i == 0)
 			nvm_trim_map_shadow(nvmd, l_addr);
 
+		/* allocate another physical address, now for shadow*/
 		map_alloc_data.flags = MAP_SHADOW;
 	}
 
@@ -393,7 +399,6 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 		spin_unlock(&hint->lock);
 	}
 
-	bio_endio(bio, 0);
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -590,21 +595,23 @@ static struct nvm_addr *nvm_map_latency_hint_ltop_rr(struct nvmd *nvmd, sector_t
 	/* reclaimed write. need to know if we're reclaiming primary/shaddow*/
 	if (is_gc) {
 		map_alloc_data->flags = nvm_get_mapping_flag(nvmd, l_addr, map_alloc_data->old_p_addr);
-		DMDEBUG("gc write. flags %x", map_alloc_data->flags);
+		//DMERR("map_latency_ltop_rr: gc write. flags %x", map_alloc_data->flags);
 	}
-	DMDEBUG("latency_ltop: allocate primary and shaddow pages");
+	//DMERR("map_latency_ltop_rr: allocate primary and/or shaddow pages");
 
 	/* primary -> allcoate and update generic mapping */
-	if (map_alloc_data->flags & MAP_PRIMARY)
+	if (map_alloc_data->flags & MAP_PRIMARY){
+		//DMERR("map_latency_ltop_rr: allocate primary only");
 		return nvm_map_ltop_rr(nvmd, l_addr, is_gc, NULL);
+	}
 
 	/* shadow -> allocate and update shaddow mapping*/
 	/* FIXME: take ap->lock around alloc and update */
 	p = nvm_map_ltop_rr(nvmd, l_addr, is_gc, map_alloc_data);
-	if (p)
+	if (p){
+		//DMERR("map_latency_ltop_rr: got address of shadow page %ld", p->addr);
 		nvm_update_map_shadow(nvmd, l_addr, p, map_alloc_data->flags);
-
-	DMDEBUG("got address of shadow page");
+	}
 
 	return p;
 }
@@ -741,15 +748,13 @@ static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr)
 
 int nvm_ioctl_user_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
-	struct hint_payload __user *uhint = (struct hint_payload *)arg;
-	struct hint_payload d;
+	hint_data_t __user *uhint = (hint_data_t*)arg;
+	hint_data_t khint;
 
-	DMDEBUG("recv user hint");
-
-	if (copy_from_user(&d, uhint, sizeof(struct hint_payload)))
+	if (copy_from_user(&khint, uhint, sizeof(hint_data_t)))
 		return -EFAULT;
 
-	return nvm_send_hint(nvmd, &d);
+	return nvm_send_hint(nvmd, CAST_TO_PAYLOAD(&khint));
 }
 
 int nvm_ioctl_kernel_hint_cmd(struct nvmd *nvmd, unsigned long arg)
@@ -764,6 +769,9 @@ int nvm_ioctl_hint(struct nvmd *nvmd, unsigned int cmd, unsigned long arg)
 		return nvm_ioctl_user_hint_cmd(nvmd, arg);
 	case LIGHTNVM_IOCTL_KERNEL_HINT:
 		return nvm_ioctl_kernel_hint_cmd(nvmd, arg);
+	default:
+		DMERR("nvm_ioctl_hint: unknown ioctl cmd %d", cmd);
+		break;
 	}
 
 	return 0;

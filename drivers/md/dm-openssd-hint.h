@@ -17,6 +17,15 @@
 #define HINT_DATA_MAX_INOS  (8)
 #define HINT_DATA_SIZE (HINT_DATA_MAX_INOS * 128) /* > 16 * 128 files at most */
 
+#define GET_HINT_FROM_PAYLOAD(PAYLOAD, IDX) (((struct ino_hint*)(PAYLOAD)->data))[IDX])
+#define CAST_TO_PAYLOAD(HINT_DATA) ((struct hint_payload*)((HINT_DATA)->hint_payload))
+#define INO_HINT_FROM_DATA(HINT_DATA, IDX) ((CAST_TO_PAYLOAD(HINT_DATA))->ino)
+#define INO_HINT_SET(HINT_DATA, IDX, INO, START, COUNT, FC) \
+			     INO_HINT_FROM_DATA(HINT_DATA, IDX).ino = INO; \
+                             INO_HINT_FROM_DATA(HINT_DATA, IDX).start_lba = START; \
+                             INO_HINT_FROM_DATA(HINT_DATA, IDX).count = COUNT; \
+                             INO_HINT_FROM_DATA(HINT_DATA, IDX).fc = FC;
+
 enum fclass {
 	FC_EMPTY,
 	FC_UNKNOWN,
@@ -39,6 +48,13 @@ struct hint_payload {
 	uint32_t sectors_count;
 	struct ino_hint ino;
 };
+
+#define HINT_PAYLOAD_SIZE sizeof(struct hint_payload)
+
+typedef struct hint_data_s {
+	uint32_t hint_payload_size;
+	char hint_payload[HINT_PAYLOAD_SIZE];
+} hint_data_t;
 
 #ifdef __KERNEL__
 struct nvm_hint {

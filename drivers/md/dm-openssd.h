@@ -66,6 +66,10 @@ enum ltop_flags {
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 
+#define WRITE_SUCCESS  0
+#define WRITE_DEFERRED 1
+#define WRITE_GC_ABORT 2
+
 #define NVM_OPT_MISC_OFFSET 15
 
 enum target_flags {
@@ -208,6 +212,7 @@ struct nvm_config {
 };
 
 struct nvmd;
+struct per_bio_data;
 
 typedef struct nvm_addr *(map_ltop_fn)(struct nvmd *, sector_t, int, void *);
 typedef struct nvm_addr *(lookup_ltop_fn)(struct nvmd *, sector_t);
@@ -215,9 +220,11 @@ typedef sector_t (lookup_ptol_fn)(struct nvmd *, sector_t);
 typedef int (write_bio_fn)(struct nvmd *, struct bio *);
 typedef int (read_bio_fn)(struct nvmd *, struct bio *);
 typedef void (alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
-typedef void *(begin_gc_private_fn)(sector_t, sector_t, struct nvm_block *);
-typedef void (end_gc_private_fn)(void *);
-
+typedef void *(begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
+typedef void (end_gc_private_fn)(struct nvmd *, void *);
+typedef struct nvm_addr *(get_trans_map_fn)(struct nvmd *, void *);
+typedef void (defer_write_bio_fn)(struct nvmd *, struct bio *, void *);
+typedef void (endio_private_fn)(struct nvmd *, struct per_bio_data *pb);
 /* Main structure */
 struct nvmd {
 	struct dm_dev *dev;
@@ -274,7 +281,9 @@ struct nvmd {
 	alloc_phys_addr_fn *alloc_phys_addr;
 	begin_gc_private_fn *begin_gc_private;
 	end_gc_private_fn *end_gc_private;
-
+	get_trans_map_fn *get_trans_map;
+	defer_write_bio_fn *defer_write_bio;
+	endio_private_fn *endio_private;
 	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
@@ -312,6 +321,7 @@ struct per_bio_data {
 	struct bio *orig_bio;
 	unsigned int sync;
 	unsigned int ref_put;
+	void *private;
 };
 
 /* dm-lightnvm-c */
@@ -322,6 +332,7 @@ void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
 sector_t nvm_alloc_phys_addr(struct nvm_block *);
 struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *);
+void _nvm_defer_bio(struct nvmd *nvmd, struct bio *bio);
 
 /*   Naive implementations */
 void nvm_delayed_bio_submit(struct work_struct *work);
@@ -339,13 +350,15 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 sector_t nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
-void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync);
+void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync, void *private);
 struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
-void nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync);
+int nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync);
 int nvm_write_bio(struct nvmd *, struct bio *bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
-int nvm_update_map(struct nvmd *, sector_t l_addr, struct nvm_addr *p, int is_gc);
+int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc, void *private);
+struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private);
+void nvm_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 
 /*   NVM device related */
 void nvm_block_release(struct kref *);
@@ -422,6 +435,10 @@ static inline int page_is_fast(struct nvmd *nvmd, unsigned int pagenr)
 		return 1;
 	
 	return 0;
+}
+
+static inline struct nvm_pool *paddr_to_pool(struct nvmd *nvmd, sector_t p_addr){
+	return &nvmd->pools[p_addr / (nvmd->nr_pages / nvmd->nr_pools)];
 }
 
 static inline struct nvm_ap *block_to_ap(struct nvmd *nvmd, struct nvm_block *block) {

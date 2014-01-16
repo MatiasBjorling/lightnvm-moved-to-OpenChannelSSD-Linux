@@ -63,6 +63,8 @@ struct nvm_hint {
 	spinlock_t lock;
 	struct list_head hints;
 	struct nvm_addr *shadow_map;
+
+	mempool_t *map_alloc_pool;
 };
 
 struct hint_info {
@@ -78,6 +80,7 @@ struct nvm_hint_map_private {
 	struct nvm_ap *prev_ap;
 	unsigned long flags;
 	struct hint_info *info;
+	struct page *page;
 };
 
 struct nvm_ap_hint {
@@ -109,8 +112,12 @@ enum deploy_hint_flags {
 	((HINT_INFO)->is_write == (IS_WRITE) && \
 	 (LBA) >= (HINT_INFO)->hint.start_lba && \
 	 (LBA) <  ((HINT_INFO)->hint.start_lba+(HINT_INFO)->hint.count) && \
-	 ((HINT_INFO)->flags & FLAGS))
+	 ((HINT_INFO)->flags & FLAGS) && \
+	 (HINT_INFO)->processed < (HINT_INFO)->hint.count) // not optimal, but at least prevent double frees
 
 #define nvm_engine(nvmd, engine) (nvmd->config.flags & engine)
+
+struct nvm_addr *nvm_hint_get_map(struct nvmd *nvmd, void *private);
+void nvm_hint_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 
 #endif /* DM_LIGHTNVM_HINT_H_ */

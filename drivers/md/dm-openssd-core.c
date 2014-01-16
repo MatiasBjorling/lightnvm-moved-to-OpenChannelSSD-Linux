@@ -59,14 +59,26 @@ static void dedecorate_bio(struct per_bio_data *pb, struct bio *bio)
 
 static void free_per_bio_data(struct nvmd *nvmd, struct per_bio_data *pb)
 {
+	if(pb->private)
+		nvmd->endio_private(nvmd, pb);
 	mempool_free(pb, nvmd->per_bio_pool);
 }
 
-void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio)
+void _nvm_defer_bio(struct nvmd *nvmd, struct bio *bio)
 {
 	spin_lock(&nvmd->deferred_lock);
 	bio_list_add(&nvmd->deferred_bios, bio);
 	spin_unlock(&nvmd->deferred_lock);
+}
+
+void nvm_defer_read_bio(struct nvmd *nvmd, struct bio *bio)
+{
+	_nvm_defer_bio(nvmd, bio);
+}
+
+void nvm_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private)
+{
+	_nvm_defer_bio(nvmd, bio);
 }
 
 void nvm_deferred_bio_submit(struct work_struct *work)
@@ -112,7 +124,7 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 
 	submit_bio(bio->bi_rw, bio);
 }
-
+#if 0
 void nvm_delayed_bio_defer(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
@@ -142,7 +154,7 @@ void nvm_delayed_bio_defer(struct work_struct *work)
 
 	submit_bio(bio->bi_rw, bio);
 }
-
+#endif
 /* requires lock on the translation map used */
 void invalidate_block_page(struct nvmd *nvmd, struct nvm_addr *p)
 {
@@ -156,24 +168,34 @@ void invalidate_block_page(struct nvmd *nvmd, struct nvm_addr *p)
 	spin_unlock(&block->lock);
 }
 
-int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc)
+struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private)
 {
-	struct nvm_addr *gp;
+	return nvmd->trans_map;
+}
 
+int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc, void *private)
+{
+	struct nvm_addr *gp, *trans_map;
+	int i = 0, ret;
 	BUG_ON(l_addr >= nvmd->nr_pages);
 	BUG_ON(p->addr >= nvmd->nr_pages);
 
+	trans_map = nvmd->get_trans_map(nvmd, private);
+
 	spin_lock(&nvmd->trans_lock);
-	gp = &nvmd->trans_map[l_addr];
+	gp = &trans_map[l_addr];
 
 	while (atomic_inc_return(&gp->inflight) != 1) {
-		atomic_dec(&gp->inflight);
+		ret = atomic_dec_return(&gp->inflight);
 		spin_unlock(&nvmd->trans_lock);
-
+		if(i>3){
+			DMERR_LIMIT("update_map: stuck inflight %d. WRITE l_addr %ld. wanna update to paddr %ld, current is %ld", ret, l_addr, p->addr, gp->addr);
+		}
 		if (is_gc)
 			return -1;
 
 		schedule();
+		i++;
 		spin_lock(&nvmd->trans_lock);
 	}
 
@@ -509,6 +531,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	struct nvm_addr *p;
 	int ret, i = 0;
 
+	//DMERR("nvm_map_ltop_rr: l_addr %ld", l_addr);
 	ap = get_next_ap(nvmd);
 
 	if (is_gc) {
@@ -537,7 +560,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	p = nvm_alloc_addr_from_ap(ap, is_gc);
 	spin_unlock(&ap->lock);
 	if (p != NULL){
-		ret = nvm_update_map(nvmd, l_addr, p, is_gc);
+		ret = nvm_update_map(nvmd, l_addr, p, is_gc, private);
 
 		if (ret) {
 			DMERR("Cant update map");
@@ -554,7 +577,6 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 static void nvm_endio(struct bio *bio, int err)
 {
 	struct per_bio_data *pb;
-	struct bio *deferred_bio;
 	struct nvmd *nvmd;
 	struct nvm_ap *ap;
 	struct nvm_pool *pool;
@@ -571,9 +593,11 @@ static void nvm_endio(struct bio *bio, int err)
 	nvmd = ap->parent;
 	pool = ap->pool;
 
+	//DMERR("nvm_endio: endio of paddr %ld", p->addr);
 	if (bio_data_dir(bio) == WRITE) {
 		/* mark addr landed (persisted) */
-		struct nvm_addr *gp = &nvmd->trans_map[pb->l_addr];
+		struct nvm_addr *gp = &(nvmd->get_trans_map(nvmd, pb->private)[pb->l_addr]);
+		//DMERR("nvm_endio: got trans map (endio of paddr %ld)", p->addr);
 		atomic_dec(&gp->inflight);
 
 		/* maintain data in buffer until block is full */
@@ -597,6 +621,7 @@ static void nvm_endio(struct bio *bio, int err)
 		spin_unlock(&nvmd->trans_lock);
 	}
 
+	/* dev_wait of fast/slow pages (for swap) */
 	nvm_delay_endio_hint(nvmd, bio, pb, &dev_wait);
 
 	if (!(nvmd->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
@@ -605,8 +630,10 @@ static void nvm_endio(struct bio *bio, int err)
 		diff = timespec_to_ns(&diff_tv) / 1000;
 		if (dev_wait > diff) {
 			total_wait = dev_wait - diff;
-			if (total_wait > 50)
+			if (total_wait > 50){
+				BUG_ON(total_wait>1500);
 				udelay(total_wait);
+			}
 		}
 	}
 
@@ -620,6 +647,7 @@ static void nvm_endio(struct bio *bio, int err)
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
+	//DMERR("nvm_endio: pb->orig_bio %p", pb->orig_bio);
 	if (pb->orig_bio){
 		bio_endio(pb->orig_bio, err);
 	}
@@ -697,7 +725,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	p = nvmd->lookup_ltop(nvmd, l_addr);
 
 	if (!p) {
-		nvm_defer_bio(nvmd, bio);
+		nvm_defer_read_bio(nvmd, bio);
 		nvm_gc_kick(nvmd);
 		goto finished;
 	}
@@ -722,7 +750,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	}
 
 	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
-	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL);
+	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL, NULL);
 finished:
 	return DM_MAPIO_SUBMITTED;
 }
@@ -765,7 +793,7 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 	return issue_bio;
 }
 
-void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
+int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		void *private, struct completion *sync)
 {
 	struct nvm_addr *p;
@@ -773,6 +801,7 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	sector_t l_addr;
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+	//DMERR("nvm_write_execute_bio: l_addr %ld. call map_ltop", l_addr);
 	p = nvmd->map_ltop(nvmd, l_addr, is_gc, private);
 
 	if (p) {
@@ -781,16 +810,20 @@ void nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
 			if(sync)
 				complete(sync);
-	 		return;
+	 		return WRITE_GC_ABORT;
 		}
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
-		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio, sync);
+		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio, sync, private);
 	} else {
 		BUG_ON(is_gc);
-		nvm_defer_bio(nvmd, bio);
+		nvmd->defer_write_bio(nvmd, bio, private);
 		nvm_gc_kick(nvmd);
+		
+		return WRITE_DEFERRED;
 	}
+
+	return 0;
 }
 
 int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
@@ -801,7 +834,7 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
 
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 			int rw, struct bio *bio,
-			struct bio *orig_bio, struct completion *sync)
+			struct bio *orig_bio, struct completion *sync, void *private)
 {
 	struct nvm_block *block = p->block;
 	struct nvm_ap *ap = block_to_ap(nvmd, block);
@@ -814,6 +847,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	pb->l_addr = l_addr;
 	pb->event = sync;
 	pb->orig_bio = orig_bio;
+	pb->private = private;
 
 	/* is set prematurely because we need it for deferred bios */
 	bio->bi_rw |= rw;
@@ -830,12 +864,14 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	ap->io_accesses[bio_data_dir(bio)]++;
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+		//DMERR("nvm_submit_bio: submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
 		spin_lock(&pool->waiting_lock);
 		bio_list_add(&pool->waiting_bios, bio);
 
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);
 			spin_unlock(&pool->waiting_lock);
+			//DMERR("nvm_submit_bio: queue waiting_bios l_addr %ld paddr %ld", l_addr, p->addr);
 			return;
 		}
 
@@ -843,6 +879,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 		spin_unlock(&pool->waiting_lock);
 
 		if (!bio) {
+			//DMERR("nvm_submit_bio: serialized bio but its already gone!");
 			atomic_dec(&pool->is_active);
 			return;
 		}
@@ -852,5 +889,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 		getnstimeofday(&pb->start_tv);
 	}
 
+	//DMERR("nvm_submit_bio: truly submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
+	//DMERR("nvm_submit_bio: bio->bi_end_io %p nvm_end_write_bio %p", bio->bi_end_io, nvm_end_write_bio);
 	submit_bio(bio->bi_rw, bio);
 }

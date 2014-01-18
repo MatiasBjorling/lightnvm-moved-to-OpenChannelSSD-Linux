@@ -188,9 +188,9 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int i
 	while (atomic_inc_return(&gp->inflight) != 1) {
 		ret = atomic_dec_return(&gp->inflight);
 		spin_unlock(&nvmd->trans_lock);
-		if(i>3){
+		if (i > 3)
 			DMERR_LIMIT("update_map: stuck inflight %d. WRITE l_addr %ld. wanna update to paddr %ld, current is %ld", ret, l_addr, p->addr, gp->addr);
-		}
+
 		if (is_gc)
 			return -1;
 

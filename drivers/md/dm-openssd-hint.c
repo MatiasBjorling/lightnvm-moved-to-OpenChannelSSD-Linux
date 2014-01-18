@@ -92,7 +92,7 @@ void nvm_end_gc_hint(struct nvmd *nvmd, void *private)
 struct hint_info *nvm_find_hint(struct nvmd *nvmd, sector_t l_addr, bool is_write)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
-	struct hint_info *info;
+	struct hint_info *info = NULL;
 	struct list_head *node;
 
 	//DMERR("find hint for lba %ld is_write %d", l_addr, is_write);
@@ -100,18 +100,14 @@ struct hint_info *nvm_find_hint(struct nvmd *nvmd, sector_t l_addr, bool is_writ
 	/*see if hint is already in list*/
 	list_for_each(node, &hint->hints) {
 		info = list_entry(node, struct hint_info, list_member);
-		//DMERR("hint start_lba=%d count=%d", info->hint.start_lba, info->hint.count);
-		//continue;
-		/* verify lba covered by hint*/
 		if (is_hint_relevant(l_addr, info, is_write, nvmd->config.flags)) {
 			DMDEBUG("found hint for lba %ld (ino %ld)",
-				l_addr, info->hint.ino);
+						l_addr, info->hint.ino);
 			info->processed++;
 			goto end_hint;
 		}
 	}
 	//DMERR("no hint found for %s lba %ld", (is_write) ? "WRITE" : "READ", l_addr);
-	info = NULL;
 end_hint:
 	spin_unlock(&hint->lock);
 	return info;
@@ -403,7 +399,7 @@ void nvm_endio_hint(struct nvmd *nvmd, struct per_bio_data *pb)
 	if(map_alloc_data->flags == MAP_SHADOW && map_alloc_data->old_p_addr != LTOP_EMPTY) 
 		free_shadow_bio(nvmd, pb->orig_bio, map_alloc_data->page);
 
-	mempool_free(map_alloc_data, hint->map_alloc_pool);	
+	mempool_free(map_alloc_data, hint->map_alloc_pool);
 }
 
 static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr);
@@ -426,7 +422,7 @@ struct nvm_hint_map_private *alloc_latency_hint_data(struct nvmd *nvmd, unsigned
 
 static void free_shadow_bio(struct nvmd *nvmd, struct bio *shadow_bio, struct page *page)
 {
-	if(!shadow_bio)
+	if (!shadow_bio)
 		return;
 
 	bio_put(shadow_bio);
@@ -435,77 +431,66 @@ static void free_shadow_bio(struct nvmd *nvmd, struct bio *shadow_bio, struct pa
 
 static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 {
-	
 	struct nvm_hint_map_private *map_alloc_data = NULL;
 	struct nvm_hint *hint = nvmd->hint_private;
 	struct hint_info *info = NULL;
-	sector_t l_addr;
-	struct bio *shadow_bio = NULL;
-	struct page *page = NULL;
-	void *src_p, *dst_p;
-	int i, ret;
-	unsigned int numCopies = 1;
+	sector_t l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+	int ret;
 
-	/* extract hint from bio */
-	/**** disabled for testing ****/
-	//nvm_bio_hint(nvmd, bio);
-
-	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
-	//DMERR("nvm_write_bio_hint: find hint l_addr %ld", l_addr);
-	info = nvm_find_hint(nvmd, l_addr, 1);
-
-	/* Got latency hint for l_addr, and allocate bio for shadow write*/
-	if (info && info->flags & HINT_LATENCY){
-		numCopies = 2;
-
-		shadow_bio = bio_alloc(GFP_NOIO, 1);
-		shadow_bio->bi_bdev = nvmd->dev->bdev;
-		shadow_bio->bi_sector = bio->bi_sector;
-		page = mempool_alloc(nvmd->page_pool, GFP_NOIO);
-
-		if (!bio_add_page(shadow_bio, page, EXPOSED_PAGE_SIZE, 0)){
-			DMERR("Could not add page");
-			return DM_MAPIO_REQUEUE;
-		}
-
-		src_p = kmap_atomic(bio_iovec(bio)->bv_page);
-		dst_p = kmap_atomic(page);
-		memcpy(dst_p, src_p, bio_iovec(bio)->bv_len);
-
-		kunmap_atomic(dst_p);
-		kunmap_atomic(src_p);
-	}
-
-	/* trim old shadow, to avoid inconsistencies. 
+	/* trim old shadow, to avoid inconsistencies.
 	   Note - do this here, even before primary is updated, to avoid some nasty races */
-	if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY){
+	if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY) {
 		//DMERR("nvm_write_bio_hint: trim shadow l_addr %ld", l_addr);
 		nvm_trim_map_shadow(nvmd, l_addr);
 	}
 
+	/* extract hint from bio */
+	//nvm_bio_hint(nvmd, bio);
+
 	/* Submit bio for all physical addresses*/
-	//DMERR("nvm_write_bio_hint: logical_addr %llu numCopies=%u", (unsigned long long)l_addr, numCopies);
-	for(i = 0; i < numCopies; i++) {
-		if(i==1){
-			map_alloc_data = alloc_latency_hint_data(nvmd, MAP_SHADOW, LTOP_EMPTY, info, (i==0)?NULL:page);
-	
-			if (!map_alloc_data){
-				free_shadow_bio(nvmd, shadow_bio, page);
-				return DM_MAPIO_REQUEUE;
-			}
-		}
-		//DMERR("nvm_write_bio_hint: l_addr %ld write_execute copy %d", l_addr, i);
-		/* on deferal/abortion shadow is freed.
-		   primary, if deferred/aborted then conservatively, also abort shadow 
-		   to minimize inconsistencies*/
-		ret = nvm_write_execute_bio(nvmd, (i==0)?bio:shadow_bio, 0, map_alloc_data, NULL);
-		if(ret){
-			DMERR("nvm_write_bio_hint: discarding shadow write l_addr %ld. ret %d", l_addr, ret);
-			free_shadow_bio(nvmd, shadow_bio, page);
-			break;
-		}
+	ret = nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL);
+	if (ret) {
+		DMERR("nvm_write_bio_hint: discarding shadow write l_addr %ld. ret %d", l_addr, ret);
+		goto finished;
 	}
 
+	//DMERR("nvm_write_bio_hint: find hint l_addr %ld", l_addr);
+	info = nvm_find_hint(nvmd, l_addr, 1);
+
+	/* Got latency hint for l_addr, and allocate bio for shadow write*/
+	if (info && info->flags & HINT_LATENCY) {
+		struct bio *shadow_bio = bio_alloc(GFP_NOIO, 1);
+		struct page *page;
+		void *src_p, *dst_p;
+
+		shadow_bio->bi_bdev = nvmd->dev->bdev;
+		shadow_bio->bi_sector = bio->bi_sector;
+		page = mempool_alloc(nvmd->page_pool, GFP_NOIO);
+
+		if (!bio_add_page(shadow_bio, page, EXPOSED_PAGE_SIZE, 0)) {
+			DMERR("Could not add page");
+			goto finished;
+		}
+
+		src_p = kmap_atomic(bio_iovec(bio)->bv_page);
+		dst_p = kmap_atomic(page);
+
+		memcpy(dst_p, src_p, bio_iovec(bio)->bv_len);
+
+		kunmap_atomic(dst_p);
+		kunmap_atomic(src_p);
+
+		map_alloc_data = alloc_latency_hint_data(nvmd, MAP_SHADOW, LTOP_EMPTY, info, page);
+		if (!map_alloc_data) {
+			free_shadow_bio(nvmd, shadow_bio, page);
+			goto finished;
+		}
+
+		printk("executing\n");
+		nvm_write_execute_bio(nvmd, shadow_bio, 0, map_alloc_data, NULL);
+	}
+
+finished:
 	/* Processed entire hint */
 	if (info) {
 		spin_lock(&hint->lock);
@@ -522,10 +507,10 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 void nvm_alloc_phys_addr_pack(struct nvmd *nvmd, struct nvm_block *block)
 {
 	/* pack ap's need an ap not related to any inode*/ 
-	if (block_is_full(block)){
+	if (block_is_full(block)) {
 		DMDEBUG("__nvm_alloc_phys_addr - block is full. init ap_hint. block->parent_ap %p", block->ap);
 		BUG_ON(!block->ap);
-		if(block->ap->hint_private)
+		if (block->ap->hint_private)
 			init_ap_hint(block->ap);
 		block->ap = NULL;
 	}
@@ -622,8 +607,6 @@ pack_alloc_done:
 	return p;
 }
 
-
-
 /* Latency-proned Logical to physical address translation.
  *
  * If latency hinted write, write data to two locations, and save extra mapping
@@ -710,7 +693,7 @@ static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logi
 {
 	struct nvm_hint *hint = nvmd->hint_private;
 	struct nvm_pool *pool;
-	struct nvm_addr *p;
+	struct nvm_addr *shadow_p;
 
 	BUG_ON(!(logical_addr >= 0 && logical_addr < nvmd->nr_pages));
 
@@ -722,20 +705,19 @@ static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logi
 
 	// check if primary is busy
 	pool = paddr_to_pool(nvmd, nvmd->trans_map[logical_addr].addr);
-	if (atomic_read(&pool->is_active)){
+	if (atomic_read(&pool->is_active)) {
 		DMDEBUG("primary busy. read shadow");
 		pool = paddr_to_pool(nvmd, nvmd->trans_map[logical_addr].addr);
 		if (atomic_read(&pool->is_active))
 			goto read_primary;
 
-		p = nvm_lookup_ltop_map(nvmd, logical_addr, hint->shadow_map);
-		
-		/* no address, or empty shaddow - default to primary*/
-		if(!p || !p->block)
+		shadow_p = nvm_lookup_ltop_map(nvmd, logical_addr, hint->shadow_map);
+
+		/* no address, or empty shadow - default to primary */
+		if(!shadow_p || !shadow_p->block)
 			goto read_primary;
-		
-		/* go shaddow */
-		return p;
+
+		return shadow_p;
 	}
 
 read_primary:
@@ -747,7 +729,7 @@ static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_ad
 	struct nvm_hint *hint = nvmd->hint_private;
 	unsigned long flag = MAP_PRIMARY;
 
-	if(old_p_addr != LTOP_EMPTY) {
+	if (old_p_addr != LTOP_EMPTY) {
 		DMDEBUG("get_flag old_p_addr %ld nvmd->trans_map[%ld].addr %ld \
 				hint->shadow_map[%ld].addr %ld", old_p_addr,
 				logical_addr, nvmd->trans_map[logical_addr].addr, logical_addr, hint->shadow_map[logical_addr].addr);

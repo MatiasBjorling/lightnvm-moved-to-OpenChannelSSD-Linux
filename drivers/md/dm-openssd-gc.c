@@ -184,6 +184,8 @@ void nvm_gc_collect(struct work_struct *work)
 	spin_unlock(&nvmd->trans_lock);
 	spin_unlock(&pool->gc_lock);
 	nvmd->next_collect_pool++;
+
+	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);
 }
 
 void nvm_gc_block(struct work_struct *work)
@@ -201,8 +203,6 @@ void nvm_gc_block(struct work_struct *work)
 	__erase_block(block);
 	DMERR("nvm_gc_block: put block %d", block->id);
 	nvm_pool_put_block(block);
-	
-	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);
 }
 
 void nvm_gc_kick(struct nvmd *nvmd)

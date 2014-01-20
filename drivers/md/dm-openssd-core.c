@@ -188,6 +188,7 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int i
 	while (atomic_inc_return(&gp->inflight) != 1) {
 		ret = atomic_dec_return(&gp->inflight);
 		spin_unlock(&nvmd->trans_lock);
+
 		if (i > 3)
 			DMERR_LIMIT("update_map: stuck inflight %d. WRITE l_addr %ld. wanna update to paddr %ld, current is %ld", ret, l_addr, p->addr, gp->addr);
 
@@ -268,10 +269,10 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 
 	pool->nr_free_blocks--;
 
-	//spin_unlock(&pool->lock);
+	spin_unlock(&pool->lock);
 
 	nvm_reset_block(block);
-	spin_unlock(&pool->lock);
+
 	block->data = mempool_alloc(nvmd->block_page_pool, GFP_ATOMIC);
 	BUG_ON(!block->data);
 
@@ -559,12 +560,14 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	spin_lock(&ap->lock);
 	p = nvm_alloc_addr_from_ap(ap, is_gc);
 	spin_unlock(&ap->lock);
-	if (p != NULL){
+
+	if (p) {
 		ret = nvm_update_map(nvmd, l_addr, p, is_gc, private);
 
 		if (ret) {
 			DMERR("Cant update map");
 			BUG_ON(!is_gc);
+
 			invalidate_block_page(nvmd, p);
 
 			return (struct nvm_addr *)LTOP_POISON;
@@ -596,7 +599,8 @@ static void nvm_endio(struct bio *bio, int err)
 	//DMERR("nvm_endio: endio of paddr %ld", p->addr);
 	if (bio_data_dir(bio) == WRITE) {
 		/* mark addr landed (persisted) */
-		struct nvm_addr *gp = &(nvmd->get_trans_map(nvmd, pb->private)[pb->l_addr]);
+		struct nvm_addr *tmap = nvmd->get_trans_map(nvmd, pb->private);
+		struct nvm_addr *gp = &tmap[pb->l_addr];
 		//DMERR("nvm_endio: got trans map (endio of paddr %ld)", p->addr);
 		atomic_dec(&gp->inflight);
 
@@ -630,8 +634,8 @@ static void nvm_endio(struct bio *bio, int err)
 		diff = timespec_to_ns(&diff_tv) / 1000;
 		if (dev_wait > diff) {
 			total_wait = dev_wait - diff;
-			if (total_wait > 50){
-				BUG_ON(total_wait>1500);
+			if (total_wait > 50) {
+				WARN_ON(total_wait > 1500);
 				udelay(total_wait);
 			}
 		}
@@ -648,14 +652,13 @@ static void nvm_endio(struct bio *bio, int err)
 		bio->bi_end_io(bio, err);
 
 	//DMERR("nvm_endio: pb->orig_bio %p", pb->orig_bio);
-	if (pb->orig_bio){
+	if (pb->orig_bio)
 		bio_endio(pb->orig_bio, err);
-	}
 
-	if (pb->event){
+	if (pb->event) {
 		complete(pb->event);
 		/* all submitted bios allocate their own addr, except GC reads*/
-		if(bio_data_dir(bio) == READ)
+		if (bio_data_dir(bio) == READ)
 			goto free_pb;
 	}
 
@@ -810,7 +813,7 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
 			if(sync)
 				complete(sync);
-	 		return WRITE_GC_ABORT;
+			return WRITE_GC_ABORT;
 		}
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
@@ -819,7 +822,7 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		BUG_ON(is_gc);
 		nvmd->defer_write_bio(nvmd, bio, private);
 		nvm_gc_kick(nvmd);
-		
+
 		return WRITE_DEFERRED;
 	}
 

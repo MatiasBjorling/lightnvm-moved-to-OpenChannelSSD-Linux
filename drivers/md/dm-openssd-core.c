@@ -813,7 +813,7 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
 			if(sync)
 				complete(sync);
-			return WRITE_GC_ABORT;
+			return NVM_WRITE_GC_ABORT;
 		}
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
@@ -823,10 +823,10 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		nvmd->defer_write_bio(nvmd, bio, private);
 		nvm_gc_kick(nvmd);
 
-		return WRITE_DEFERRED;
+		return NVM_WRITE_DEFERRED;
 	}
 
-	return 0;
+	return NVM_WRITE_SUCCESS;
 }
 
 int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)

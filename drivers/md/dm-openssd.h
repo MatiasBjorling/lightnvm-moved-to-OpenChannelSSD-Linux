@@ -66,9 +66,9 @@ enum ltop_flags {
 	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
 };
 
-#define WRITE_SUCCESS  0
-#define WRITE_DEFERRED 1
-#define WRITE_GC_ABORT 2
+#define NVM_WRITE_SUCCESS  0
+#define NVM_WRITE_DEFERRED 1
+#define NVM_WRITE_GC_ABORT 2
 
 #define NVM_OPT_MISC_OFFSET 15
 

@@ -449,9 +449,8 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	info = nvm_find_hint(nvmd, l_addr, 1);
 
 	/* Got latency hint for l_addr, and allocate bio for shadow write*/
-	if (1) {//if (info && info->flags & HINT_LATENCY) {
+	if (info && info->flags & HINT_LATENCY)
 		nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, hint->shadow_map, 0);
-	}
 
 finished:
 	/* Processed entire hint */

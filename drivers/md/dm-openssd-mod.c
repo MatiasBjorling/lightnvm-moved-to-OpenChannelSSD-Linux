@@ -135,7 +135,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		init_completion(&pool->gc_finished);
 
 		INIT_WORK(&pool->gc_ws, nvm_gc_collect);
-		//INIT_WORK(&pool->waiting_ws, nvm_delayed_bio_defer);
+		INIT_WORK(&pool->waiting_ws, nvm_delayed_bio_defer);
 		INIT_WORK(&pool->execute_ws, nvm_delayed_bio_submit);
 
 		INIT_LIST_HEAD(&pool->free_list);
@@ -244,7 +244,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 		atomic_set(&p->inflight, 0);
 	}
 
-	nvmd->rev_trans_map = vmalloc(sizeof(sector_t) * nvmd->nr_pages);
+	nvmd->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr) * nvmd->nr_pages);
 	if (!nvmd->rev_trans_map)
 		goto err_rev_trans_map;
 
@@ -279,9 +279,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	nvmd->map_ltop = nvm_map_ltop_rr;
 	nvmd->write_bio = nvm_write_bio;
 	nvmd->read_bio = nvm_read_bio;
-	nvmd->get_trans_map = nvm_get_trans_map;
-	nvmd->defer_write_bio = nvm_defer_write_bio;
-
+	nvmd->defer_bio = nvm_defer_bio;
 
 	nvmd->ti = ti;
 	ti->private = nvmd;

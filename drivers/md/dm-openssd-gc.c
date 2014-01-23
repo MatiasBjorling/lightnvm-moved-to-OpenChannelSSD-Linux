@@ -49,8 +49,6 @@ static struct nvm_block *block_prio_find_max(struct nvm_pool *pool)
 	max = list_first_entry(list, struct nvm_block, prio);
 	list_for_each_entry(block, list, prio)
 		max = block_max_invalid(max, block);
-	/*DMINFO("GC max: return block with max invalid %d %d",
-	 max->nr_invalid_pages, max->next_page);*/
 
 	return max;
 }
@@ -61,6 +59,7 @@ static struct nvm_block *block_prio_find_max(struct nvm_pool *pool)
 static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 {
 	struct nvm_addr src;
+	struct nvm_rev_addr *rev;
 	struct bio *src_bio;
 	struct page *page;
 	sector_t l_addr;
@@ -94,32 +93,32 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		//DMERR("move_valid_pages: submit GC READ src block %d addr %ld", src.block->id, src.addr);
 		//DMERR("t1\n");
 		init_completion(&sync);
-		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync, NULL);
+		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync);
 		wait_for_completion(&sync);
 		//DMERR("t2\n");
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
 		//DMERR("move_valid_pages: lookup_ptol addr %ld\n", src.addr);
-		l_addr = nvmd->lookup_ptol(nvmd, src.addr);
+		rev = nvmd->lookup_ptol(nvmd, src.addr);
 		//DMERR("move_valid_pages: reclaim l_addr %ld\n", l_addr);
 		/* remap src_bio to write the logical addr to new physical
 		 * place */
 
 		/* already updated by concurrent regular write*/
-		if(l_addr == LTOP_POISON)
+		if (rev->addr == LTOP_POISON)
 			continue;
 
-		src_bio->bi_sector = l_addr * NR_PHY_IN_LOG;
+		src_bio->bi_sector = rev->addr * NR_PHY_IN_LOG;
 
 		//DMERR("move page l_addr=%ld (map[%ld]=%ld)", src.addr, l_addr, nvmd->trans_map[l_addr].addr);
 		gc_private = NULL;
 		if (nvmd->begin_gc_private)
-			gc_private = nvmd->begin_gc_private(nvmd, l_addr, src.addr, block);
+			gc_private = nvmd->begin_gc_private(nvmd, rev->addr, src.addr, block);
 
 		//DMERR("move_valid_pages: submit GC WRITE");
 		init_completion(&sync);
-		nvm_write_execute_bio(nvmd, src_bio, 1, gc_private, &sync);
+		nvm_write_execute_bio(nvmd, src_bio, 1, gc_private, &sync, rev->trans_map, 1);
 		wait_for_completion(&sync);
 
 		if (nvmd->end_gc_private)

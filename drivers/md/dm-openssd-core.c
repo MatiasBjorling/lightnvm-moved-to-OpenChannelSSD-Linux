@@ -348,10 +348,12 @@ struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *nvmd)
 	}
 
 	if (p_addr == LTOP_EMPTY) {
+		//DMERR("alloc_fastest: no fast page available");
 		mempool_free(p, nvmd->per_bio_pool);
 		return NULL;
 	}
 
+	//DMERR("alloc_fastest: found fast p_addr %ld", p_addr);
 	p->addr = p_addr;
 	p->block = block;
 	return p;

@@ -438,15 +438,16 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	/* extract hint from bio */
 	//nvm_bio_hint(nvmd, bio);
 
-	/* Submit bio for all physical addresses*/
-	ret = nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, nvmd->trans_map, 1);
-	if (ret) {
-		DMERR("nvm_write_bio_hint: discarding shadow write l_addr %ld. ret %d", l_addr, ret);
-		goto finished;
-	}
-
 	//DMERR("nvm_write_bio_hint: find hint l_addr %ld", l_addr);
 	info = nvm_find_hint(nvmd, l_addr, 1);
+
+	/* Submit bio for all physical addresses*/
+	ret = nvm_write_execute_bio(nvmd, bio, 0, info, NULL, nvmd->trans_map, 1);
+	if (ret) {
+		if (info && info->flags & HINT_LATENCY) 
+			DMERR("nvm_write_bio_hint: discarding shadow write l_addr %ld. ret %d", l_addr, ret);
+		goto finished;
+	}
 
 	/* Got latency hint for l_addr, and allocate bio for shadow write*/
 	if (info && info->flags & HINT_LATENCY)
@@ -616,33 +617,46 @@ static struct nvm_addr *nvm_map_swap_hint_ltop_rr(struct nvmd *nvmd,
 				sector_t l_addr, int is_gc,
 				struct nvm_addr *trans_map, void *private)
 {
-	struct nvm_hint_map_private *mad = private;
+	//struct nvm_hint_map_private *mad = private;
 	struct nvm_addr *p;
-	/* Check if there is a hint for relevant sector
-	 * if not, resort to nvm_map_ltop_rr */
-	if (mad) {
-		if (mad->old_p_addr == LTOP_EMPTY &&
-				!mad->info) {
-			DMDEBUG("swap_map: non-GC non-hinted write");
-			return nvm_map_ltop_rr(nvmd, l_addr, 0, nvmd->trans_map, NULL);
-		}
+	struct hint_info *info = private;
+	int ret;
 
-		/* GC write of a slow page */
-		if (mad->old_p_addr != LTOP_EMPTY &&
-				!page_is_fast(nvmd, physical_to_slot(nvmd,
-						mad->old_p_addr))) {
-			DMDEBUG("swap_map: GC write of a SLOW page (old_p_addr \
-				%ld block offset %d)",
-					mad->old_p_addr,
-					physical_to_slot(nvmd, mad->old_p_addr));
-			return nvm_map_ltop_rr(nvmd, l_addr, 0, nvmd->trans_map, NULL);
-		}
+	/* TODO GC should try keeping fast pages where they are. 
+	   for now, jsut allocate whatever is available*/
+	if (is_gc) {
+		DMERR("swap_map: GC write");
+		goto regular;
 	}
 
-	//DMINFO("swap_rr: got physical_addr %d *ret_victim_block %p", physical_addr, *ret_victim_block);
-	DMDEBUG("write lba %ld to page %ld", l_addr, p->addr);
-	nvm_update_map(nvmd, l_addr, p, is_gc, nvmd->trans_map);
+	/* non-GC non-hinted. resort to regualr allocation */
+	if (!info) {
+		goto regular;
+	}
+
+	p = nvm_alloc_phys_fastest_addr(nvmd);
+
+	/* no fast address found*/
+	if (!p) {
+		goto regular;
+	}
+
+	/* got fast addr */
+	//DMERR("swap_map: hinted write lba %ld to page %ld", l_addr, p->addr);
+	ret = nvm_update_map(nvmd, l_addr, p, is_gc, trans_map);
+
+	if (ret) {
+		DMERR("swap_map: Cant update map");
+		BUG_ON(!is_gc);
+
+		invalidate_block_page(nvmd, p);
+
+		return (struct nvm_addr *)LTOP_POISON;
+	}
+
 	return p;
+regular:
+	return nvm_map_ltop_rr(nvmd, l_addr, is_gc, nvmd->trans_map, private);
 }
 
 // TODO: actually finding a non-busy pool is not enough. read should be moved up the request queue.

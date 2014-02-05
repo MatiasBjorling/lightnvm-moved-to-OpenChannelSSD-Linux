@@ -676,7 +676,7 @@ static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logi
 {
 	struct nvm_hint *hint = nvmd->hint_private;
 	struct nvm_pool *pool1, *pool2;
-	struct nvm_addr *shadow_p;
+	struct nvm_addr *shadow_p, *primary_p;
 	struct bio *cur_bio1, *cur_bio2;
 	struct per_bio_data *pb1, *pb2;
 	struct timespec diff_tv;
@@ -688,7 +688,9 @@ static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logi
 	// shadow is empty
 	spin_lock(&nvmd->trans_lock);
 	shadow_p = &hint->shadow_map[logical_addr];
-	if (shadow_p->addr == LTOP_EMPTY || !shadow_p->block) {
+	primary_p = &nvmd->trans_map[logical_addr];
+	if (shadow_p->addr == LTOP_EMPTY || !shadow_p->block || 
+	    primary_p->addr == LTOP_EMPTY || !primary_p->block) {
 		//DMERR("l_addr %ld no shadow at all", logical_addr);
 		goto read_primary;
 	}
@@ -713,7 +715,6 @@ static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logi
 		}
 
 		//DMERR("primary & shadow busy. check how busy");
-		BUG_ON(pool1->id == pool2->id);
 		spin_lock(&pool1->waiting_lock);
 		spin_lock(&pool2->waiting_lock);
 		cur_bio1 = pool1->cur_bio;

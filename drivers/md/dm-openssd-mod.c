@@ -150,6 +150,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		pool->nr_gc_blocks = 0;
 
 		bio_list_init(&pool->waiting_bios);
+		pool->cur_bio = NULL;
 		atomic_set(&pool->is_active, 0);
 
 		pool->blocks = kzalloc(sizeof(struct nvm_block) * pool->nr_blocks, GFP_KERNEL);
@@ -280,6 +281,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	nvmd->write_bio = nvm_write_bio;
 	nvmd->read_bio = nvm_read_bio;
 	nvmd->defer_bio = nvm_defer_bio;
+	nvmd->bio_wait_add = nvm_bio_wait_add;
 
 	nvmd->ti = ti;
 	ti->private = nvmd;

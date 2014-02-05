@@ -450,7 +450,8 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	}
 
 	/* Got latency hint for l_addr, and allocate bio for shadow write*/
-	if (info && info->flags & HINT_LATENCY)
+	if (l_addr % 8 == 0)
+	//if (info && info->flags & HINT_LATENCY)
 		nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, hint->shadow_map, 0);
 
 finished:
@@ -659,42 +660,120 @@ regular:
 	return nvm_map_ltop_rr(nvmd, l_addr, is_gc, nvmd->trans_map, private);
 }
 
-// TODO: actually finding a non-busy pool is not enough. read should be moved up the request queue.
-//	 however, no queue maipulation impl. yet...
-static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr)
+void nvm_bio_wait_add_prio(struct bio_list *bl, struct bio *bio, void *p_private)
+{
+	if (p_private == NVM_PRIO_READ) {
+		BUG_ON(!(bio_data_dir(bio) == READ));
+		DMERR("add read bio with prio");
+		bio_list_add_head(bl, bio);     
+		return;
+	}
+
+	bio_list_add(bl, bio);  
+}
+
+static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr, void *prio_o)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
-	struct nvm_pool *pool;
+	struct nvm_pool *pool1, *pool2;
 	struct nvm_addr *shadow_p;
+	struct bio *cur_bio1, *cur_bio2;
+	struct per_bio_data *pb1, *pb2;
+	struct timespec diff_tv;
+	long diff;
+	void *prio = 0;
 
 	BUG_ON(!(logical_addr >= 0 && logical_addr < nvmd->nr_pages));
 
 	// shadow is empty
-	if (hint->shadow_map[logical_addr].addr == LTOP_EMPTY) {
-		DMDEBUG("no shadow. read primary");
-		return nvm_lookup_ltop(nvmd, logical_addr);
+	spin_lock(&nvmd->trans_lock);
+	shadow_p = &hint->shadow_map[logical_addr];
+	if (shadow_p->addr == LTOP_EMPTY || !shadow_p->block) {
+		//DMERR("l_addr %ld no shadow at all", logical_addr);
+		goto read_primary;
 	}
 
-	// check if primary is busy
-	pool = paddr_to_pool(nvmd, nvmd->trans_map[logical_addr].addr);
-	if (atomic_read(&pool->is_active)) {
-		DMDEBUG("primary busy. read shadow");
-		pool = paddr_to_pool(nvmd, nvmd->trans_map[logical_addr].addr);
-		if (atomic_read(&pool->is_active))
-			goto read_primary;
+	/* whatever happens, this read is prioiritzed */
+	prio = NVM_PRIO_READ; 
+	pool1 = paddr_to_pool(nvmd, nvmd->trans_map[logical_addr].addr);
+	pool2 = paddr_to_pool(nvmd, hint->shadow_map[logical_addr].addr);
 
-		shadow_p = nvm_lookup_ltop_map(nvmd, logical_addr, hint->shadow_map);
-
-		/* no address, or empty shadow - default to primary */
-		if(!shadow_p || !shadow_p->block)
-			goto read_primary;
-
-		return shadow_p;
+	/* allocated primary and shdow from same pool :( */
+	if (pool1->id == pool2->id) {
+		DMERR("pool1 %d == pool2 %d", pool1->id, pool2->id);
+		goto read_primary;
 	}
 
+	/* check if primary is busy */
+	if (atomic_read(&pool1->is_active)) {
+		/* shadow pool not busy*/
+		if (!atomic_read(&pool2->is_active)){
+			//DMERR("shadow not busy");
+			goto read_shadow;
+		}
+
+		//DMERR("primary & shadow busy. check how busy");
+		BUG_ON(pool1->id == pool2->id);
+		spin_lock(&pool1->waiting_lock);
+		spin_lock(&pool2->waiting_lock);
+		cur_bio1 = pool1->cur_bio;
+		cur_bio2 = pool2->cur_bio;
+
+		/* if no cur_bio in any of them, return relevant address */
+		if (!cur_bio1){
+			//DMERR("no primary cur_bio");
+			goto unlock_primary;
+		}
+		if (!cur_bio2) {
+			//DMERR("no shadow cur_bio");
+			goto unlock_shadow;
+		}
+
+		/* both have cur_bio. 
+		 * prefer queuing reads (Note: not safe to check data_dir after unlock...*/
+		if (bio_data_dir(cur_bio1) == READ) {
+			//DMERR("primary cur_bio read");
+			goto unlock_primary;
+		}
+		if (bio_data_dir(cur_bio2) == READ) {
+			//DMERR("shadow cur_bio read");
+			goto unlock_shadow;
+		}
+
+		/* check which write ends sooner*/
+		pb1 = get_per_bio_data(cur_bio1);
+		pb2 = get_per_bio_data(cur_bio2);
+
+		/* check which one ends sooner (diff at least 100us) */
+		diff_tv = timespec_sub(pb1->start_tv, pb2->start_tv);
+		diff = timespec_to_ns(&diff_tv) / 1000;
+		
+		/* primary is less recent --> ends sooner*/
+		if (diff < 0) {
+			//DMERR("primary ends sooner");
+			goto unlock_primary;
+		} 
+
+		//DMERR("shadow ends sooner");
+		goto unlock_shadow;
+	}
+	//DMERR("primary not busy");
+	goto read_primary; // if we got here, we dont need to do anything regarding priorities
+
+unlock_primary:
+	spin_unlock(&pool2->waiting_lock);
+	spin_unlock(&pool1->waiting_lock);
 read_primary:
+	spin_unlock(&nvmd->trans_lock);
 	return nvm_lookup_ltop(nvmd, logical_addr);
+unlock_shadow:
+	spin_unlock(&pool2->waiting_lock);
+	spin_unlock(&pool1->waiting_lock);
+read_shadow:
+	spin_unlock(&nvmd->trans_lock);
+	return nvm_lookup_ltop_map(nvmd, logical_addr, hint->shadow_map, prio);
 }
+
 
 static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_addr, sector_t old_p_addr)
 {
@@ -722,13 +801,13 @@ static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_ad
 
 int nvm_ioctl_user_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
-	hint_data_t __user *uhint = (hint_data_t*)arg;
-	hint_data_t khint;
+	struct hint_payload __user *uhint = (struct hint_payload*)arg;
+	struct hint_payload khint;
 
-	if (copy_from_user(&khint, uhint, sizeof(hint_data_t)))
+	if (copy_from_user(&khint, uhint, sizeof(struct hint_payload)))
 		return -EFAULT;
 
-	return nvm_send_hint(nvmd, CAST_TO_PAYLOAD(&khint));
+	return nvm_send_hint(nvmd, &khint);
 }
 
 int nvm_ioctl_kernel_hint_cmd(struct nvmd *nvmd, unsigned long arg)
@@ -816,6 +895,7 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 		nvmd->write_bio = nvm_write_bio_hint;
 		nvmd->read_bio = nvm_read_bio_hint;
 		nvmd->defer_bio = nvm_hint_defer_bio;
+		nvmd->bio_wait_add = nvm_bio_wait_add_prio;
 	} else if (nvmd->config.flags & NVM_OPT_ENGINE_PACK) {
 		DMINFO("Pack hint support");
 		nvmd->map_ltop = nvm_map_pack_hint_ltop_rr;

@@ -135,6 +135,7 @@ struct nvm_addr {
 	sector_t addr;
 	struct nvm_block *block;
 	atomic_t inflight;
+	void *private;
 };
 
 /* Physical to logical mapping */
@@ -175,6 +176,7 @@ struct nvm_pool {
 	struct work_struct waiting_ws;
 	struct work_struct execute_ws;
 	struct bio_list waiting_bios;
+	struct bio *cur_bio;
 
 	unsigned int gc_running;
 	struct completion gc_finished;
@@ -230,6 +232,7 @@ typedef void (alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
 typedef void *(begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
 typedef void (end_gc_private_fn)(struct nvmd *, void *);
 typedef void (defer_bio_fn)(struct nvmd *, struct bio *);
+typedef void (bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
 
 /* Main structure */
 struct nvmd {
@@ -288,6 +291,8 @@ struct nvmd {
 	begin_gc_private_fn *begin_gc_private;
 	end_gc_private_fn *end_gc_private;
 	defer_bio_fn *defer_bio;
+	bio_wait_add_fn *bio_wait_add;
+
 	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
@@ -337,6 +342,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
 sector_t nvm_alloc_phys_addr(struct nvm_block *);
 struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *);
 void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio);
+void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private);
 
 /*   Naive implementations */
 void nvm_delayed_bio_submit(struct work_struct *work);
@@ -349,7 +355,7 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *, int is_gc);
 struct nvm_addr *nvm_map_ltop_rr(struct nvmd *, sector_t l_addr, int is_gc, struct nvm_addr *trans_map, void *private);
 
 /* Gets an address from nvm->trans_map and take a ref count on the blocks usage. Remember to put later */
-struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *, sector_t l_addr, struct nvm_addr *l2p_map);
+struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *, sector_t l_addr, struct nvm_addr *l2p_map, void *private);
 struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 struct nvm_rev_addr *nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
@@ -459,6 +465,12 @@ static inline int physical_to_slot(struct nvmd *nvm, sector_t phys)
 {
 	return (phys % (nvm->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) /
 		NR_HOST_PAGES_IN_FLASH_PAGE;
+}
+
+static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
+{
+	struct per_bio_data *pbd = bio->bi_private;
+	return pbd;
 }
 
 #endif

@@ -28,12 +28,6 @@ static void show_all_pools(struct nvmd *nvmd)
 	}
 }
 
-static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
-{
-	struct per_bio_data *pbd = bio->bi_private;
-	return pbd;
-}
-
 static struct per_bio_data *alloc_decorate_per_bio_data(struct nvmd *nvmd, struct bio *bio)
 {
 	struct per_bio_data *pb = mempool_alloc(nvmd->per_bio_pool, GFP_NOIO);
@@ -98,6 +92,7 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 	spin_lock(&pool->waiting_lock);
 	bio = bio_list_pop(&pool->waiting_bios);
 
+	pool->cur_bio = bio; // we're the currently executing bio
 	if (!bio) {
 		atomic_dec(&pool->is_active);
 		spin_unlock(&pool->waiting_lock);
@@ -336,6 +331,7 @@ struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *nvmd)
 	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
+	memset(p, 0, sizeof(struct nvm_addr));
 
 	for (i = 0; i < nvmd->nr_pools; i++) {
 		ap = get_next_ap(nvmd);
@@ -397,6 +393,7 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
+	memset(p, 0, sizeof(struct nvm_addr));
 
 	p_block = ap->cur;
 	pool = p_block->pool;
@@ -457,7 +454,7 @@ static void nvm_fill_bio_and_end(struct bio *bio)
 }
 
 struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
-						struct nvm_addr *map)
+				     struct nvm_addr *map, void *private)
 {
 	struct nvm_addr *gp, *p;
 
@@ -466,6 +463,7 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
+	memset(p, 0, sizeof(struct nvm_addr));
 
 	spin_lock(&nvmd->trans_lock);
 	gp = &map[l_addr];
@@ -488,6 +486,7 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 			goto err;
 	}
 
+	p->private = private; // for hints
 	spin_unlock(&nvmd->trans_lock);
 	return p;
 err:
@@ -501,7 +500,7 @@ err:
  * the addr. We assume that there is no data and doesn't take a ref */
 struct nvm_addr *nvm_lookup_ltop(struct nvmd *nvmd, sector_t l_addr)
 {
-	return nvm_lookup_ltop_map(nvmd, l_addr, nvmd->trans_map);
+	return nvm_lookup_ltop_map(nvmd, l_addr, nvmd->trans_map, NULL);
 }
 
 /* Simple round-robin Logical to physical address translation.
@@ -586,10 +585,12 @@ static void nvm_endio(struct bio *bio, int err)
 	if (bio_data_dir(bio) == WRITE) {
 		/* mark addr landed (persisted) */
 		/* Find the inflight by using the rev map, and then the forward map.*/
+		spin_lock(&nvmd->trans_lock);
 		struct nvm_rev_addr *rev = &nvmd->rev_trans_map[p->addr];
 		struct nvm_addr *gp = &rev->trans_map[pb->l_addr];
 		//DMERR("nvm_endio: got trans map (endio of paddr %ld)", p->addr);
 		atomic_dec(&gp->inflight);
+		spin_unlock(&nvmd->trans_lock);
 
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
@@ -629,6 +630,12 @@ static void nvm_endio(struct bio *bio, int err)
 	}
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+		/* we need this. updating pool current only by waiting_bios worker
+		   leaves a windows where current is bio thats was already ended */ 
+		spin_lock(&pool->waiting_lock);
+		pool->cur_bio = NULL;
+		spin_unlock(&pool->waiting_lock);
+
 		queue_work(nvmd->kbiod_wq, &pool->execute_ws);
 	}
 
@@ -827,6 +834,11 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
 	return DM_MAPIO_SUBMITTED;
 }
 
+void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
+{
+	bio_list_add(bl, bio);  
+}
+
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 			int rw, struct bio *bio,
 			struct bio *orig_bio,
@@ -836,6 +848,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	struct nvm_ap *ap = block_to_ap(nvmd, block);
 	struct nvm_pool *pool = ap->pool;
 	struct per_bio_data *pb;
+	void *p_private = p->private;
 
 	pb = alloc_decorate_per_bio_data(nvmd, bio);
 	pb->ap = ap;
@@ -861,7 +874,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		//DMERR("nvm_submit_bio: submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
 		spin_lock(&pool->waiting_lock);
-		bio_list_add(&pool->waiting_bios, bio);
+		nvmd->bio_wait_add(&pool->waiting_bios, bio, p_private);
 
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);
@@ -871,13 +884,15 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 		}
 
 		bio = bio_list_pop(&pool->waiting_bios);
-		spin_unlock(&pool->waiting_lock);
 
 		if (!bio) {
 			//DMERR("nvm_submit_bio: serialized bio but its already gone!");
 			atomic_dec(&pool->is_active);
+			spin_unlock(&pool->waiting_lock);
 			return;
 		}
+		pool->cur_bio = bio; // we're the currently executing bio
+		spin_unlock(&pool->waiting_lock);
 
 		/* setup timings - remember overhead. */
 		pb = bio->bi_private;

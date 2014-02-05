@@ -26,6 +26,8 @@
                              INO_HINT_FROM_DATA(HINT_DATA, IDX).count = COUNT; \
                              INO_HINT_FROM_DATA(HINT_DATA, IDX).fc = FC;
 
+#define NVM_PRIO_READ 0x12121212
+
 enum fclass {
 	FC_EMPTY,
 	FC_UNKNOWN,
@@ -119,5 +121,6 @@ enum deploy_hint_flags {
 
 struct nvm_addr *nvm_hint_get_map(struct nvmd *nvmd, void *private);
 void nvm_hint_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
+void nvm_bio_wait_add_prio(struct bio_list *bl, struct bio *bio, void *p_private);
 
 #endif /* DM_LIGHTNVM_HINT_H_ */

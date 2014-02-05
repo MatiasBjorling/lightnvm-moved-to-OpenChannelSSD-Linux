@@ -432,7 +432,7 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	   Note - do this here, even before primary is updated, to avoid some nasty races */
 	if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY) {
 		//DMERR("nvm_write_bio_hint: trim shadow l_addr %ld", l_addr);
-		//nvm_trim_map_shadow(nvmd, l_addr);
+		nvm_trim_map_shadow(nvmd, l_addr);
 	}
 
 	/* extract hint from bio */

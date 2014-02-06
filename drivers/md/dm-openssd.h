@@ -231,7 +231,7 @@ typedef int (read_bio_fn)(struct nvmd *, struct bio *);
 typedef void (alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
 typedef void *(begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
 typedef void (end_gc_private_fn)(struct nvmd *, void *);
-typedef void (defer_bio_fn)(struct nvmd *, struct bio *);
+typedef void (defer_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef void (bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
 
 /* Main structure */
@@ -341,7 +341,7 @@ void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
 sector_t nvm_alloc_phys_addr(struct nvm_block *);
 struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *);
-void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio);
+void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private);
 
 /*   Naive implementations */

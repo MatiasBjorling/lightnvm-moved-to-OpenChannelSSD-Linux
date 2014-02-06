@@ -35,10 +35,14 @@ void nvm_delay_endio_hint(struct nvmd *nvmd, struct bio *bio,
 		(*delay) = nvmd->config.t_write * 2;
 }
 
-void nvm_hint_defer_bio(struct nvmd *nvmd, struct bio *bio)
+void nvm_hint_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)
 {
-	/* FIXME: only defer primary, discard secondary to minimize inconsistency*/
-	return nvm_defer_bio(nvmd, bio);
+	/* only defer primary, discard secondary to minimize inconsistency*/
+	struct nvm_addr *trans_map = private;
+	if (private && trans_map == nvmd->trans_map) 
+		return nvm_defer_bio(nvmd, bio, NULL);
+
+	
 }
 
 static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_addr, sector_t old_p_addr);

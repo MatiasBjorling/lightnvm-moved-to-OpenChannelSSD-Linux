@@ -56,8 +56,9 @@ static void free_per_bio_data(struct nvmd *nvmd, struct per_bio_data *pb)
 	mempool_free(pb, nvmd->per_bio_pool);
 }
 
-void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio)
+void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)
 {
+	//DMERR("defer_bio: %s l_addr %ld", bio_data_dir(bio)==WRITE?"write":"read", bio->bi_sector / 8);
 	spin_lock(&nvmd->deferred_lock);
 	bio_list_add(&nvmd->deferred_bios, bio);
 	spin_unlock(&nvmd->deferred_lock);
@@ -75,6 +76,7 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	while (bio) {
 		struct bio *next = bio->bi_next;
 		bio->bi_next = NULL;
+		//DMERR("undefer bio %s l_addr %ld", bio_data_dir(bio)==WRITE?"write":"read", bio->bi_sector / 8);
 		if (bio_data_dir(bio) == WRITE)
 			nvmd->write_bio(nvmd, bio);
 		else
@@ -156,7 +158,7 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 {
 	struct nvm_addr *gp;
 	struct nvm_rev_addr *rev;
-	int i = 0, ret;
+	int i = 0, ret, flag = 0;
 	BUG_ON(l_addr >= nvmd->nr_pages);
 	BUG_ON(p->addr >= nvmd->nr_pages);
 
@@ -167,9 +169,10 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 		ret = atomic_dec_return(&gp->inflight);
 		spin_unlock(&nvmd->trans_lock);
 
-		if (i > 3)
+		if (i > 300000 && !flag){
+			flag = 1;
 			DMERR_LIMIT("update_map: stuck inflight %d. WRITE l_addr %ld. wanna update to paddr %ld, current is %ld", ret, l_addr, p->addr, gp->addr);
-
+		}
 		if (is_gc)
 			return -1;
 
@@ -722,7 +725,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	p = nvmd->lookup_ltop(nvmd, l_addr);
 
 	if (!p) {
-		nvm_defer_bio(nvmd, bio);
+		nvm_defer_bio(nvmd, bio, NULL);
 		nvm_gc_kick(nvmd);
 		goto finished;
 	}
@@ -819,7 +822,8 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 									sync);
 	} else {
 		BUG_ON(is_gc);
-		nvmd->defer_bio(nvmd, bio);
+		//DMERR("cant execute, defering %s %s bio l_addr", trans_map==nvmd->trans_map?"primary":"shadow", bio_data_dir(bio)==WRITE?"write":"read", l_addr);
+		nvmd->defer_bio(nvmd, bio, trans_map);
 		nvm_gc_kick(nvmd);
 
 		return NVM_WRITE_DEFERRED;

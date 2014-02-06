@@ -67,6 +67,7 @@ struct nvm_hint {
 	struct nvm_addr *shadow_map;
 
 	mempool_t *map_alloc_pool;
+	mempool_t *per_bio_pool;
 };
 
 struct hint_info {
@@ -75,6 +76,11 @@ struct hint_info {
 	unsigned int flags;
 	uint32_t processed; // how many related LBAs were indeed processed
 	struct list_head list_member;
+};
+
+struct per_bio_hint_data {
+	void *bi_private;
+	struct nvm_addr *trans_map;
 };
 
 struct nvm_hint_map_private {

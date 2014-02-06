@@ -68,6 +68,7 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 {
 	struct nvmd *nvmd = container_of(work, struct nvmd, deferred_ws);
 	struct bio *bio;
+	void *private = NULL;
 
 	spin_lock(&nvmd->deferred_lock);
 	bio = bio_list_get(&nvmd->deferred_bios);
@@ -76,9 +77,13 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	while (bio) {
 		struct bio *next = bio->bi_next;
 		bio->bi_next = NULL;
-		//DMERR("undefer bio %s l_addr %ld", bio_data_dir(bio)==WRITE?"write":"read", bio->bi_sector / 8);
-		if (bio_data_dir(bio) == WRITE)
-			nvmd->write_bio(nvmd, bio);
+		
+		if (bio_data_dir(bio) == WRITE) {
+			if(nvmd->end_defer_bio)
+				private = nvmd->end_defer_bio(bio); 
+			
+			nvmd->write_bio(nvmd, bio, private);
+		}
 		else
 			nvmd->read_bio(nvmd, bio);
 		bio = next;
@@ -107,6 +112,7 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 	pb = bio->bi_private;
 	getnstimeofday(&pb->start_tv);
 
+	//DMERR("undelay %s %s l_addr %ld p_addr %ld", (pb->event)?"GC":"regular", bio_data_dir(bio)==WRITE?"write":"read", pb->l_addr, pb->addr->addr);
 	submit_bio(bio->bi_rw, bio);
 }
 
@@ -115,7 +121,6 @@ void nvm_delayed_bio_defer(struct work_struct *work)
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
 	struct per_bio_data *pb;
-	unsigned int sync;
 
 	spin_lock(&pool->waiting_lock);
 	if (atomic_inc_return(&pool->is_active) != 1) {
@@ -576,6 +581,8 @@ static void nvm_endio(struct bio *bio, int err)
 	struct timespec end_tv, diff_tv;
 	unsigned long diff, dev_wait, total_wait = 0;
 	unsigned int data_cnt;
+	struct nvm_rev_addr *rev;
+	struct nvm_addr *gp;
 
 	pb = get_per_bio_data(bio);
 	p = pb->addr;
@@ -584,13 +591,14 @@ static void nvm_endio(struct bio *bio, int err)
 	nvmd = ap->parent;
 	pool = ap->pool;
 
-	//DMERR("nvm_endio: endio of paddr %ld", p->addr);
+	//DMERR("nvm_endio: endio l_addr %ld p_addr %ld", pb->l_addr, p->addr);
 	if (bio_data_dir(bio) == WRITE) {
 		/* mark addr landed (persisted) */
 		/* Find the inflight by using the rev map, and then the forward map.*/
 		spin_lock(&nvmd->trans_lock);
-		struct nvm_rev_addr *rev = &nvmd->rev_trans_map[p->addr];
-		struct nvm_addr *gp = &rev->trans_map[pb->l_addr];
+		rev = &nvmd->rev_trans_map[p->addr];
+		gp = &rev->trans_map[pb->l_addr];
+
 		//DMERR("nvm_endio: got trans map (endio of paddr %ld)", p->addr);
 		atomic_dec(&gp->inflight);
 		spin_unlock(&nvmd->trans_lock);
@@ -644,13 +652,14 @@ static void nvm_endio(struct bio *bio, int err)
 
 	/* Finish up */
 	dedecorate_bio(pb, bio);
-
+	//DMERR("nvm_endio %s %s l_addr %ld p_addr %ld", (pb->event)?"GC":"regular", bio_data_dir	(bio)==WRITE?"write":"read", l_addr, p->addr);
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
 	//DMERR("nvm_endio: pb->orig_bio %p", pb->orig_bio);
-	if (pb->orig_bio)
+	if (pb->orig_bio) {
 		bio_endio(pb->orig_bio, err);
+	}
 
 	if (pb->event) {
 		complete(pb->event);
@@ -813,6 +822,7 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 			return NVM_WRITE_GC_ABORT;
 		}
 
+		//if(private) DMERR("executing write %s l_addr %ld p_addr %ld", private==nvmd->trans_map?"primary":"shadow", l_addr, p->addr);
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		if (complete_bio)
 			nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio,
@@ -832,7 +842,7 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	return NVM_WRITE_SUCCESS;
 }
 
-int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
+int nvm_write_bio(struct nvmd *nvmd, struct bio *bio, void *private)
 {
 	nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, nvmd->trans_map, 1);
 	return DM_MAPIO_SUBMITTED;
@@ -905,5 +915,6 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 
 	//DMERR("nvm_submit_bio: truly submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
 	//DMERR("nvm_submit_bio: bio->bi_end_io %p nvm_end_write_bio %p", bio->bi_end_io, nvm_end_write_bio);
+	//DMERR("nvm_submit_bio %s %s l_addr %ld p_addr %ld", (pb->event)?"GC":"regular", bio_data_dir	(bio)==WRITE?"write":"read", pb->l_addr, pb->addr->addr);
 	submit_bio(bio->bi_rw, bio);
 }

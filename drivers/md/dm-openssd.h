@@ -226,13 +226,14 @@ struct per_bio_data;
 typedef struct nvm_addr *(map_ltop_fn)(struct nvmd *, sector_t, int, struct nvm_addr *, void *private);
 typedef struct nvm_addr *(lookup_ltop_fn)(struct nvmd *, sector_t);
 typedef struct nvm_rev_addr *(lookup_ptol_fn)(struct nvmd *, sector_t);
-typedef int (write_bio_fn)(struct nvmd *, struct bio *);
+typedef int (write_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef int (read_bio_fn)(struct nvmd *, struct bio *);
 typedef void (alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
 typedef void *(begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
 typedef void (end_gc_private_fn)(struct nvmd *, void *);
 typedef void (defer_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef void (bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
+typedef void* (end_defer_bio_fn)(struct bio *);
 
 /* Main structure */
 struct nvmd {
@@ -292,6 +293,7 @@ struct nvmd {
 	end_gc_private_fn *end_gc_private;
 	defer_bio_fn *defer_bio;
 	bio_wait_add_fn *bio_wait_add;
+	end_defer_bio_fn *end_defer_bio;
 
 	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */
@@ -364,7 +366,7 @@ void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct b
 struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
 int nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync, struct nvm_addr *trans_map, unsigned int complete_bio);
-int nvm_write_bio(struct nvmd *, struct bio *bio);
+int nvm_write_bio(struct nvmd *, struct bio *bio, void *private);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
 int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc, struct nvm_addr *trans_map);
 struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private);

@@ -2,6 +2,7 @@
 #include "dm-openssd-hint.h"
 
 static struct kmem_cache *_map_alloc_cache;
+static struct kmem_cache *_per_bio_hint_cache;
 
 static inline unsigned long diff_tv(struct timeval *curr_tv, struct timeval *ap_tv)
 {
@@ -35,14 +36,60 @@ void nvm_delay_endio_hint(struct nvmd *nvmd, struct bio *bio,
 		(*delay) = nvmd->config.t_write * 2;
 }
 
+static void free_per_bio_hint_data(struct nvmd *nvmd, struct per_bio_hint_data *pbh)
+{
+	struct nvm_hint *hint = nvmd->hint_private;
+	mempool_free(pbh, hint->per_bio_pool);
+}
+
+void nvm_begin_latency_hint_defer(struct nvmd *nvmd, struct bio *bio, struct nvm_addr *trans_map)
+{
+	struct nvm_hint *hint = nvmd->hint_private;
+	struct per_bio_hint_data *pbh = mempool_alloc(hint->per_bio_pool, GFP_NOIO);
+
+	if (!pbh) {
+		BUG_ON(!pbh);
+		DMERR("Couldn't allocate per_bio_hint_data");
+		return;
+	}
+
+	pbh->trans_map = trans_map;
+	pbh->bi_private = bio->bi_private;
+	bio->bi_private = pbh;
+
+	return;
+}
+
+void* nvm_end_defer_bio(struct bio *bio) 
+{
+	struct per_bio_hint_data *pbh;
+
+	pbh = bio->bi_private;
+	bio->bi_private = pbh->bi_private;
+	return pbh;
+}
+
+/* use this function only for defering latency writes */
 void nvm_hint_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)
 {
 	/* only defer primary, discard secondary to minimize inconsistency*/
 	struct nvm_addr *trans_map = private;
-	if (private && trans_map == nvmd->trans_map) 
-		return nvm_defer_bio(nvmd, bio, NULL);
 
+	if (!private) {
+		DMERR("hint_defer_bio: cant defer bio without trans_map. will be discarded");
+		return;
+	}
 	
+	nvm_begin_latency_hint_defer(nvmd, bio, trans_map);
+	//DMERR("defer %s write bio l_addr %ld", trans_map == nvmd->trans_map?"primary":"shadow", bio->bi_sector / 8);
+	return nvm_defer_bio(nvmd, bio, NULL);
+	/*if(trans_map ==nvmd->trans_map) {
+		nvm_begin_latency_hint_defer(nvmd, bio, trans_map);
+		return nvm_defer_bio(nvmd, bio, NULL);
+	}
+	else
+		DMERR("discard shadow");
+	*/
 }
 
 static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_addr, sector_t old_p_addr);
@@ -92,7 +139,6 @@ struct hint_info *nvm_find_hint(struct nvmd *nvmd, sector_t l_addr, bool is_writ
 		if (is_hint_relevant(l_addr, info, is_write, nvmd->config.flags)) {
 			DMDEBUG("found hint for lba %ld (ino %ld)",
 						l_addr, info->hint.ino);
-			info->processed++;
 			goto end_hint;
 		}
 	}
@@ -371,8 +417,6 @@ static int nvm_read_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	return nvm_read_bio(nvmd, bio);
 }
 
-static void free_shadow_bio(struct nvmd *nvmd, struct bio *shadow_bio, struct page *page);
-
 /* if we ever support trim, this may be unified with some generic function */
 static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr)
 {
@@ -416,25 +460,33 @@ struct nvm_hint_map_private *alloc_latency_hint_data(struct nvmd *nvmd, unsigned
 	return mad;
 }
 
-static void free_shadow_bio(struct nvmd *nvmd, struct bio *shadow_bio, struct page *page)
-{
-	if (!shadow_bio)
-		return;
+static void free_per_bio_hint_data(struct nvmd *nvmd, struct per_bio_hint_data *pbh);
 
-	bio_put(shadow_bio);
-	mempool_free(page, nvmd->page_pool);
-}
-
-static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
+static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio, void *private)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
 	struct hint_info *info = NULL;
 	sector_t l_addr = bio->bi_sector / NR_PHY_IN_LOG;
-	int ret;
+	struct nvm_addr *trans_map = NULL;	
+	struct per_bio_hint_data *pbh;
+	int ret, complete_bio;
 
-	/* trim old shadow, to avoid inconsistencies.
+	/* extract trans map from private bio data.
+	   when necessary, trim old shadow (to avoid inconsistencies)
 	   Note - do this here, even before primary is updated, to avoid some nasty races */
 	if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY) {
+		/* private means this is a defered write*/
+		if (private) {
+			pbh = private;
+			trans_map = pbh->trans_map;
+			free_per_bio_hint_data(nvmd, pbh);
+			//DMERR("undefered %s write bio l_addr %ld", trans_map == hint->shadow_map?"shadow":"primary", bio->bi_sector / 8);
+			/* defered shadow --> write only it */
+			if (trans_map == hint->shadow_map) {
+				goto shadow_bio;
+			}
+			BUG_ON(trans_map != nvmd->trans_map);
+		}
 		//DMERR("nvm_write_bio_hint: trim shadow l_addr %ld", l_addr);
 		nvm_trim_map_shadow(nvmd, l_addr);
 	}
@@ -444,18 +496,31 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 
 	//DMERR("nvm_write_bio_hint: find hint l_addr %ld", l_addr);
 	info = nvm_find_hint(nvmd, l_addr, 1);
+ 	complete_bio = ((info == NULL) && (l_addr % 8 != 0));
 
 	/* Submit bio for all physical addresses*/
-	ret = nvm_write_execute_bio(nvmd, bio, 0, info, NULL, nvmd->trans_map, 1);
+	ret = nvm_write_execute_bio(nvmd, bio, 0, trans_map, NULL, nvmd->trans_map, complete_bio);
+	if (info){
+		DMERR("nvm_write_bio_hint: discarding shadow write l_addr %ld. ret %d", l_addr, ret);
+		/* request was not deferred --> it is processed */
+		spin_lock(&hint->lock);
+		info->processed++;
+		spin_unlock(&hint->lock);
+	}
+
+	/* irregular behavior (aborted/defered) --> avoid shadow */
 	if (ret) {
-		if (info && info->flags & HINT_LATENCY) 
-			DMERR("nvm_write_bio_hint: discarding shadow write l_addr %ld. ret %d", l_addr, ret);
+		
 		goto finished;
 	}
 
 	/* Got latency hint for l_addr, and allocate bio for shadow write*/
-	if (info && info->flags & HINT_LATENCY)
-		nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, hint->shadow_map, 0);
+	if(l_addr % 8 != 0) {
+	//if (!info || !info->flags & HINT_LATENCY) {
+		goto finished;
+	}
+shadow_bio:
+	nvm_write_execute_bio(nvmd, bio, 0, trans_map, NULL, hint->shadow_map, 1);
 
 finished:
 	/* Processed entire hint */
@@ -675,7 +740,7 @@ void nvm_bio_wait_add_prio(struct bio_list *bl, struct bio *bio, void *p_private
 	bio_list_add(bl, bio);  
 }
 
-static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr, void *prio_o)
+static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr)
 {
 	struct nvm_hint *hint = nvmd->hint_private;
 	struct nvm_pool *pool1, *pool2;
@@ -868,9 +933,15 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 	_map_alloc_cache = kmem_cache_create("lightnvm_map_alloc_cache",
 				sizeof(struct nvm_hint_map_private), 0, 0, NULL);
 	hint->map_alloc_pool = mempool_create_slab_pool(16, _map_alloc_cache);
-
 	if (!hint->map_alloc_pool)
 		goto err_map_alloc;
+
+	_per_bio_hint_cache = kmem_cache_create("lightnvm_per_bio_hint_cache",
+				sizeof(struct per_bio_hint_data), 0, 0, NULL);
+	hint->per_bio_pool = mempool_create_slab_pool(16, _per_bio_hint_cache);
+	if (!hint->per_bio_pool)
+		goto err_per_bio_alloc;
+
 
 	/* mark all pack hint related ap's*/
 	ssd_for_each_pool(nvmd, pool, i) {
@@ -900,6 +971,7 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 		nvmd->read_bio = nvm_read_bio_hint;
 		nvmd->defer_bio = nvm_hint_defer_bio;
 		nvmd->bio_wait_add = nvm_bio_wait_add_prio;
+		nvmd->end_defer_bio = nvm_end_defer_bio;		
 	} else if (nvmd->config.flags & NVM_OPT_ENGINE_PACK) {
 		DMINFO("Pack hint support");
 		nvmd->map_ltop = nvm_map_pack_hint_ltop_rr;
@@ -917,6 +989,9 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 
 	return 0;
 err_ap_hints:
+	mempool_destroy(hint->per_bio_pool);
+	kmem_cache_destroy(_per_bio_hint_cache);
+err_per_bio_alloc:
 	ssd_for_each_ap(nvmd, ap, i)
 		kfree(ap->hint_private);
 	mempool_destroy(hint->map_alloc_pool);

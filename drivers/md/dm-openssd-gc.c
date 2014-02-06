@@ -62,7 +62,6 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	struct nvm_rev_addr *rev;
 	struct bio *src_bio;
 	struct page *page;
-	sector_t l_addr;
 	int slot = -1;
 	void *gc_private = NULL;
 	DECLARE_COMPLETION(sync);

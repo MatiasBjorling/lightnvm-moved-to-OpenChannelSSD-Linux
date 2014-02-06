@@ -82,7 +82,7 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 			DMERR("Write: num of sectors not supported (%u)", bio_sectors(bio));
 			return DM_MAPIO_REQUEUE;
 		}
-		ret = nvmd->write_bio(nvmd, bio);
+		ret = nvmd->write_bio(nvmd, bio, NULL);
 	} else {
 		ret = nvmd->read_bio(nvmd, bio);
 	}

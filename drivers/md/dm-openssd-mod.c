@@ -249,19 +249,19 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	if (!nvmd->rev_trans_map)
 		goto err_rev_trans_map;
 
-	nvmd->per_bio_pool = mempool_create_slab_pool(16, _per_bio_cache);
+	nvmd->per_bio_pool = mempool_create_slab_pool(16 * 1024, _per_bio_cache);
 	if (!nvmd->per_bio_pool)
 		goto err_dev_lookup;
 
-	nvmd->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
+	nvmd->page_pool = mempool_create_page_pool(MIN_POOL_PAGES * 1024, 0);
 	if (!nvmd->page_pool)
 		goto err_per_bio_pool;
 
-	nvmd->addr_pool = mempool_create_slab_pool(64, _addr_cache);
+	nvmd->addr_pool = mempool_create_slab_pool(64 * 1024, _addr_cache);
 	if (!nvmd->addr_pool)
 		goto err_page_pool;
 
-	nvmd->block_page_pool = mempool_create_page_pool(nvmd->nr_aps, order);
+	nvmd->block_page_pool = mempool_create_page_pool(nvmd->nr_aps * 1024 * 16, order);
 	if (!nvmd->block_page_pool)
 		goto err_addr_pool;
 

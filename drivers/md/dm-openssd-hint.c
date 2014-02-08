@@ -242,8 +242,9 @@ static int nvm_send_hint(struct nvmd *nvmd, struct hint_payload *d)
 	     nvm_engine(nvmd, NVM_OPT_ENGINE_PACK)) && d->ino.fc != FC_EMPTY) {
 		DMERR("ino %lu got new fc %d", d->ino.ino, d->ino.fc);
 		hint->ino2fc[d->ino.ino] = d->ino.fc;
+		goto send_done;
 	}
-
+#if 0
 	/* non-packable file. ignore hint*/
 	if(nvm_engine(nvmd, NVM_OPT_ENGINE_PACK) &&
 	   !nvm_is_fc_packable(hint->ino2fc[d->ino.ino])) {
@@ -279,7 +280,7 @@ static int nvm_send_hint(struct nvmd *nvmd, struct hint_payload *d)
 	spin_lock(&hint->lock);
 	list_add_tail(&info->list_member, &hint->hints);
 	spin_unlock(&hint->lock);
-
+#endif
 send_done:
 	return 0;
 }
@@ -297,8 +298,9 @@ send_done:
  * 3) write - check if a page is the first sector of a file, classify it and set
  *    in hint. rest same as read
  */
-void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
+int nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 {
+	struct nvm_hint *hint = nvmd->hint_private;
 	enum fclass fc = FC_EMPTY;
 	unsigned ino = -1;
 	struct page *bv_page;
@@ -309,11 +311,10 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	uint32_t sectors_count = 0;
 	uint32_t lba = 0, bio_len = 0;
 	unsigned long prev_ino = -1, first_sector = -1;
-	struct hint_payload *d;
+	struct hint_payload *d, hp;
 	int ret;
 	bool is_write = 0;
 
-	return;
 	/* can classify only writes*/
 	switch(bio_rw(bio)) {
 	case READ:
@@ -329,12 +330,15 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	lba = bio->bi_sector;
 	sectors_count = bio->bi_size / sector_size;
 
+	/************** don tclloate **************/
+	d = &hp;
+#if 0
 	d = kzalloc(sizeof(struct hint_payload), GFP_NOIO);
 	if (!d) {
 		DMERR("hint_payload kmalloc failed");
 		return;
 	}
-
+#endif
 	d->lba = lba;
 	d->sectors_count = sectors_count;
 	d->is_write = is_write;
@@ -346,12 +350,14 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	bvec = bio_iovec(bio);
 	bv_page = bvec->bv_page;
 
-	if (!bv_page || PageSlab(bv_page))
+	if (!bv_page || PageSlab(bv_page)){
+		//DMERR("page slab");
 		goto done;
+	}
 
 	// swap hint
 	if (PageSwapCache(bv_page)) {
-		DMDEBUG("swap bio");
+		//DMERR("swap bio");
 		d->flags |= HINT_SWAP;
 
 		d->ino.ino = 0;
@@ -361,13 +367,15 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 		goto done;
 	}
 
-	mapping = page_mapping(bv_page);
-	if (!mapping || PageAnon(bv_page))
+	mapping = bv_page->mapping;
+	if (!mapping || PageAnon(bv_page)){
+		//DMERR("no page mapping");
 		goto done;
+	}
 
 	host = mapping->host;
 	if (!host) {
-		DMCRIT("page without mapping->host. shouldn't happen");
+		//DMERR("page without mapping->host. shouldn't happen");
 		goto done; // no host
 	}
 
@@ -375,12 +383,12 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	ino = host->i_ino;
 
 	if (!host->i_sb || !host->i_sb->s_type || !host->i_sb->s_type->name) {
-		DMDEBUG("not related to file system");
+		//DMERR("not related to file system");
 		goto done;
 	}
 
 	if (!ino) {
-		DMDEBUG("not inode related");
+		//DMERR("not inode related");
 		goto done;
 	}
 
@@ -390,8 +398,16 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 		// should be first sector in file. classify
 		first_sector = lba + (bio_len / sector_size);
 		fc = file_classify(&bvec[0]);
+		hint->ino2fc[ino] = fc;
+		DMERR("ino %d fc %d (FC_DB_INDEX %d)", ino, fc, FC_DB_INDEX);
+	}
+	else{
+		//DMERR("ino %d bvec->bv_offset %d", ino, bvec->bv_offset);
+		fc = hint->ino2fc[ino];
 	}
 
+/************ dont send hints, retunr file class ***********/
+#if 0
 	DMDEBUG("add %s hint here - ino=%u lba=%u fc=%s count=%d",
 	       is_write ? "WRITE" : "READ",
 	       ino,
@@ -404,12 +420,20 @@ void nvm_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	d->ino.count = 1;
 	d->ino.fc = fc;
 
+
+
+
 	ret = nvm_send_hint(nvmd, d);
 	if (!ret)
 		DMERR("nvm_send_hint error %d", ret);
 
 done:
 	kfree(d);
+#endif
+done:
+	if(nvm_engine(nvmd, NVM_OPT_ENGINE_LATENCY))
+		return (fc == FC_DB_INDEX);
+	return 0;
 }
 
 static int nvm_read_bio_hint(struct nvmd *nvmd, struct bio *bio)
@@ -470,11 +494,12 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio, void *private)
 	struct nvm_addr *trans_map = NULL;	
 	struct per_bio_hint_data *pbh;
 	int ret, complete_bio;
+	int is_hinted = 0;
 
 	/* extract trans map from private bio data.
 	   when necessary, trim old shadow (to avoid inconsistencies)
 	   Note - do this here, even before primary is updated, to avoid some nasty races */
-	if(nvmd->config.flags & NVM_OPT_ENGINE_LATENCY) {
+	if(nvm_engine(nvmd, NVM_OPT_ENGINE_LATENCY)) {
 		/* private means this is a defered write*/
 		if (private) {
 			pbh = private;
@@ -492,14 +517,18 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio, void *private)
 	}
 
 	/* extract hint from bio */
-	//nvm_bio_hint(nvmd, bio);
+	is_hinted = nvm_bio_hint(nvmd, bio);
 
 	//DMERR("nvm_write_bio_hint: find hint l_addr %ld", l_addr);
+#if 0
 	info = nvm_find_hint(nvmd, l_addr, 1);
- 	complete_bio = ((info == NULL) && (l_addr % 8 != 0));
+#endif
+ 	complete_bio = (!is_hinted);//;(info == NULL);
 
 	/* Submit bio for all physical addresses*/
+	//DMERR("primary write l_addr %d", bio->bi_sector / 8);
 	ret = nvm_write_execute_bio(nvmd, bio, 0, trans_map, NULL, nvmd->trans_map, complete_bio);
+#if 0
 	if (info){
 		DMERR("nvm_write_bio_hint: discarding shadow write l_addr %ld. ret %d", l_addr, ret);
 		/* request was not deferred --> it is processed */
@@ -507,7 +536,7 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio, void *private)
 		info->processed++;
 		spin_unlock(&hint->lock);
 	}
-
+#endif
 	/* irregular behavior (aborted/defered) --> avoid shadow */
 	if (ret) {
 		
@@ -515,14 +544,16 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio, void *private)
 	}
 
 	/* Got latency hint for l_addr, and allocate bio for shadow write*/
-	if(l_addr % 8 != 0) {
+	if(!is_hinted) {
 	//if (!info || !info->flags & HINT_LATENCY) {
 		goto finished;
 	}
 shadow_bio:
+	//DMERR("shadow write l_addr %d", bio->bi_sector / 8);
 	nvm_write_execute_bio(nvmd, bio, 0, trans_map, NULL, hint->shadow_map, 1);
 
 finished:
+#if 0
 	/* Processed entire hint */
 	if (info) {
 		spin_lock(&hint->lock);
@@ -532,7 +563,7 @@ finished:
 		}
 		spin_unlock(&hint->lock);
 	}
-
+#endif
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -932,13 +963,13 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 
 	_map_alloc_cache = kmem_cache_create("lightnvm_map_alloc_cache",
 				sizeof(struct nvm_hint_map_private), 0, 0, NULL);
-	hint->map_alloc_pool = mempool_create_slab_pool(16, _map_alloc_cache);
+	hint->map_alloc_pool = mempool_create_slab_pool(16 * 1024, _map_alloc_cache);
 	if (!hint->map_alloc_pool)
 		goto err_map_alloc;
 
 	_per_bio_hint_cache = kmem_cache_create("lightnvm_per_bio_hint_cache",
 				sizeof(struct per_bio_hint_data), 0, 0, NULL);
-	hint->per_bio_pool = mempool_create_slab_pool(16, _per_bio_hint_cache);
+	hint->per_bio_pool = mempool_create_slab_pool(16 * 1024, _per_bio_hint_cache);
 	if (!hint->per_bio_pool)
 		goto err_per_bio_alloc;
 

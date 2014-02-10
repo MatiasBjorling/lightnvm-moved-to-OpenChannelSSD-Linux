@@ -29,6 +29,7 @@
 #include <linux/kref.h>
 #include <linux/completion.h>
 #include <linux/hashtable.h>
+#include <linux/percpu_ida.h>
 
 #define DM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
@@ -59,6 +60,11 @@
  * given device.
  */
 #define NR_PHY_IN_LOG (EXPOSED_PAGE_SIZE / 512)
+
+/* We partition the namespace of translation map into these pieces for tracking
+ * in-flight addresses. 
+#define NVM_INFLIGHT_PARTITIONS 8
+#define NVM_INFLIGHT_TAGS 128
 
 enum ltop_flags {
 	MAP_PRIMARY	= 1 << 0, /* Update primary mapping (and init secondary mapping as a result) */
@@ -220,6 +226,17 @@ struct nvm_config {
 	unsigned int t_erase;
 };
 
+struct nvm_inflight_addr {
+	struct list_head list
+	sector_t l_addr;
+	struct completion completed;
+};
+
+struct nvm_inflight {
+	spinlock_t lock;
+	struct list_head head;
+} ____cacheline_aligned_in_smp;
+
 struct nvmd;
 struct per_bio_data;
 
@@ -307,8 +324,12 @@ struct nvmd {
 
 	struct timer_list gc_timer;
 
-	/* in-flight data lookup, lookup by logical address */
-	struct hlist_head *inflight;
+	/* in-flight data lookup, lookup by logical address. Remember the
+	 * overhead of cachelines being used. Keep it low for better cache
+	 * utilization. */
+	struct percpu_ida free_inflight;
+	struct nvm_inflight[NVM_INFLIGHT_PARTITIONS];
+	struct nvm_inflight_addr inflight_addrs[NVM_INFLIGT_TAGS];
 
 	/* Hint related*/
 	void *hint_private;
@@ -471,6 +492,39 @@ static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
 	struct per_bio_data *pbd = bio->bi_private;
 	return pbd;
+}
+
+static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,
+								sector_t addr)
+{
+	return nvmd->inflight[addr % NVM_INFLIGHT_PARTITIONS];
+}
+
+static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t addr)
+{
+	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, addr);
+	struct nvm_inflight_addr *a;
+	spin_lock(&inflight->lock);
+	list_for_each_entry(a, &inflight->list, list) {
+		if (a->addr == addr) {
+			/* wait for it to finish */
+			
+
+		}
+	}
+	spin_unlock(&inflight->lock);
+}
+
+static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t addr)
+{
+	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(addr);
+	struct nvm_inflight_addr *a;
+	spin_lock(&inflight->lock);
+	list_for_each_entry(a, &inflight->list, list) {
+		if (a->addr)
+	}
+	DMERR("Didn't find addr for removal\n");
+	spin_unlock(&inflight->lock);
 }
 
 #endif

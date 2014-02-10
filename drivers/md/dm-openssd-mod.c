@@ -23,6 +23,7 @@
 
 #include "dm-openssd.h"
 #include "dm-openssd-hint.h"
+#include <linux/percpu_ida.h>
 
 /* Defaults */
 /* Number of append points per pool. We assume that accesses within a pool is
@@ -272,6 +273,8 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	}
 	nvmd->sector_size = EXPOSED_PAGE_SIZE;
 
+	percpu_ida_init(&nvmd->free_inflight, NVM_INFLIGHT_TAGS);
+
 	// Simple round-robin strategy
 	atomic_set(&nvmd->next_write_ap, -1);
 
@@ -494,6 +497,8 @@ static void nvm_dtr(struct dm_target *ti)
 	mempool_destroy(nvmd->per_bio_pool);
 	mempool_destroy(nvmd->page_pool);
 	mempool_destroy(nvmd->addr_pool);
+
+	percpu_ida_destroy(&nvmd->free_inflight);
 
 	dm_put_device(ti, nvmd->dev);
 

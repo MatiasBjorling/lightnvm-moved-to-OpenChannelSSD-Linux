@@ -1057,6 +1057,9 @@ void nvm_free_hint(struct nvmd *nvmd)
 		kfree(ap->hint_private);
 
 	mempool_destroy(hint->map_alloc_pool);
+	mempool_destroy(hint->per_bio_pool);
+	kmem_cache_destroy(_map_alloc_cache);
+	kmem_cache_destroy(_per_bio_hint_cache);
 
 	kfree(nvmd->hint_private);
 }

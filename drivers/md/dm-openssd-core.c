@@ -782,7 +782,6 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
-	nvm_lock_addr(nvmd, l_addr);
 
 	p = nvmd->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
 
@@ -794,6 +793,8 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 				complete(sync);
 			return NVM_WRITE_GC_ABORT;
 		}
+
+		nvm_lock_addr(nvmd, l_addr);
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		if (complete_bio)
@@ -822,7 +823,7 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
 
 void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
 {
-	bio_list_add(bl, bio);  
+	bio_list_add(bl, bio);
 }
 
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,

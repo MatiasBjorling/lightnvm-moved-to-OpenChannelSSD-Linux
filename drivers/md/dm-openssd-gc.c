@@ -91,17 +91,14 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 			DMERR("Could not add page");
 
 		//DMERR("move_valid_pages: submit GC READ src block %d addr %ld", src.block->id, src.addr);
-		//DMERR("t1\n");
 		init_completion(&sync);
 		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync);
 		wait_for_completion(&sync);
-		//DMERR("t2\n");
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
-		//DMERR("move_valid_pages: lookup_ptol addr %ld\n", src.addr);
 		rev = nvmd->lookup_ptol(nvmd, src.addr);
-		//DMERR("move_valid_pages: reclaim l_addr %ld\n", l_addr);
+
 		/* remap src_bio to write the logical addr to new physical
 		 * place */
 
@@ -111,12 +108,12 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		src_bio->bi_sector = rev->addr * NR_PHY_IN_LOG;
 
-		//DMERR("move page l_addr=%ld (map[%ld]=%ld)", src.addr, l_addr, nvmd->trans_map[l_addr].addr);
 		gc_private = NULL;
 		if (nvmd->begin_gc_private)
 			gc_private = nvmd->begin_gc_private(nvmd, rev->addr, src.addr, block);
 
-		//DMERR("move_valid_pages: submit GC WRITE");
+		if (rev->addr == 38912)
+			printk("wooooow\n");
 		init_completion(&sync);
 		nvm_write_execute_bio(nvmd, src_bio, 1, gc_private, &sync, rev->trans_map, 1);
 		wait_for_completion(&sync);
@@ -130,7 +127,6 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	}
 	//DMERR("move_pages: block %d done", block->id);
 	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
-	//DMERR("o2\n");
 }
 
 /* Push erase condition to automatically be executed when block goes to zero.
@@ -191,16 +187,11 @@ void nvm_gc_block(struct work_struct *work)
 {
 	struct nvm_block *block = container_of(work, struct nvm_block, ws_gc);
 	struct nvmd *nvmd = block->pool->nvmd;
-	DMERR("nvm_gc_block: gc block %d", block->id);
 
-	/* rewrite to have moves outside lock. i.e. so we can
-	 * prepare multiple pages in parallel on the attached
-	 * device. */
-	DMERR("moving block %d", block->id);
+	/* TODO: move outside lock to allow multiple pages
+	 * in parallel to be erased. */
 	nvm_move_valid_pages(nvmd, block);
-	//DMERR("erase block %d", block->id);
 	__erase_block(block);
-	DMERR("nvm_gc_block: put block %d", block->id);
 	nvm_pool_put_block(block);
 }
 

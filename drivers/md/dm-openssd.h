@@ -504,14 +504,12 @@ static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr)
 {
 	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, l_addr);
 	struct nvm_inflight_addr *a;
-	int tag;
+	int tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
 
 retry:
 	spin_lock(&inflight->lock);
 	list_for_each_entry(a, &inflight->list, list) {
 		if (a->l_addr == l_addr) {
-			/* wait for it to finish */
-			printk("address in flight\n");
 			spin_unlock(&inflight->lock);
 			/* TODO: give up control and come back. I haven't found
 			   a good way to complete the work, when the data the
@@ -521,9 +519,6 @@ retry:
 		}
 	}
 
-	printk("l\n");
-	tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
-	printk("k \n");
 	a = &nvmd->inflight_addrs[tag];
 
 	a->l_addr = l_addr;
@@ -540,15 +535,15 @@ static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t l_addr)
 
 	spin_lock(&inflight->lock);
 	list_for_each_entry(a, &inflight->list, list) {
-		if (a->l_addr != l_addr)
-			continue;
+		if (a->l_addr == l_addr)
+			break;
 	}
 
 	BUG_ON(!a && a->l_addr != l_addr);
 
 	list_del_init(&a->list);
-	percpu_ida_free(&nvmd->free_inflight, a->tag);
 	spin_unlock(&inflight->lock);
+	percpu_ida_free(&nvmd->free_inflight, a->tag);
 }
 
 #endif

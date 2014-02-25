@@ -62,7 +62,7 @@
 #define NR_PHY_IN_LOG (EXPOSED_PAGE_SIZE / 512)
 
 /* We partition the namespace of translation map into these pieces for tracking
- * in-flight addresses. 
+ * in-flight addresses. */
 #define NVM_INFLIGHT_PARTITIONS 8
 #define NVM_INFLIGHT_TAGS 128
 
@@ -140,7 +140,6 @@ struct nvm_block {
 struct nvm_addr {
 	sector_t addr;
 	struct nvm_block *block;
-	atomic_t inflight;
 	void *private;
 };
 
@@ -227,14 +226,15 @@ struct nvm_config {
 };
 
 struct nvm_inflight_addr {
-	struct list_head list
+	struct list_head list;
 	sector_t l_addr;
+	int tag;
 	struct completion completed;
 };
 
 struct nvm_inflight {
 	spinlock_t lock;
-	struct list_head head;
+	struct list_head list;
 } ____cacheline_aligned_in_smp;
 
 struct nvmd;
@@ -328,8 +328,8 @@ struct nvmd {
 	 * overhead of cachelines being used. Keep it low for better cache
 	 * utilization. */
 	struct percpu_ida free_inflight;
-	struct nvm_inflight[NVM_INFLIGHT_PARTITIONS];
-	struct nvm_inflight_addr inflight_addrs[NVM_INFLIGT_TAGS];
+	struct nvm_inflight inflight[NVM_INFLIGHT_PARTITIONS];
+	struct nvm_inflight_addr inflight_addrs[NVM_INFLIGHT_TAGS];
 
 	/* Hint related*/
 	void *hint_private;
@@ -497,37 +497,60 @@ static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,
 								sector_t addr)
 {
-	return nvmd->inflight[addr % NVM_INFLIGHT_PARTITIONS];
+	return &nvmd->inflight[addr % NVM_INFLIGHT_PARTITIONS];
 }
 
-static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t addr)
+static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr)
 {
-	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, addr);
+	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, l_addr);
 	struct nvm_inflight_addr *a;
+	int tag;
+
+retry:
 	spin_lock(&inflight->lock);
 	list_for_each_entry(a, &inflight->list, list) {
-		if (a->addr == addr) {
+		if (a->l_addr == l_addr) {
 			/* wait for it to finish */
-			
-
+			printk("address in flight\n");
+			spin_unlock(&inflight->lock);
+			/* TODO: give up control and come back. I haven't found
+			   a good way to complete the work, when the data the
+			   complete structure is being reused */
+			schedule();
+			goto retry;
 		}
 	}
+
+	printk("l\n");
+	tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
+	printk("k \n");
+	a = &nvmd->inflight_addrs[tag];
+
+	a->l_addr = l_addr;
+	a->tag = tag;
+
+	list_add_tail(&a->list, &inflight->list);
 	spin_unlock(&inflight->lock);
 }
 
-static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t addr)
+static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t l_addr)
 {
-	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(addr);
+	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, l_addr);
 	struct nvm_inflight_addr *a;
+
 	spin_lock(&inflight->lock);
 	list_for_each_entry(a, &inflight->list, list) {
-		if (a->addr)
+		if (a->l_addr != l_addr)
+			continue;
 	}
-	DMERR("Didn't find addr for removal\n");
+
+	BUG_ON(!a && a->l_addr != l_addr);
+
+	list_del_init(&a->list);
+	percpu_ida_free(&nvmd->free_inflight, a->tag);
 	spin_unlock(&inflight->lock);
 }
 
 #endif
 
 #endif /* DM_LIGHTNVM_H_ */
-

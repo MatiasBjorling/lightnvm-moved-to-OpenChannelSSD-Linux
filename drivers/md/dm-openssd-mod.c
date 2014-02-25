@@ -243,7 +243,6 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	for (i = 0; i < nvmd->nr_pages; i++) {
 		struct nvm_addr *p = &nvmd->trans_map[i];
 		p->addr = LTOP_EMPTY;
-		atomic_set(&p->inflight, 0);
 	}
 
 	nvmd->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr) * nvmd->nr_pages);
@@ -273,9 +272,15 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	}
 	nvmd->sector_size = EXPOSED_PAGE_SIZE;
 
+	/* inflight maintainence */
 	percpu_ida_init(&nvmd->free_inflight, NVM_INFLIGHT_TAGS);
 
-	// Simple round-robin strategy
+	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
+		spin_lock_init(&nvmd->inflight[i].lock);
+		INIT_LIST_HEAD(&nvmd->inflight[i].list);
+	}
+
+	/* simple round-robin strategy */
 	atomic_set(&nvmd->next_write_ap, -1);
 
 	nvmd->lookup_ltop = nvm_lookup_ltop;

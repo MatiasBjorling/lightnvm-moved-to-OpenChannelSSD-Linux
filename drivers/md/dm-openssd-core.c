@@ -1,4 +1,8 @@
 #include "dm-openssd.h"
+#include <linux/list.h>
+#include <linux/blkdev.h>
+#include <linux/time.h>
+#include <linux/percpu_ida.h>
 
 static void show_pool(struct nvm_pool *pool)
 {
@@ -164,22 +168,6 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 
 	spin_lock(&nvmd->trans_lock);
 	gp = &trans_map[l_addr];
-
-	while (atomic_inc_return(&gp->inflight) != 1) {
-		ret = atomic_dec_return(&gp->inflight);
-		spin_unlock(&nvmd->trans_lock);
-
-		if (i > 300000 && !flag){
-			flag = 1;
-			DMERR_LIMIT("update_map: stuck inflight %d. WRITE l_addr %ld. wanna update to paddr %ld, current is %ld", ret, l_addr, p->addr, gp->addr);
-		}
-		if (is_gc)
-			return -1;
-
-		schedule();
-		i++;
-		spin_lock(&nvmd->trans_lock);
-	}
 
 	if (gp->block) {
 		invalidate_block_page(nvmd, gp);
@@ -471,9 +459,6 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 	spin_lock(&nvmd->trans_lock);
 	gp = &map[l_addr];
 
-	if (atomic_read(&gp->inflight))
-		goto err;
-
 	p->addr = gp->addr;
 	p->block = gp->block;
 
@@ -586,15 +571,6 @@ static void nvm_endio(struct bio *bio, int err)
 
 	//DMERR("nvm_endio: endio of paddr %ld", p->addr);
 	if (bio_data_dir(bio) == WRITE) {
-		/* mark addr landed (persisted) */
-		/* Find the inflight by using the rev map, and then the forward map.*/
-		spin_lock(&nvmd->trans_lock);
-		struct nvm_rev_addr *rev = &nvmd->rev_trans_map[p->addr];
-		struct nvm_addr *gp = &rev->trans_map[pb->l_addr];
-		//DMERR("nvm_endio: got trans map (endio of paddr %ld)", p->addr);
-		atomic_dec(&gp->inflight);
-		spin_unlock(&nvmd->trans_lock);
-
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
 		if (data_cnt == nvmd->nr_host_pages_in_blk) {
@@ -606,6 +582,7 @@ static void nvm_endio(struct bio *bio, int err)
 			list_add_tail(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->gc_lock);
 		}
+		nvm_unlock_addr(nvmd, pb->l_addr);
 
 		/* physical waits if hardware doesn't have a real backend */
 		dev_wait = ap->t_write;
@@ -642,13 +619,13 @@ static void nvm_endio(struct bio *bio, int err)
 		queue_work(nvmd->kbiod_wq, &pool->execute_ws);
 	}
 
+
 	/* Finish up */
 	dedecorate_bio(pb, bio);
 
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
-	//DMERR("nvm_endio: pb->orig_bio %p", pb->orig_bio);
 	if (pb->orig_bio)
 		bio_endio(pb->orig_bio, err);
 
@@ -722,6 +699,8 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	sector_t l_addr;
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+
+
 	p = nvmd->lookup_ltop(nvmd, l_addr);
 
 	if (!p) {
@@ -802,6 +781,9 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	sector_t l_addr;
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+
+	nvm_lock_addr(nvmd, l_addr);
+
 	p = nvmd->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
 
 	if (p) {
@@ -868,9 +850,8 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 
 	if (rw == WRITE)
 		bio->bi_end_io = nvm_end_write_bio;
-	else {
+	else
 		bio->bi_end_io = nvm_end_read_bio;
-	}
 
 	// We allow counting to be semi-accurate as theres no locking for accounting.
 	ap->io_accesses[bio_data_dir(bio)]++;

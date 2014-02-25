@@ -855,7 +855,6 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 	for(i = 0; i < nvmd->nr_pages; i++) {
 		struct nvm_addr *p = &hint->shadow_map[i];
 		p->addr = LTOP_EMPTY;
-		atomic_set(&p->inflight, 0);
 	}
 
 	spin_lock_init(&hint->lock);

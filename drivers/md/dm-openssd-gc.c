@@ -112,8 +112,6 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (nvmd->begin_gc_private)
 			gc_private = nvmd->begin_gc_private(nvmd, rev->addr, src.addr, block);
 
-		if (rev->addr == 38912)
-			printk("wooooow\n");
 		init_completion(&sync);
 		nvm_write_execute_bio(nvmd, src_bio, 1, gc_private, &sync, rev->trans_map, 1);
 		wait_for_completion(&sync);

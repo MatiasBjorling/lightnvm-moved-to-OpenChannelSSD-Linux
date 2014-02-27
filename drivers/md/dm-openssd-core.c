@@ -354,8 +354,7 @@ void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 
 	if (ap->cur) {
 		spin_lock(&ap->cur->lock);
-		if (!block_is_full(ap->cur))
-			DMERR("Block isn't full - %u %u", ap->cur->next_page, ap->cur->next_offset);
+		WARN_ON(!block_is_full(ap->cur));
 		spin_unlock(&ap->cur->lock);
 		ap->cur->ap = NULL;
 	}

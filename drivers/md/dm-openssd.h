@@ -186,6 +186,8 @@ struct nvm_pool {
 	unsigned int gc_running;
 	struct completion gc_finished;
 	struct work_struct gc_ws;
+
+	struct workqueue_struct *kbiod_wq;
 };
 
 /*
@@ -314,7 +316,6 @@ struct nvmd {
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
 							   to the next write append point */
-
 	struct workqueue_struct *kbiod_wq;
 	struct workqueue_struct *kgc_wq;
 

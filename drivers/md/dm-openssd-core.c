@@ -616,7 +616,7 @@ static void nvm_endio(struct bio *bio, int err)
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
 
-		queue_work(nvmd->kbiod_wq, &pool->execute_ws);
+		queue_work(pool->kbiod_wq, &pool->execute_ws);
 	}
 
 
@@ -626,8 +626,9 @@ static void nvm_endio(struct bio *bio, int err)
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
-	if (pb->orig_bio)
+	if (pb->orig_bio){
 		bio_endio(pb->orig_bio, err);
+	}
 
 	if (pb->event) {
 		complete(pb->event);
@@ -782,7 +783,6 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
-
 	p = nvmd->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
 
 	if (p) {
@@ -866,23 +866,24 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 			atomic_dec(&pool->is_active);
 			spin_unlock(&pool->waiting_lock);
 			//DMERR("nvm_submit_bio: queue waiting_bios l_addr %ld paddr %ld", l_addr, p->addr);
+
 			return;
 		}
 
-		bio = bio_list_pop(&pool->waiting_bios);
+		bio = bio_list_peek(&pool->waiting_bios);
 
+		/* we're not the only bio waiting*/
 		if (!bio) {
 			//DMERR("nvm_submit_bio: serialized bio but its already gone!");
 			atomic_dec(&pool->is_active);
 			spin_unlock(&pool->waiting_lock);
 			return;
 		}
-		pool->cur_bio = bio; // we're the currently executing bio
-		spin_unlock(&pool->waiting_lock);
 
-		/* setup timings - remember overhead. */
-		pb = bio->bi_private;
-		getnstimeofday(&pb->start_tv);
+		/* we're the only bio waiting. queue relevant worker*/
+		queue_work(pool->kbiod_wq, &pool->execute_ws);
+		spin_unlock(&pool->waiting_lock);
+		return;
 	}
 
 	//DMERR("nvm_submit_bio: truly submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);

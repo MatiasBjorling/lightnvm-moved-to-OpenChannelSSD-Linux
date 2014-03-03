@@ -172,6 +172,12 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			INIT_WORK(&block->ws_gc, nvm_gc_block);
 		}
 		spin_unlock(&pool->lock);
+
+		pool->kbiod_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
+		if (!pool->kbiod_wq) {
+			DMERR("Couldn't start knvm-worker");
+			goto err_blocks;
+		}
 	}
 
 	nvmd->nr_aps = nvmd->nr_aps_per_pool * nvmd->nr_pools;
@@ -214,6 +220,9 @@ err_blocks:
 		if (!pool->blocks)
 			break;
 		kfree(pool->blocks);
+
+		if(pool->kbiod_wq)
+			destroy_workqueue(pool->kbiod_wq);
 	}
 	kfree(nvmd->pools);
 err_pool:
@@ -483,6 +492,7 @@ static void nvm_dtr(struct dm_target *ti)
 	ssd_for_each_pool(nvmd, pool, i) {
 		while (bio_list_peek(&pool->waiting_bios))
 			flush_scheduled_work();
+		destroy_workqueue(pool->kbiod_wq);
 	}
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */

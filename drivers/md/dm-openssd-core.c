@@ -453,7 +453,6 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
-	memset(p, 0, sizeof(struct nvm_addr));
 
 	spin_lock(&nvmd->trans_lock);
 	gp = &map[l_addr];
@@ -699,7 +698,6 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	sector_t l_addr;
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
-
 
 	p = nvmd->lookup_ltop(nvmd, l_addr);
 

@@ -866,10 +866,13 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 
 	_map_alloc_cache = kmem_cache_create("lightnvm_map_alloc_cache",
 				sizeof(struct nvm_hint_map_private), 0, 0, NULL);
+	if (!_map_alloc_cache)
+		goto err_map_alloc;
+
 	hint->map_alloc_pool = mempool_create_slab_pool(16, _map_alloc_cache);
 
 	if (!hint->map_alloc_pool)
-		goto err_map_alloc;
+		goto err_mac;
 
 	/* mark all pack hint related ap's*/
 	ssd_for_each_pool(nvmd, pool, i) {
@@ -919,6 +922,8 @@ err_ap_hints:
 	ssd_for_each_ap(nvmd, ap, i)
 		kfree(ap->hint_private);
 	mempool_destroy(hint->map_alloc_pool);
+err_mac:
+	kmem_cache_destroy(_map_alloc_cache);
 err_map_alloc:
 	kfree(hint->ino2fc);		
 err_hints:
@@ -950,7 +955,7 @@ void nvm_free_hint(struct nvmd *nvmd)
 		kfree(ap->hint_private);
 
 	mempool_destroy(hint->map_alloc_pool);
-
+	kmem_cache_destroy(_map_alloc_cache);
 	kfree(nvmd->hint_private);
 }
 

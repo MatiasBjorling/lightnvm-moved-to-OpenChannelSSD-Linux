@@ -67,6 +67,11 @@ struct nvm_hint {
 	struct nvm_addr *shadow_map;
 
 	mempool_t *map_alloc_pool;
+
+	/* in-flight data lookup, lookup by logical address. Remember the
+	 * overhead of cachelines being used. Keep it low for better cache
+	 * utilization. */
+	struct nvm_inflight inflight[NVM_INFLIGHT_PARTITIONS];
 };
 
 struct hint_info {

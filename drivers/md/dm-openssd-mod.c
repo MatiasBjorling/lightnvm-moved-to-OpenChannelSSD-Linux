@@ -178,6 +178,8 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			DMERR("Couldn't start knvm-worker");
 			goto err_blocks;
 		}
+
+		pool->time_to_wait = 0;
 	}
 
 	nvmd->nr_aps = nvmd->nr_aps_per_pool * nvmd->nr_pools;
@@ -299,6 +301,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	nvmd->read_bio = nvm_read_bio;
 	nvmd->defer_bio = nvm_defer_bio;
 	nvmd->bio_wait_add = nvm_bio_wait_add;
+	nvmd->get_inflight = nvm_get_inflight;
 
 	nvmd->ti = ti;
 	ti->private = nvmd;

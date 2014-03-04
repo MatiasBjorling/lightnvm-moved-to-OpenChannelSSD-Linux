@@ -92,7 +92,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		//DMERR("move_valid_pages: submit GC READ src block %d addr %ld", src.block->id, src.addr);
 		init_completion(&sync);
-		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync);
+		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync, NULL);
 		wait_for_completion(&sync);
 
 		/* We use the physical address to go to the logical page addr,

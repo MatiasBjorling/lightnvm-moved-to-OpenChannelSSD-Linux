@@ -580,7 +580,8 @@ static void nvm_endio(struct bio *bio, int err)
 			list_add_tail(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->gc_lock);
 		}
-		nvm_unlock_addr(nvmd, pb->l_addr);
+		
+		nvm_unlock_addr(nvmd, nvmd->get_inflight(nvmd, pb->trans_map), pb->l_addr);
 
 		/* physical waits if hardware doesn't have a real backend */
 		dev_wait = ap->t_write;
@@ -611,6 +612,7 @@ static void nvm_endio(struct bio *bio, int err)
 		/* we need this. updating pool current only by waiting_bios worker
 		   leaves a windows where current is bio thats was already ended */ 
 		spin_lock(&pool->waiting_lock);
+		pool->time_to_wait -= dev_wait;
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
 
@@ -727,7 +729,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	}
 
 	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
-	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL);
+	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL, NULL);
 finished:
 	return DM_MAPIO_SUBMITTED;
 }
@@ -791,15 +793,15 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 			return NVM_WRITE_GC_ABORT;
 		}
 
-		nvm_lock_addr(nvmd, l_addr);
+		nvm_lock_addr(nvmd, nvmd->get_inflight(nvmd, trans_map), l_addr);
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		if (complete_bio)
 			nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio,
-									sync);
+									sync, trans_map);
 		else
 			nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, NULL,
-									sync);
+									sync, trans_map);
 	} else {
 		BUG_ON(is_gc);
 		//DMERR("cant execute, defering %s %s bio l_addr", trans_map==nvmd->trans_map?"primary":"shadow", bio_data_dir(bio)==WRITE?"write":"read", l_addr);
@@ -823,10 +825,17 @@ void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
 	bio_list_add(bl, bio);
 }
 
+struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map) 
+{
+	BUG_ON(trans_map != nvmd->trans_map);
+	return nvmd->inflight;
+}
+
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 			int rw, struct bio *bio,
-			struct bio *orig_bio,
-			struct completion *sync)
+			struct bio *orig_bio, 
+			struct completion *sync,
+			struct nvm_addr *trans_map)
 {
 	struct nvm_block *block = p->block;
 	struct nvm_ap *ap = block_to_ap(nvmd, block);
@@ -840,6 +849,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	pb->l_addr = l_addr;
 	pb->event = sync;
 	pb->orig_bio = orig_bio;
+	pb->trans_map = trans_map;
 
 	/* is set prematurely because we need it for deferred bios */
 	bio->bi_rw |= rw;
@@ -857,6 +867,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		//DMERR("nvm_submit_bio: submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
 		spin_lock(&pool->waiting_lock);
+		pool->time_to_wait += (rw==WRITE)?ap->t_write:ap->t_read;
 		nvmd->bio_wait_add(&pool->waiting_bios, bio, p_private);
 
 		if (atomic_inc_return(&pool->is_active) != 1) {

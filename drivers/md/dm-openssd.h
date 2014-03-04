@@ -182,6 +182,7 @@ struct nvm_pool {
 	struct work_struct execute_ws;
 	struct bio_list waiting_bios;
 	struct bio *cur_bio;
+	int time_to_wait;
 
 	unsigned int gc_running;
 	struct completion gc_finished;
@@ -252,7 +253,7 @@ typedef void *(begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nv
 typedef void (end_gc_private_fn)(struct nvmd *, void *);
 typedef void (defer_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef void (bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
-
+typedef struct nvm_inflight* (get_inflight_map_fn)(struct nvmd *nvmd, struct nvm_addr *trans_map);
 /* Main structure */
 struct nvmd {
 	struct dm_dev *dev;
@@ -311,6 +312,7 @@ struct nvmd {
 	end_gc_private_fn *end_gc_private;
 	defer_bio_fn *defer_bio;
 	bio_wait_add_fn *bio_wait_add;
+	get_inflight_map_fn *get_inflight;
 
 	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */
@@ -365,6 +367,7 @@ sector_t nvm_alloc_phys_addr(struct nvm_block *);
 struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *);
 void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private);
+struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map);
 
 /*   Naive implementations */
 void nvm_delayed_bio_submit(struct work_struct *work);
@@ -382,7 +385,7 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 struct nvm_rev_addr *nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
-void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync);
+void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync, struct nvm_addr *trans_map);
 struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
 int nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync, struct nvm_addr *trans_map, unsigned int complete_bio);
@@ -495,15 +498,15 @@ static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 	return pbd;
 }
 
-static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,
+static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvm_inflight *inflight_map,
 								sector_t addr)
 {
-	return &nvmd->inflight[addr % NVM_INFLIGHT_PARTITIONS];
+	return &inflight_map[addr % NVM_INFLIGHT_PARTITIONS];
 }
 
-static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr)
+static inline void nvm_lock_addr(struct nvmd *nvmd, struct nvm_inflight *inflight_map, sector_t l_addr)
 {
-	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, l_addr);
+	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(inflight_map, l_addr);
 	struct nvm_inflight_addr *a;
 	int tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
 
@@ -529,9 +532,9 @@ retry:
 	spin_unlock(&inflight->lock);
 }
 
-static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t l_addr)
+static inline void nvm_unlock_addr(struct nvmd *nvmd, struct nvm_inflight *inflight_map, sector_t l_addr)
 {
-	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, l_addr);
+	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(inflight_map, l_addr);
 	struct nvm_inflight_addr *a;
 
 	spin_lock(&inflight->lock);

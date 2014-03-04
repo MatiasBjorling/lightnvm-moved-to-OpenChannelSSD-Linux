@@ -383,7 +383,6 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
-	memset(p, 0, sizeof(struct nvm_addr));
 
 	p_block = ap->cur;
 	pool = p_block->pool;
@@ -425,6 +424,7 @@ finished:
 
 	p->addr = p_addr;
 	p->block = p_block;
+	p->private = NULL;
 
 	if (!p_block)
 		WARN_ON(is_gc);

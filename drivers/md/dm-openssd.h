@@ -52,7 +52,6 @@
 #define EXPOSED_PAGE_SIZE 4096
 #define FLASH_PAGE_SIZE EXPOSED_PAGE_SIZE
 
-
 /* Useful shorthands */
 #define NR_HOST_PAGES_IN_FLASH_PAGE (FLASH_PAGE_SIZE / EXPOSED_PAGE_SIZE)
 /* We currently assume that we the lightnvm device is accepting data in 512
@@ -66,17 +65,17 @@
 #define NVM_INFLIGHT_PARTITIONS 8
 #define NVM_INFLIGHT_TAGS 128
 
-enum ltop_flags {
-	MAP_PRIMARY	= 1 << 0, /* Update primary mapping (and init secondary mapping as a result) */
-	MAP_SHADOW	= 1 << 1, /* Update only shaddow mapping */
-	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
-};
-
 #define NVM_WRITE_SUCCESS  0
 #define NVM_WRITE_DEFERRED 1
 #define NVM_WRITE_GC_ABORT 2
 
 #define NVM_OPT_MISC_OFFSET 15
+
+enum ltop_flags {
+	MAP_PRIMARY	= 1 << 0, /* Update primary mapping (and init secondary mapping as a result) */
+	MAP_SHADOW	= 1 << 1, /* Update only shaddow mapping */
+	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
+};
 
 enum target_flags {
 	/* No hints applied */
@@ -243,22 +242,44 @@ struct nvm_inflight {
 struct nvmd;
 struct per_bio_data;
 
-typedef struct nvm_addr *(map_ltop_fn)(struct nvmd *, sector_t, int, struct nvm_addr *, void *private);
-typedef struct nvm_addr *(lookup_ltop_fn)(struct nvmd *, sector_t);
-typedef struct nvm_rev_addr *(lookup_ptol_fn)(struct nvmd *, sector_t);
-typedef int (write_bio_fn)(struct nvmd *, struct bio *);
-typedef int (read_bio_fn)(struct nvmd *, struct bio *);
-typedef void (alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
-typedef void *(begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
-typedef void (end_gc_private_fn)(struct nvmd *, void *);
-typedef void (defer_bio_fn)(struct nvmd *, struct bio *, void *);
-typedef void (bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
-typedef struct nvm_inflight* (get_inflight_map_fn)(struct nvmd *nvmd, struct nvm_addr *trans_map);
+typedef struct nvm_addr *(nvm_map_ltop_fn)(struct nvmd *, sector_t, int, struct nvm_addr *, void *private);
+typedef struct nvm_addr *(nvm_lookup_ltop_fn)(struct nvmd *, sector_t);
+typedef struct nvm_rev_addr *(nvm_lookup_ptol_fn)(struct nvmd *, sector_t);
+typedef int (nvm_write_bio_fn)(struct nvmd *, struct bio *);
+typedef int (nvm_read_bio_fn)(struct nvmd *, struct bio *);
+typedef void (nvm_alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
+typedef void *(nvm_begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
+typedef void (nvm_end_gc_private_fn)(struct nvmd *, void *);
+typedef void (nvm_defer_bio_fn)(struct nvmd *, struct bio *, void *);
+typedef void (nvm_bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
+typedef struct nvm_inflight* (nvm_get_inflight_map_fn)(struct nvmd *nvmd, struct nvm_addr *trans_map);
+
+struct nvm_target_type {
+	const char *name;
+	unsigned version[3];
+	nvm_map_ltop_fn map_ltop;
+	nvm_lookup_ltop_fn lookup_ltop;
+	nvm_lookup_ptol_fn lookup_ptol;
+	nvm_write_bio_fn write_bio;
+	nvm_read_bio_fn read_bio;
+	nvm_begin_gc_private_fn begin_gc_private;
+	nvm_end_gc_private_fn end_gc_private;
+	nvm_alloc_phys_addr_fn alloc_phys_addr;
+	nvm_defer_bio_fn defer_bio;
+	nvm_bio_wait_add_fn bio_wait_add;
+	nvm_get_inflight_map_fn get_inflight;
+
+	/* For lightnvm internal use */
+	struct list_head list;
+};
+
 /* Main structure */
 struct nvmd {
 	struct dm_dev *dev;
 	struct dm_target *ti;
 	uint32_t sector_size;
+
+	struct nvm_target_type *type;
 
 	/* Simple translation map of logical addresses to physical addresses. The
 	 * logical addresses is known by the host system, while the physical
@@ -301,19 +322,6 @@ struct nvmd {
 
 	unsigned int next_collect_pool;
 
-	/* Engine interface */
-	map_ltop_fn *map_ltop;
-	lookup_ltop_fn *lookup_ltop;
-	lookup_ptol_fn *lookup_ptol;
-	write_bio_fn *write_bio;
-	read_bio_fn *read_bio;
-	alloc_phys_addr_fn *alloc_phys_addr;
-	begin_gc_private_fn *begin_gc_private;
-	end_gc_private_fn *end_gc_private;
-	defer_bio_fn *defer_bio;
-	bio_wait_add_fn *bio_wait_add;
-	get_inflight_map_fn *get_inflight;
-
 	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
@@ -334,10 +342,10 @@ struct nvmd {
 	struct nvm_inflight inflight[NVM_INFLIGHT_PARTITIONS];
 	struct nvm_inflight_addr inflight_addrs[NVM_INFLIGHT_TAGS];
 
-	/* Hint related*/
-	void *hint_private;
+	/* nvm module specific data */
+	void *private;
 
-	/* Configuration */
+	/* User configuration */
 	struct nvm_config config;
 };
 
@@ -356,6 +364,11 @@ struct per_bio_data {
 	unsigned int ref_put;
 	struct nvm_addr *trans_map;
 };
+
+/* dm-lightnvm-mod.c */
+
+int nvm_register_target(struct nvm_target_type *t);
+void nvm_unregister_target(struct nvm_target_type *t);
 
 /* dm-lightnvm-c */
 
@@ -399,7 +412,6 @@ void nvm_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 void nvm_block_release(struct kref *);
 
 /*   Block maintanence */
-
 void nvm_pool_put_block(struct nvm_block *);
 void nvm_reset_block(struct nvm_block *);
 
@@ -408,7 +420,6 @@ void nvm_block_erase(struct kref *);
 void nvm_gc_cb(unsigned long data);
 void nvm_gc_collect(struct work_struct *work);
 void nvm_gc_kick(struct nvmd *nvmd);
-
 
 /* dm-lightnvm-hint.c */
 int nvm_alloc_hint(struct nvmd *);
@@ -472,11 +483,13 @@ static inline int page_is_fast(struct nvmd *nvmd, unsigned int pagenr)
 	return 0;
 }
 
-static inline struct nvm_pool *paddr_to_pool(struct nvmd *nvmd, sector_t p_addr){
+static inline struct nvm_pool *paddr_to_pool(struct nvmd *nvmd, sector_t p_addr)
+{
 	return &nvmd->pools[p_addr / (nvmd->nr_pages / nvmd->nr_pools)];
 }
 
-static inline struct nvm_ap *block_to_ap(struct nvmd *nvmd, struct nvm_block *block) {
+static inline struct nvm_ap *block_to_ap(struct nvmd *nvmd, struct nvm_block *block)
+{
 	unsigned int ap_idx, div, mod;
 
 	div = block->id / nvmd->nr_blks_per_pool;
@@ -494,8 +507,7 @@ static inline int physical_to_slot(struct nvmd *nvm, sector_t phys)
 
 static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 {
-	struct per_bio_data *pbd = bio->bi_private;
-	return pbd;
+	return pbd = bio->bi_private;
 }
 
 static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvm_inflight *inflight_map,

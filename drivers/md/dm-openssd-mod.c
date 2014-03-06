@@ -43,8 +43,35 @@
 
 #define MIN_POOL_PAGES 16
 
+static LIST_HEAD(_targets);
+static DECLARE_RWEM(_lock);
+
 static struct kmem_cache *_per_bio_cache;
 static struct kmem_cache *_addr_cache;
+
+static inline struct nvm_target_type *__find_nvm_target_type(const char *name)
+{
+	struct nvm_target_type *t;
+
+	list_for_each_entry(t, &_targets, list)
+		if (!strcmp(name, t->name))
+			return t;
+
+	return NULL;
+}
+
+int nvm_register_target(struct target_type *t)
+{
+	int ret = 0;
+
+	down_write(&_lock);
+	if (__find_nvm_target_type(t->name))
+		ret = -EEXIST;
+	else
+		list_add(&t->list, &_targets);
+	up_write(&_lock);
+	return ret;
+}
 
 static int nvm_ioctl(struct dm_target *ti, unsigned int cmd,
                          unsigned long arg)

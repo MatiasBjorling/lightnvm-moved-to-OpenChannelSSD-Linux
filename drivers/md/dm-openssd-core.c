@@ -596,15 +596,16 @@ static void nvm_endio(struct bio *bio, int err)
 	nvm_delay_endio_hint(nvmd, bio, pb, &dev_wait);
 
 	if (!(nvmd->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
+wait_longer:
 		getnstimeofday(&end_tv);
 		diff_tv = timespec_sub(end_tv, pb->start_tv);
 		diff = timespec_to_ns(&diff_tv) / 1000;
 		if (dev_wait > diff) {
 			total_wait = dev_wait - diff;
-			if (total_wait > 50) {
-				WARN_ON(total_wait > 1500);
-				udelay(total_wait);
-			}
+			WARN_ON(total_wait > 1500);
+			if (total_wait > 10)
+				udelay(5);
+			goto wait_longer;
 		}
 	}
 

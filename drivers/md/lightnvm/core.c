@@ -1,4 +1,4 @@
-#include "dm-openssd.h"
+#include "lightnvm.h"
 #include <linux/list.h>
 #include <linux/blkdev.h>
 #include <linux/time.h>

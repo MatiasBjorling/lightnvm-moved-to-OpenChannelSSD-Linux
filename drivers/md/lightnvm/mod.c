@@ -23,7 +23,7 @@
 
 #include <linux/percpu_ida.h>
 #include <linux/list.h>
-#include "dm-openssd.h"
+#include "lightnvm.h"
 
 /* Defaults */
 /* Number of append points per pool. We assume that accesses within a pool is

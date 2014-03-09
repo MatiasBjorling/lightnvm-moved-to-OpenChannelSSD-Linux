@@ -1,0 +1,31 @@
+config LIGHTNVM
+	tristate "LightNVM translation layer support (EXPERIMENTAL)"
+	depends on BLK_DEV_DM
+	---help---
+		A target that implements the internals of SSDs within the host.
+		The target can be used with LightNVM compatible device or as an
+		in-memory store. The device mapper is used together with a
+		"bare" firmware. It exposes direct access to the underlying NVM.
+		
+		To compile this code as a module, choose M here: the module will
+		be called dm-lightnvm.
+		
+		If unsure, say N.
+
+config LIGHTNVM_HINTS
+	tristate "Various application hints to be used by LightNVM"
+	---help---
+		Implements swap, latency and pack hints within the LightNVM layer.
+
+		If unsure, say N.
+
+config LIGHTNVM_INTERCEPTOR
+	tristate "An fadvise() system call interceptor for OpenSSD hinting"
+	---help---
+		An interceptor for fadvise hint advices to openssd target.
+		Used together with a dm-openssd device
+		
+		To compile this code as a module, choose M here: the module will
+		be called interceptor.
+		
+		If unsire, say N.

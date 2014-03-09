@@ -175,6 +175,7 @@ config MD_FAULTY
 	  In unsure, say N.
 
 source "drivers/md/bcache/Kconfig"
+source "drivers/md/lightnvm/Kconfig"
 
 config BLK_DEV_DM_BUILTIN
 	boolean

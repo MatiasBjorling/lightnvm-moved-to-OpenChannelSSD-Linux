@@ -702,7 +702,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
-	p = nvmd->lookup_ltop(nvmd, l_addr);
+	p = nvmd->type.lookup_ltop(nvmd, l_addr);
 
 	if (!p) {
 		nvm_defer_bio(nvmd, bio, NULL);

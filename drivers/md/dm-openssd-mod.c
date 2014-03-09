@@ -21,9 +21,9 @@
  *   nvm_block lists.
  */
 
-#include "dm-openssd.h"
-#include "dm-openssd-hint.h"
 #include <linux/percpu_ida.h>
+#include <linux/list.h>
+#include "dm-openssd.h"
 
 /* Defaults */
 /* Number of append points per pool. We assume that accesses within a pool is
@@ -44,7 +44,7 @@
 #define MIN_POOL_PAGES 16
 
 static LIST_HEAD(_targets);
-static DECLARE_RWEM(_lock);
+static DECLARE_RWSEM(_lock);
 
 static struct kmem_cache *_per_bio_cache;
 static struct kmem_cache *_addr_cache;
@@ -60,7 +60,7 @@ static inline struct nvm_target_type *__find_nvm_target_type(const char *name)
 	return NULL;
 }
 
-int nvm_register_target(struct target_type *t)
+int nvm_register_target(struct nvm_target_type *t)
 {
 	int ret = 0;
 
@@ -73,6 +73,12 @@ int nvm_register_target(struct target_type *t)
 	return ret;
 }
 
+void nvm_unregister_target(struct nvm_target_type *t)
+{
+	if (!t)
+		list_del(&t->list);
+}
+
 static int nvm_ioctl(struct dm_target *ti, unsigned int cmd,
                          unsigned long arg)
 {
@@ -80,22 +86,23 @@ static int nvm_ioctl(struct dm_target *ti, unsigned int cmd,
 
 	switch (cmd) {
 	case LIGHTNVM_IOCTL_ID:
-		return 12345678; // TODO: anything else?
+		return 0xCECECECE; // TODO: anything else?
 		break;
 	}
 
-	return nvm_ioctl_hint(nvmd, cmd, arg);
+	if (nvmd->type->nvm_ioctl)
+		nvmd->type->nvm_ioctl(nvmd, cmd, arg);
 }
 
 static int nvm_map(struct dm_target *ti, struct bio *bio)
 {
 	struct nvmd *nvmd = ti->private;
-	int ret;
+	int ret = DM_MAPIO_SUBMITTED;
 
 	if(bio->bi_sector < 0 || bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages){
 		DMERR("ERROR - %s illegal address %ld", (bio_data_dir(bio) == WRITE) ? "WRITE" : "READ", bio->bi_sector / NR_PHY_IN_LOG );
 		bio_io_error(bio);
-		return DM_MAPIO_SUBMITTED;
+		return ret;
 	};
 
 	bio->bi_bdev = nvmd->dev->bdev;
@@ -108,11 +115,11 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 	if (bio_data_dir(bio) == WRITE) {
 		if (bio_sectors(bio) != NR_PHY_IN_LOG) {
 			DMERR("Write: num of sectors not supported (%u)", bio_sectors(bio));
-			return DM_MAPIO_REQUEUE;
+			ret = DM_MAPIO_REQUEUE;
 		}
-		ret = nvmd->write_bio(nvmd, bio);
+		ret = nvmd->type->write_bio(nvmd, bio);
 	} else {
-		ret = nvmd->read_bio(nvmd, bio);
+		ret = nvmd->type->read_bio(nvmd, bio);
 	}
 
 	return ret;
@@ -321,15 +328,6 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	/* simple round-robin strategy */
 	atomic_set(&nvmd->next_write_ap, -1);
 
-	nvmd->lookup_ltop = nvm_lookup_ltop;
-	nvmd->lookup_ptol = nvm_lookup_ptol;
-	nvmd->map_ltop = nvm_map_ltop_rr;
-	nvmd->write_bio = nvm_write_bio;
-	nvmd->read_bio = nvm_read_bio;
-	nvmd->defer_bio = nvm_defer_bio;
-	nvmd->bio_wait_add = nvm_bio_wait_add;
-	nvmd->get_inflight = nvm_get_inflight;
-
 	nvmd->ti = ti;
 	ti->private = nvmd;
 
@@ -378,7 +376,7 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	nvmd = kzalloc(sizeof(*nvmd), GFP_KERNEL);
 	if (!nvmd) {
-		ti->error = "Cannot allocate data structures";
+		ti->error = "No enough memory for data structures";
 		return -ENOMEM;
 	}
 
@@ -387,14 +385,11 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	dm_set_target_max_io_len(ti, NR_PHY_IN_LOG);
 
-	if (!strcmp(argv[1], "swap"))
-		nvmd->config.flags |= NVM_OPT_ENGINE_SWAP;
-	else if (!strcmp(argv[1], "latency"))
-		nvmd->config.flags |=
-		        (NVM_OPT_ENGINE_LATENCY | NVM_OPT_ENGINE_IOCTL);
-	else if (!strcmp(argv[1], "pack"))
-		nvmd->config.flags |=
-		        (NVM_OPT_ENGINE_PACK | NVM_OPT_ENGINE_IOCTL);
+	nvmd->type = __find_nvm_target_type(argv[1]);
+	if (!nvmd->type) {
+		ti->error = "NVM target type doesn't exist";
+		goto err_map;
+	}
 
 	if (sscanf(argv[2], "%u%c", &tmp, &dummy) != 1) {
 		ti->error = "Cannot read number of pools";
@@ -552,6 +547,18 @@ static void nvm_dtr(struct dm_target *ti)
 	DMINFO("dm-lightnvm successfully unloaded");
 }
 
+/* none target type, round robin, page-based FTL, and cost-based GC */
+static struct nvm_target_type nvm_target_none = {
+	.nvm_lookup_ltop = nvm_lookup_ltop;
+	.nvm_lookup_ptol = nvm_lookup_ptol;
+	.nvm_map_ltop = nvm_map_ltop_rr;
+	.nvm_write_bio = nvm_write_bio;
+	.nvm_read_bio = nvm_read_bio;
+	.nvm_defer_bio = nvm_defer_bio;
+	.nvm_bio_wait_add = nvm_bio_wait_add;
+	.nvm_get_inflight = nvm_get_inflight;
+};
+
 static struct target_type lightnvm_target = {
 	.name		= "lightnvm",
 	.version	= {1, 0, 0},
@@ -576,6 +583,8 @@ static int __init dm_lightnvm_init(void)
 				sizeof(struct nvm_addr), 0, 0, NULL);
 	if (!_addr_cache)
 		goto err_pbc;
+
+	nvm_register_target(&nvm_target_none);
 
 	ret = dm_register_target(&lightnvm_target);
 	if (ret < 0) {

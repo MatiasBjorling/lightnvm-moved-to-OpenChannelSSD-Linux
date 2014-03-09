@@ -248,29 +248,45 @@ typedef struct nvm_rev_addr *(*nvm_lookup_ptol_fn)(struct nvmd *, sector_t);
 typedef int (*nvm_write_bio_fn)(struct nvmd *, struct bio *);
 typedef int (*nvm_read_bio_fn)(struct nvmd *, struct bio *);
 typedef void (*nvm_alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
-typedef void *(*nvm_begin_gc_private_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
-typedef void (*nvm_end_gc_private_fn)(struct nvmd *, void *);
+typedef void *(*nvm_begin_gc_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
+typedef void (*nvm_end_gc_fn)(struct nvmd *, void *);
 typedef void (*nvm_defer_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef void (*nvm_bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
 typedef struct nvm_inflight* (*nvm_get_inflight_map_fn)(struct nvmd *nvmd, struct nvm_addr *trans_map);
 typedef int (*nvm_ioctl_fn)(struct nvmd *nvmd, unsigned int cmd, unsigned long arg);
+typedef int (*nvm_init_fn)(struct nvmd *nvmd);
+typedef void (*nvm_exit_fn)(struct nvmd *nvmd);
+typedef void (*nvm_endio_fn)(struct nvmd *nvmd, struct bio *bio, struct per_bio_data *pb, unsigned long *delay);
 
 struct nvm_target_type {
 	const char *name;
 	unsigned version[3];
 	nvm_map_ltop_fn map_ltop;
+
+	/* lookup functions */
 	nvm_lookup_ltop_fn lookup_ltop;
 	nvm_lookup_ptol_fn lookup_ptol;
+
+	/* handling of bios */
 	nvm_write_bio_fn write_bio;
 	nvm_read_bio_fn read_bio;
-	nvm_begin_gc_private_fn begin_gc_private;
-	nvm_end_gc_private_fn end_gc_private;
+	nvm_ioctl_fn ioctl;
+	nvm_endio_fn endio;
+
+	/* GC specific */
+	nvm_begin_gc_fn begin_gc;
+	nvm_end_gc_fn end_gc;
+
+	/* engine specific overrides */
 	nvm_alloc_phys_addr_fn alloc_phys_addr;
 	nvm_defer_bio_fn defer_bio;
 	nvm_bio_wait_add_fn bio_wait_add;
 	nvm_get_inflight_map_fn get_inflight;
 
-	nvm_ioctl_fn nvm_ioctl;
+	/* module specific init/teardown */
+	nvm_init_fn init;
+	nvm_exit_fn exit;
+
 	/* For lightnvm internal use */
 	struct list_head list;
 };

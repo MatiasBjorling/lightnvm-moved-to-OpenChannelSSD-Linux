@@ -1,5 +1,4 @@
-#include "dm-openssd.h"
-#include "dm-openssd-hint.h"
+#include "lightnvm.h"
 
 /* Run only GC if less than 1/X blocks are free */
 #define GC_LIMIT_INVERSE 10
@@ -62,7 +61,6 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	struct nvm_rev_addr *rev;
 	struct bio *src_bio;
 	struct page *page;
-	sector_t l_addr;
 	int slot = -1;
 	void *gc_private = NULL;
 	DECLARE_COMPLETION(sync);
@@ -97,7 +95,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
-		rev = nvmd->lookup_ptol(nvmd, src.addr);
+		rev = nvmd->type->lookup_ptol(nvmd, src.addr);
 
 		/* remap src_bio to write the logical addr to new physical
 		 * place */
@@ -109,15 +107,15 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		src_bio->bi_sector = rev->addr * NR_PHY_IN_LOG;
 
 		gc_private = NULL;
-		if (nvmd->begin_gc_private)
-			gc_private = nvmd->begin_gc_private(nvmd, rev->addr, src.addr, block);
+		if (nvmd->type->begin_gc)
+			gc_private = nvmd->type->begin_gc(nvmd, rev->addr, src.addr, block);
 
 		init_completion(&sync);
 		nvm_write_execute_bio(nvmd, src_bio, 1, gc_private, &sync, rev->trans_map, 1);
 		wait_for_completion(&sync);
 
-		if (nvmd->end_gc_private)
-			nvmd->end_gc_private(nvmd, gc_private);
+		if (nvmd->type->end_gc)
+			nvmd->type->end_gc(nvmd, gc_private);
 
 		bio_put(src_bio);
 		mempool_free(page, nvmd->page_pool);

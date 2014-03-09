@@ -1093,6 +1093,8 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 		INIT_LIST_HEAD(&hint->inflight[i].list);
 	}
 
+	/* TODO setup init/exit links */
+	/* TODO remember to enable nvm_delay_endio_hint */
 	if (nvmd->config.flags & NVM_OPT_ENGINE_SWAP) {
 		DMINFO("Swap hint support");
 		nvmd->map_ltop = nvm_map_swap_hint_ltop_rr;

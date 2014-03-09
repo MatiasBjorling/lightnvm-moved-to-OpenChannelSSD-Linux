@@ -6,8 +6,6 @@
  * Todo
  *
  * - Implement fetching of bad pages from flash
- *
- * Hints
  * - configurable sector size
  * - handle case of in-page bv_offset (currently hidden assumption of offset=0,
  *   and bv_len spans entire page)
@@ -90,8 +88,10 @@ static int nvm_ioctl(struct dm_target *ti, unsigned int cmd,
 		break;
 	}
 
-	if (nvmd->type->nvm_ioctl)
-		nvmd->type->nvm_ioctl(nvmd, cmd, arg);
+	if (nvmd->type->ioctl)
+		return nvmd->type->ioctl(nvmd, cmd, arg);
+
+	return 0;
 }
 
 static int nvm_map(struct dm_target *ti, struct bio *bio)
@@ -334,7 +334,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	/* Initialize pools. */
 	nvm_pool_init(nvmd, ti);
 
-	if (nvm_alloc_hint(nvmd))
+	if (nvmd->type->init && nvmd->type->init(nvmd))
 		goto err_block_page_pool;
 
 	// FIXME: Clean up pool init on failure.
@@ -512,7 +512,8 @@ static void nvm_dtr(struct dm_target *ti)
 	struct nvm_pool *pool;
 	int i;
 
-	nvm_free_hint(nvmd);
+	if (nvmd->type->exit)
+		nvmd->type->exit(nvmd);
 
 	ssd_for_each_pool(nvmd, pool, i) {
 		while (bio_list_peek(&pool->waiting_bios))
@@ -549,14 +550,16 @@ static void nvm_dtr(struct dm_target *ti)
 
 /* none target type, round robin, page-based FTL, and cost-based GC */
 static struct nvm_target_type nvm_target_none = {
-	.nvm_lookup_ltop = nvm_lookup_ltop;
-	.nvm_lookup_ptol = nvm_lookup_ptol;
-	.nvm_map_ltop = nvm_map_ltop_rr;
-	.nvm_write_bio = nvm_write_bio;
-	.nvm_read_bio = nvm_read_bio;
-	.nvm_defer_bio = nvm_defer_bio;
-	.nvm_bio_wait_add = nvm_bio_wait_add;
-	.nvm_get_inflight = nvm_get_inflight;
+	.name			= "none",
+	.version		= {1, 0, 0},
+	.lookup_ltop	= nvm_lookup_ltop,
+	.lookup_ptol	= nvm_lookup_ptol,
+	.map_ltop	= nvm_map_ltop_rr,
+	.write_bio	= nvm_write_bio,
+	.read_bio	= nvm_read_bio,
+	.defer_bio	= nvm_defer_bio,
+	.bio_wait_add	= nvm_bio_wait_add,
+	.get_inflight	= nvm_get_inflight,
 };
 
 static struct target_type lightnvm_target = {

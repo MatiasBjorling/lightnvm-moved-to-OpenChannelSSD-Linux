@@ -82,9 +82,9 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 		bio->bi_next = NULL;
 		//DMERR("undefer bio %s l_addr %ld", bio_data_dir(bio)==WRITE?"write":"read", bio->bi_sector / 8);
 		if (bio_data_dir(bio) == WRITE)
-			nvmd->write_bio(nvmd, bio);
+			nvmd->type->write_bio(nvmd, bio);
 		else
-			nvmd->read_bio(nvmd, bio);
+			nvmd->type->read_bio(nvmd, bio);
 		bio = next;
 	}
 }
@@ -119,7 +119,6 @@ void nvm_delayed_bio_defer(struct work_struct *work)
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
 	struct per_bio_data *pb;
-	unsigned int sync;
 
 	spin_lock(&pool->waiting_lock);
 	if (atomic_inc_return(&pool->is_active) != 1) {
@@ -133,7 +132,6 @@ void nvm_delayed_bio_defer(struct work_struct *work)
 
 	if (!bio) {
 		atomic_dec(&pool->is_active);
-		printk("father\n");
 		return;
 	}
 
@@ -162,7 +160,7 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 {
 	struct nvm_addr *gp;
 	struct nvm_rev_addr *rev;
-	int i = 0, ret, flag = 0;
+
 	BUG_ON(l_addr >= nvmd->nr_pages);
 	BUG_ON(p->addr >= nvmd->nr_pages);
 
@@ -299,8 +297,8 @@ static sector_t __nvm_alloc_phys_addr(struct nvm_block *block, int req_fast)
 	       (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
 	block->next_offset++;
 
-	if (nvmd->alloc_phys_addr)
-		nvmd->alloc_phys_addr(nvmd, block);
+	if (nvmd->type->alloc_phys_addr)
+		nvmd->type->alloc_phys_addr(nvmd, block);
 out:
 	spin_unlock(&block->lock);
 	return addr;
@@ -581,7 +579,7 @@ static void nvm_endio(struct bio *bio, int err)
 			spin_unlock(&pool->gc_lock);
 		}
 		
-		nvm_unlock_addr(nvmd, nvmd->get_inflight(nvmd, pb->trans_map), pb->l_addr);
+		nvm_unlock_addr(nvmd, nvmd->type->get_inflight(nvmd, pb->trans_map), pb->l_addr);
 
 		/* physical waits if hardware doesn't have a real backend */
 		dev_wait = ap->t_write;
@@ -592,8 +590,8 @@ static void nvm_endio(struct bio *bio, int err)
 		spin_unlock(&nvmd->trans_lock);
 	}
 
-	/* dev_wait of fast/slow pages (for swap) */
-	nvm_delay_endio_hint(nvmd, bio, pb, &dev_wait);
+	if (nvmd->type->endio)
+		nvmd->type->endio(nvmd, bio, pb, &dev_wait);
 
 	if (!(nvmd->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
 wait_longer:
@@ -702,7 +700,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
-	p = nvmd->type.lookup_ltop(nvmd, l_addr);
+	p = nvmd->type->lookup_ltop(nvmd, l_addr);
 
 	if (!p) {
 		nvm_defer_bio(nvmd, bio, NULL);
@@ -783,10 +781,10 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
-	p = nvmd->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
+	p = nvmd->type->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
 
 	if (p) {
-		if (p == LTOP_POISON) {
+		if ((unsigned long)p == LTOP_POISON) {
 			BUG_ON(!is_gc);
 			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
 			if(sync)
@@ -794,7 +792,7 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 			return NVM_WRITE_GC_ABORT;
 		}
 
-		nvm_lock_addr(nvmd, nvmd->get_inflight(nvmd, trans_map), l_addr);
+		nvm_lock_addr(nvmd, nvmd->type->get_inflight(nvmd, trans_map), l_addr);
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		if (complete_bio)
@@ -806,7 +804,7 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	} else {
 		BUG_ON(is_gc);
 		//DMERR("cant execute, defering %s %s bio l_addr", trans_map==nvmd->trans_map?"primary":"shadow", bio_data_dir(bio)==WRITE?"write":"read", l_addr);
-		nvmd->defer_bio(nvmd, bio, trans_map);
+		nvmd->type->defer_bio(nvmd, bio, trans_map);
 		nvm_gc_kick(nvmd);
 
 		return NVM_WRITE_DEFERRED;
@@ -868,8 +866,8 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		//DMERR("nvm_submit_bio: submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
 		spin_lock(&pool->waiting_lock);
-		pool->time_to_wait += (rw==WRITE)?ap->t_write:ap->t_read;
-		nvmd->bio_wait_add(&pool->waiting_bios, bio, p_private);
+		pool->time_to_wait += (rw == WRITE) ? ap->t_write : ap->t_read;
+		nvmd->type->bio_wait_add(&pool->waiting_bios, bio, p_private);
 
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);

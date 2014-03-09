@@ -1,3 +1,2 @@
-obj-$(CONFIG_LIGHTNVM)	+= mod.o core.o gc.o
-
-lightnvm-y += mod.o core.o gc.o
+obj-$(CONFIG_LIGHTNVM)		+= lightnvm.o reg.o core.o gc.o
+obj-$(CONFIG_LIGHTNVM_HINTS)	+= hints.o

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Matias Bjørling.
+ * Copyright (C) 2014 Matias Bjørling.
  *
  * This file is released under the GPL.
  */
@@ -34,7 +34,6 @@
 #define DM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
 #define LTOP_POISON 3133731337
-
 
 /*
  * For now we hardcode some of the configuration for the LightNVM device that we
@@ -196,7 +195,7 @@ struct nvm_pool {
  * a new block, of which it continues its writes.
  *
  * one ap per pool may be reserved for pack-hints related writes. 
- * In those that are not not, hint_private is NULL.
+ * In those that are not not, private is NULL.
  */
 struct nvm_ap {
 	spinlock_t lock;
@@ -213,8 +212,8 @@ struct nvm_ap {
 	unsigned long io_delayed;
 	unsigned long io_accesses[2];
 
-	/* Hint related*/
-	void *hint_private;
+	/* Private field for submodules */
+	void *private;
 };
 
 struct nvm_config {
@@ -383,13 +382,12 @@ struct per_bio_data {
 	struct nvm_addr *trans_map;
 };
 
-/* dm-lightnvm-mod.c */
-
+/* reg.c */
 int nvm_register_target(struct nvm_target_type *t);
 void nvm_unregister_target(struct nvm_target_type *t);
+struct nvm_target_type *find_nvm_target_type(const char *name);
 
-/* dm-lightnvm.c */
-
+/* core.c */
 /*   Helpers */
 void invalidate_block_page(struct nvmd *, struct nvm_addr *);
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
@@ -433,24 +431,11 @@ void nvm_block_release(struct kref *);
 void nvm_pool_put_block(struct nvm_block *);
 void nvm_reset_block(struct nvm_block *);
 
-/* dm-lightnvm-gc.c */
+/* gc.c */
 void nvm_block_erase(struct kref *);
 void nvm_gc_cb(unsigned long data);
 void nvm_gc_collect(struct work_struct *work);
 void nvm_gc_kick(struct nvmd *nvmd);
-
-/* dm-lightnvm-hint.c */
-int nvm_alloc_hint(struct nvmd *);
-int nvm_init_hint(struct nvmd *);
-void nvm_exit_hint(struct nvmd *);
-void nvm_free_hint(struct nvmd *);
-
-/*   Hint core */
-int nvm_ioctl_hint(struct nvmd *, unsigned int cmd, unsigned long arg);
-
-/*   Callbacks */
-void nvm_delay_endio_hint(struct nvmd *, struct bio *bio, struct per_bio_data *pb, unsigned long *delay);
-void nvm_bio_hint(struct nvmd *, struct bio *bio);
 
 #define ssd_for_each_pool(nvmd, pool, i)									\
 		for ((i) = 0, pool = &(nvmd)->pools[0];							\
@@ -581,5 +566,4 @@ static inline void nvm_unlock_addr(struct nvmd *nvmd, struct nvm_inflight *infli
 }
 
 #endif
-
 #endif /* DM_LIGHTNVM_H_ */

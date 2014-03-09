@@ -20,7 +20,6 @@
  */
 
 #include <linux/percpu_ida.h>
-#include <linux/list.h>
 #include "lightnvm.h"
 
 /* Defaults */
@@ -41,41 +40,8 @@
 
 #define MIN_POOL_PAGES 16
 
-static LIST_HEAD(_targets);
-static DECLARE_RWSEM(_lock);
-
 static struct kmem_cache *_per_bio_cache;
 static struct kmem_cache *_addr_cache;
-
-static inline struct nvm_target_type *__find_nvm_target_type(const char *name)
-{
-	struct nvm_target_type *t;
-
-	list_for_each_entry(t, &_targets, list)
-		if (!strcmp(name, t->name))
-			return t;
-
-	return NULL;
-}
-
-int nvm_register_target(struct nvm_target_type *t)
-{
-	int ret = 0;
-
-	down_write(&_lock);
-	if (__find_nvm_target_type(t->name))
-		ret = -EEXIST;
-	else
-		list_add(&t->list, &_targets);
-	up_write(&_lock);
-	return ret;
-}
-
-void nvm_unregister_target(struct nvm_target_type *t)
-{
-	if (!t)
-		list_del(&t->list);
-}
 
 static int nvm_ioctl(struct dm_target *ti, unsigned int cmd,
                          unsigned long arg)
@@ -385,7 +351,7 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 
 	dm_set_target_max_io_len(ti, NR_PHY_IN_LOG);
 
-	nvmd->type = __find_nvm_target_type(argv[1]);
+	nvmd->type = find_nvm_target_type(argv[1]);
 	if (!nvmd->type) {
 		ti->error = "NVM target type doesn't exist";
 		goto err_map;
@@ -605,9 +571,9 @@ err_pbc:
 
 static void __exit dm_lightnvm_exit(void)
 {
+	dm_unregister_target(&lightnvm_target);
 	kmem_cache_destroy(_per_bio_cache);
 	kmem_cache_destroy(_addr_cache);
-	dm_unregister_target(&lightnvm_target);
 }
 
 module_init(dm_lightnvm_init);

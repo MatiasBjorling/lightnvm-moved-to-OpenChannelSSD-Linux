@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Matias Bjørling.
+ * Copyright (C) 2014 Aviad Zuck.
  *
  * This file is released under the GPL.
  */
@@ -8,7 +8,7 @@
 #define DM_LIGHTNVM_HINT_H_
 
 #include <linux/types.h>
-#include "dm-openssd.h"
+#include "lightnvm.h"
 
 #define LIGHTNVM_IOCTL_SUBMIT_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x41, struct hint_payload)
 #define LIGHTNVM_IOCTL_KERNEL_HINT _IOW(LIGHTNVM_IOC_MAGIC, 0x42, struct hint_payload)
@@ -100,7 +100,7 @@ struct nvm_ap_hint {
 
 static inline void init_ap_hint(struct nvm_ap *ap)
 {
-	struct nvm_ap_hint *ap_hint = ap->hint_private;
+	struct nvm_ap_hint *ap_hint = ap->private;
 	ap_hint->ino = INODE_EMPTY;
 }
 #endif

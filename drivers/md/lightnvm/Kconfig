@@ -14,6 +14,7 @@ config LIGHTNVM
 
 config LIGHTNVM_HINTS
 	tristate "Various application hints to be used by LightNVM"
+	depends on LIGHTNVM
 	---help---
 		Implements swap, latency and pack hints within the LightNVM layer.
 
@@ -21,6 +22,7 @@ config LIGHTNVM_HINTS
 
 config LIGHTNVM_INTERCEPTOR
 	tristate "An fadvise() system call interceptor for OpenSSD hinting"
+	depends on LIGHTNVM
 	---help---
 		An interceptor for fadvise hint advices to openssd target.
 		Used together with a dm-openssd device

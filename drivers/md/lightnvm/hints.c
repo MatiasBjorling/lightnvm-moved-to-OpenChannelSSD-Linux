@@ -1,5 +1,5 @@
-#include "dm-openssd.h"
-#include "dm-openssd-hint.h"
+#include "lightnvm.h"
+#include "hints.h"
 
 static struct kmem_cache *_map_alloc_cache;
 
@@ -72,7 +72,7 @@ void nvm_end_gc_hint(struct nvmd *nvmd, void *private)
 {
 	struct nvm_hint *hint;
 	if (private) {
-		hint = nvmd->hint_private;
+		hint = nvmd->private;
 		mempool_free(private, hint->map_alloc_pool);
 	}
 }
@@ -80,7 +80,7 @@ void nvm_end_gc_hint(struct nvmd *nvmd, void *private)
 // iterate hints list, and check if lba of current req is covered by some hint
 struct hint_info *nvm_find_hint(struct nvmd *nvmd, sector_t l_addr, bool is_write)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	struct hint_info *info = NULL;
 	struct list_head *node;
 
@@ -158,7 +158,7 @@ int nvm_is_fc_packable(enum fclass fc)
    and update ino_hint map when necessary*/
 static int nvm_send_hint(struct nvmd *nvmd, struct hint_payload *d)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	struct hint_info *info;
 
 	if (!(nvmd->config.flags &
@@ -376,7 +376,7 @@ static void free_shadow_bio(struct nvmd *nvmd, struct bio *shadow_bio, struct pa
 /* if we ever support trim, this may be unified with some generic function */
 static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	struct nvm_block *block;
 	struct nvm_addr *gp;
 
@@ -402,7 +402,7 @@ static void nvm_trim_map_shadow(struct nvmd *nvmd, sector_t l_addr)
 
 struct nvm_hint_map_private *alloc_latency_hint_data(struct nvmd *nvmd, unsigned long flags, sector_t old_p_addr, struct hint_info *info, struct page *page)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	struct nvm_hint_map_private *mad = mempool_alloc(hint->map_alloc_pool, GFP_NOIO);
 
 	if (!mad)
@@ -428,7 +428,7 @@ static void free_shadow_bio(struct nvmd *nvmd, struct bio *shadow_bio, struct pa
 #define TEST_LAT 0
 static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	struct hint_info *info = NULL;
 	sector_t l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 	int ret;
@@ -491,7 +491,7 @@ void nvm_alloc_phys_addr_pack(struct nvmd *nvmd, struct nvm_block *block)
 	if (block_is_full(block)) {
 		DMDEBUG("__nvm_alloc_phys_addr - block is full. init ap_hint. block->parent_ap %p", block->ap);
 		BUG_ON(!block->ap);
-		if (block->ap->hint_private)
+		if (block->ap->private)
 			init_ap_hint(block->ap);
 		block->ap = NULL;
 	}
@@ -511,10 +511,10 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 	for (i = 0; i < nvmd->nr_pools; i++) {
 		ap = &nvmd->aps[i];
 		/* not hint related */
-		if(!ap->hint_private)
+		if(!ap->private)
 			continue;
 
-		ap_pack_data = ap->hint_private;
+		ap_pack_data = ap->private;
 
 		/* got it */
 		if (ap_pack_data->ino == map_alloc_data->info->hint.ino) {
@@ -538,10 +538,10 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 		ap = get_next_ap(nvmd);
 
 		/* not hint associated */
-		if(!ap->hint_private)
+		if(!ap->private)
 			continue;
 
-		ap_pack_data = (struct nvm_ap_hint*)ap->hint_private;
+		ap_pack_data = (struct nvm_ap_hint*)ap->private;
 
 		/* associated to an other inode */
 		if(ap_pack_data->ino != INODE_EMPTY &&
@@ -576,7 +576,7 @@ struct nvm_addr *nvm_alloc_phys_pack_addr(struct nvmd *nvmd,
 	/* TODO: overtake "regular" ap? return error? */
 	do {
 		ap = get_next_ap(nvmd);
-	} while (ap->hint_private);
+	} while (ap->private);
 
 	spin_lock(&ap->lock);
 	p = nvm_alloc_addr_from_ap(ap, 0);
@@ -691,14 +691,14 @@ void nvm_bio_wait_add_prio(struct bio_list *bl, struct bio *bio, void *p_private
 
 struct nvm_inflight* nvm_hint_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map) 
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	return (trans_map==nvmd->trans_map)?nvmd->inflight:hint->inflight;
 }
 
 #if 0
 static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr, void *prio_o)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	struct nvm_pool *pool1, *pool2;
 	struct nvm_addr *shadow_p, *primary_p;
 	struct bio *cur_bio1, *cur_bio2;
@@ -802,7 +802,7 @@ read_shadow:
 #if 0
 static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr)
 {
-        struct nvm_hint *hint = nvmd->hint_private;
+        struct nvm_hint *hint = nvmd->private;
         struct nvm_pool *pool1, *pool2;
         struct nvm_addr *shadow_p, *primary_p;
         struct bio *cur_bio1, *cur_bio2;
@@ -923,7 +923,7 @@ read_shadow:
 #if 1
 static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr)
 {
-        struct nvm_hint *hint = nvmd->hint_private;
+        struct nvm_hint *hint = nvmd->private;
         struct nvm_pool *pool1, *pool2;
         struct nvm_addr *shadow_p, *primary_p;
         void *prio = 0;
@@ -978,7 +978,7 @@ read_shadow:
 #endif
 static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_addr, sector_t old_p_addr)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
+	struct nvm_hint *hint = nvmd->private;
 	unsigned long flag = MAP_PRIMARY;
 
 	if (old_p_addr != LTOP_EMPTY) {
@@ -1000,7 +1000,7 @@ static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_ad
 	return flag;
 }
 
-int nvm_ioctl_user_hint_cmd(struct nvmd *nvmd, unsigned long arg)
+static int nvm_ioctl_user_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
 	struct hint_payload __user *uhint = (struct hint_payload*)arg;
 	struct hint_payload khint;
@@ -1011,12 +1011,12 @@ int nvm_ioctl_user_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 	return nvm_send_hint(nvmd, &khint);
 }
 
-int nvm_ioctl_kernel_hint_cmd(struct nvmd *nvmd, unsigned long arg)
+static int nvm_ioctl_kernel_hint_cmd(struct nvmd *nvmd, unsigned long arg)
 {
 	return nvm_send_hint(nvmd, (struct hint_payload *)arg);
 }
 
-int nvm_ioctl_hint(struct nvmd *nvmd, unsigned int cmd, unsigned long arg)
+static int nvm_ioctl_hint(struct nvmd *nvmd, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
 	case LIGHTNVM_IOCTL_SUBMIT_HINT:
@@ -1028,12 +1028,33 @@ int nvm_ioctl_hint(struct nvmd *nvmd, unsigned int cmd, unsigned long arg)
 	}
 }
 
-int nvm_init_hint(struct nvmd *nvmd)
+static void nvm_exit_hint(struct nvmd *nvmd)
 {
-	return 0;
+	struct nvm_hint *hint = nvmd->private;
+	struct hint_info *info, *next_info;
+	struct nvm_ap *ap;
+	int i;
+
+	spin_lock(&hint->lock);
+	list_for_each_entry_safe(info, next_info, &hint->hints, list_member) {
+		list_del(&info->list_member);
+		kfree(info);
+	}
+	spin_unlock(&hint->lock);
+
+	kfree(hint->ino2fc);
+	vfree(hint->shadow_map);
+
+	/* mark all pack hint related ap's*/
+	ssd_for_each_ap(nvmd, ap, i)
+		kfree(ap->private);
+
+	mempool_destroy(hint->map_alloc_pool);
+	kmem_cache_destroy(_map_alloc_cache);
+	kfree(nvmd->private);
 }
 
-int nvm_alloc_hint(struct nvmd *nvmd)
+static int nvm_init_hint(struct nvmd *nvmd)
 {
 	struct nvm_hint *hint;
 	struct nvm_ap *ap;
@@ -1078,9 +1099,9 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 		last_ap = (i * nvmd->nr_aps_per_pool) + nvmd->nr_aps_per_pool - 1;
 		ap = &nvmd->aps[last_ap];
 
-		ap->hint_private = kmalloc(sizeof(struct nvm_ap_hint),
+		ap->private = kmalloc(sizeof(struct nvm_ap_hint),
 								GFP_KERNEL);
-		if (!ap->hint_private) {
+		if (!ap->private) {
 			DMERR("Couldn't allocate hint private for ap.");
 			goto err_ap_hints;
 		}
@@ -1093,45 +1114,17 @@ int nvm_alloc_hint(struct nvmd *nvmd)
 		INIT_LIST_HEAD(&hint->inflight[i].list);
 	}
 
-	/* TODO setup init/exit links */
-	/* TODO remember to enable nvm_delay_endio_hint */
-	if (nvmd->config.flags & NVM_OPT_ENGINE_SWAP) {
-		DMINFO("Swap hint support");
-		nvmd->map_ltop = nvm_map_swap_hint_ltop_rr;
-		nvmd->write_bio = nvm_write_bio_hint;
-		nvmd->read_bio = nvm_read_bio_hint;
-	} else if (nvmd->config.flags & NVM_OPT_ENGINE_LATENCY) {
-		DMINFO("Latency hint support");
-		nvmd->lookup_ltop = nvm_latency_lookup_ltop;
-		nvmd->write_bio = nvm_write_bio_hint;
-		nvmd->read_bio = nvm_read_bio_hint;
-		nvmd->defer_bio = nvm_hint_defer_bio;
-		nvmd->bio_wait_add = nvm_bio_wait_add_prio;
-		nvmd->get_inflight = nvm_hint_get_inflight;
-	} else if (nvmd->config.flags & NVM_OPT_ENGINE_PACK) {
-		DMINFO("Pack hint support");
-		nvmd->map_ltop = nvm_map_pack_hint_ltop_rr;
-		nvmd->alloc_phys_addr = nvm_alloc_phys_addr_pack;
-		nvmd->write_bio = nvm_write_bio_hint;
-		nvmd->read_bio = nvm_read_bio_hint;
-
-		if (nvmd->nr_aps_per_pool < 2 ) {
-			DMERR("Need at least 2 aps for pack hints");
-			goto err_hints;
-		}
-	}
-
-	nvmd->hint_private = hint;
+	nvmd->private = hint;
 
 	return 0;
 err_ap_hints:
 	ssd_for_each_ap(nvmd, ap, i)
-		kfree(ap->hint_private);
+		kfree(ap->private);
 	mempool_destroy(hint->map_alloc_pool);
 err_mac:
 	kmem_cache_destroy(_map_alloc_cache);
 err_map_alloc:
-	kfree(hint->ino2fc);		
+	kfree(hint->ino2fc);
 err_hints:
 	vfree(hint->shadow_map);
 err_shadow_map:
@@ -1139,33 +1132,95 @@ err_shadow_map:
 	return -ENOMEM;
 }
 
-void nvm_free_hint(struct nvmd *nvmd)
+static int nvm_init_hint_pack(struct nvmd *nvmd)
 {
-	struct nvm_hint *hint = nvmd->hint_private;
-	struct hint_info *info, *next_info;
-	struct nvm_ap *ap;
-	int i;
-
-	spin_lock(&hint->lock);
-	list_for_each_entry_safe(info, next_info, &hint->hints, list_member) {
-		list_del(&info->list_member);
-		kfree(info);
+	if (nvmd->nr_aps_per_pool < 2 ) {
+		DMERR("Need at least 2 aps for pack hints");
+		return -ENOSPC;
 	}
-	spin_unlock(&hint->lock);
 
-	kfree(hint->ino2fc);
-	vfree(hint->shadow_map);
-
-	/* mark all pack hint related ap's*/
-	ssd_for_each_ap(nvmd, ap, i)
-		kfree(ap->hint_private);
-
-	mempool_destroy(hint->map_alloc_pool);
-	kmem_cache_destroy(_map_alloc_cache);
-	kfree(nvmd->hint_private);
+	return nvm_init_hint(nvmd);
 }
 
-void nvm_exit_hint(struct nvmd *nvmd)
+static struct nvm_target_type nvm_target_swap = {
+	.name = "swap",
+	.version = {1, 0, 0},
+
+	/* hint specific */
+	.map_ltop = nvm_map_swap_hint_ltop_rr,
+	.write_bio = nvm_write_bio_hint,
+	.read_bio = nvm_read_bio_hint,
+	.endio = nvm_delay_endio_hint,
+	.init = nvm_init_hint,
+	.exit = nvm_exit_hint,
+
+	/* core routines */
+	.lookup_ltop	= nvm_lookup_ltop,
+	.lookup_ptol	= nvm_lookup_ptol,
+	.defer_bio	= nvm_defer_bio,
+	.bio_wait_add	= nvm_bio_wait_add,
+	.get_inflight	= nvm_get_inflight,
+};
+
+static struct nvm_target_type nvm_target_latency = {
+	.name = "latency",
+	.version = {1, 0, 0},
+
+	/* hint specific */
+	.lookup_ltop = nvm_latency_lookup_ltop,
+	.write_bio = nvm_write_bio_hint,
+	.read_bio = nvm_read_bio_hint,
+	.defer_bio = nvm_hint_defer_bio,
+	.bio_wait_add = nvm_bio_wait_add_prio,
+	.get_inflight = nvm_hint_get_inflight,
+	.endio = nvm_delay_endio_hint,
+	.init = nvm_init_hint,
+	.exit = nvm_exit_hint,
+
+	/* core routines */
+	.lookup_ptol	= nvm_lookup_ptol,
+	.map_ltop	= nvm_map_ltop_rr,
+};
+
+static struct nvm_target_type nvm_target_pack = {
+	.name = "pack",
+	.version = {1, 0, 0},
+
+	/* hint specific */
+	.map_ltop = nvm_map_pack_hint_ltop_rr,
+	.alloc_phys_addr = nvm_alloc_phys_addr_pack,
+	.write_bio = nvm_write_bio_hint,
+	.read_bio = nvm_read_bio_hint,
+	.endio = nvm_delay_endio_hint,
+	.init = nvm_init_hint_pack,
+	.exit = nvm_exit_hint,
+
+	/* core routines */
+	.lookup_ltop	= nvm_lookup_ltop,
+	.lookup_ptol	= nvm_lookup_ptol,
+	.defer_bio	= nvm_defer_bio,
+	.bio_wait_add	= nvm_bio_wait_add,
+	.get_inflight	= nvm_get_inflight,
+};
+
+
+static int __init lightnvm_hints_init(void)
 {
-	// release everything else needed
+	nvm_register_target(&nvm_target_swap);
+	nvm_register_target(&nvm_target_latency);
+	nvm_register_target(&nvm_target_pack);
 }
+
+static void __exit lightnvm_hints_exit(void)
+{
+	nvm_unregister_target(&nvm_target_swap);
+	nvm_unregister_target(&nvm_target_latency);
+	nvm_unregister_target(&nvm_target_pack);
+}
+
+module_init(lightnvm_hints_init);
+module_exit(lightnvm_hints_exit);
+
+MODULE_DESCRIPTION(DM_NAME " target");
+MODULE_AUTHOR("Aviad Zuck <aviadzuc@tau.ac.il>");
+MODULE_LICENSE("GPL");

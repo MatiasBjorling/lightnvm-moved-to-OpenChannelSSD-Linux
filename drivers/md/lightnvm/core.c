@@ -622,41 +622,6 @@ static void nvm_end_write_bio(struct bio *bio, int err)
 	bio_put(bio);
 }
 
-static int nvm_handle_buffered_read(struct nvmd *nvmd, struct bio *bio, struct nvm_addr *phys)
-{
-	struct nvm_ap *ap;
-	struct nvm_block *block;
-	struct bio_vec *bv;
-	int i, j, pool_idx = phys->addr / (nvmd->nr_pages / nvmd->nr_pools);
-	int data_idx = phys->addr % (nvmd->nr_host_pages_in_blk);
-	void *src_p, *dst_p;
-	sector_t addr;
-
-	for (i = 0; i < nvmd->nr_aps_per_pool; i++) {
-		ap = &nvmd->aps[(pool_idx * nvmd->nr_aps_per_pool) + i];
-		block = ap->cur;
-		addr = block_to_addr(block) + block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE;
-
-		/* if this is the first page in a the ap buffer */
-		if (addr == phys->addr) {
-			bio_for_each_segment(bv, bio, j) {
-				dst_p = kmap_atomic(bv->bv_page);
-				src_p = kmap_atomic(&block->data[data_idx]);
-
-				memcpy(dst_p, src_p, bv->bv_len);
-				kunmap_atomic(dst_p);
-				kunmap_atomic(src_p);
-				break;
-			}
-			bio_endio(bio, 0);
-
-			return 1;
-		}
-	}
-
-	return 0;
-}
-
 int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 {
 	struct nvm_addr *p;
@@ -678,15 +643,6 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 	if (!p->block) {
 		bio->bi_sector = 0;
 		nvm_fill_bio_and_end(bio);
-		mempool_free(p, nvmd->addr_pool);
-		goto finished;
-	}
-
-	/* When physical page contains several logical pages, we may need to
-	 * read from buffer. Check if so, and if page is cached in ap, read from
-	 * there */
-	if (NR_HOST_PAGES_IN_FLASH_PAGE > 1
-				&& nvm_handle_buffered_read(nvmd, bio, p)) {
 		mempool_free(p, nvmd->addr_pool);
 		goto finished;
 	}

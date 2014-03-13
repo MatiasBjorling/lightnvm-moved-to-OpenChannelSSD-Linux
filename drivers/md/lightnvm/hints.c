@@ -15,6 +15,7 @@ static inline unsigned long diff_tv(struct timeval *curr_tv, struct timeval *ap_
 void nvm_delay_endio_hint(struct nvmd *nvmd, struct bio *bio,
                               struct per_bio_data *pb, unsigned long *delay)
 {
+	struct nvm_pool_hint *h = pb->ap->pool->private;
 	int page_id;
 
 	if (!(nvmd->config.flags & NVM_OPT_ENGINE_SWAP))
@@ -33,6 +34,8 @@ void nvm_delay_endio_hint(struct nvmd *nvmd, struct bio *bio,
 		(*delay) = nvmd->config.t_write / 2;
 	else
 		(*delay) = nvmd->config.t_write * 2;
+
+	h->time_to_wait -= (*delay);
 }
 
 void nvm_hint_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)
@@ -677,16 +680,25 @@ regular:
 	return nvm_map_ltop_rr(nvmd, l_addr, is_gc, nvmd->trans_map, private);
 }
 
+/* assumes bio already have been initialized with its per_bio_data struct. We
+ * should probably add an extra parameter, so we don't do that many pointer
+ * chasins */
 void nvm_bio_wait_add_prio(struct bio_list *bl, struct bio *bio, void *p_private)
 {
+	struct per_bio_data *pb = get_per_bio_data(bio);
+	struct nvm_pool_hint *h = pb->addr->block->pool->private;
+	struct nvm_ap *ap = pb->ap;
+
+	h->time_to_wait += bio_data_dir(bio) == WRITE ? ap->t_write : ap->t_read;
+
 	if (p_private == NVM_PRIO_READ) {
 		BUG_ON(!(bio_data_dir(bio) == READ));
 		//DMERR("add read bio with prio");
-		bio_list_add_head(bl, bio);     
+		bio_list_add_head(bl, bio);
 		return;
 	}
 
-	bio_list_add(bl, bio);  
+	bio_list_add(bl, bio);
 }
 
 struct nvm_inflight* nvm_hint_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map) 
@@ -925,6 +937,7 @@ static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logi
 {
         struct nvm_hint *hint = nvmd->private;
         struct nvm_pool *pool1, *pool2;
+	struct nvm_pool_hint *h1, *h2;
         struct nvm_addr *shadow_p, *primary_p;
         void *prio = 0;
         int time_to_wait1, time_to_wait2;
@@ -955,15 +968,17 @@ static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logi
                 goto read_primary;
         }
 
+	h1 = pool1->private;
         spin_lock(&pool1->waiting_lock);
-        time_to_wait1 = pool1->time_to_wait;
+        time_to_wait1 = h1->time_to_wait;
         spin_unlock(&pool1->waiting_lock);
 
+	h2 = pool2->private;
         spin_lock(&pool2->waiting_lock);
-        time_to_wait2 = pool2->time_to_wait;
+        time_to_wait2 = h2->time_to_wait;
         spin_unlock(&pool2->waiting_lock);
 
-	prio = 0; 
+	prio = 0;
         if (time_to_wait1 < time_to_wait2) 
                 goto read_primary;
         else 
@@ -976,6 +991,7 @@ read_shadow:
         return nvm_lookup_ltop_map(nvmd, logical_addr, hint->shadow_map, prio);
 }
 #endif
+
 static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_addr, sector_t old_p_addr)
 {
 	struct nvm_hint *hint = nvmd->private;
@@ -1033,6 +1049,7 @@ static void nvm_exit_hint(struct nvmd *nvmd)
 	struct nvm_hint *hint = nvmd->private;
 	struct hint_info *info, *next_info;
 	struct nvm_ap *ap;
+	struct nvm_pool *pool;
 	int i;
 
 	spin_lock(&hint->lock);
@@ -1044,6 +1061,9 @@ static void nvm_exit_hint(struct nvmd *nvmd)
 
 	kfree(hint->ino2fc);
 	vfree(hint->shadow_map);
+
+	ssd_for_each_pool(nvmd, pool, i)
+		kfree(pool->private);
 
 	/* mark all pack hint related ap's*/
 	ssd_for_each_ap(nvmd, ap, i)
@@ -1092,7 +1112,7 @@ static int nvm_init_hint(struct nvmd *nvmd)
 	if (!hint->map_alloc_pool)
 		goto err_mac;
 
-	/* mark all pack hint related ap's*/
+	/* initialize aps and pools. */
 	ssd_for_each_pool(nvmd, pool, i) {
 		unsigned int last_ap;
 		/* choose the last ap in each pool */
@@ -1106,6 +1126,14 @@ static int nvm_init_hint(struct nvmd *nvmd)
 			goto err_ap_hints;
 		}
 		init_ap_hint(ap);
+
+		pool->private = kmalloc(sizeof(struct nvm_pool_hint),
+								GFP_KERNEL);
+		if (!pool->private) {
+			DMERR("Couldn't allocate hint private for pool.");
+			goto err_pool_hints;
+		}
+		init_pool_hint(pool);
 	}
 
 	/* inflight maintainence */
@@ -1117,6 +1145,9 @@ static int nvm_init_hint(struct nvmd *nvmd)
 	nvmd->private = hint;
 
 	return 0;
+err_pool_hints:
+	ssd_for_each_pool(nvmd, pool, i)
+		kfree(pool->private);
 err_ap_hints:
 	ssd_for_each_ap(nvmd, ap, i)
 		kfree(ap->private);

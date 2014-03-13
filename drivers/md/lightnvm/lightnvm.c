@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Matias Bjørling.
+ * Copyright (C) 2014 Matias Bjørling.
  *
  * This file is released under GPL.
  *
@@ -22,15 +22,16 @@
 #include <linux/percpu_ida.h>
 #include "lightnvm.h"
 
-/* Defaults */
-/* Number of append points per pool. We assume that accesses within a pool is
- * serial (NAND flash/PCM/etc.) */
+/* Defaults 
+ * Number of append points per pool. We assume that accesses within a pool is
+ * serial (NAND flash/PCM/etc.)
+ */
 #define APS_PER_POOL 1
 
 /* If enabled, we delay bios on each ap to run serialized. */
 #define SERIALIZE_POOL_ACCESS 0
 
-/* Sleep timings before simulating device specific storage (in us)*/
+/* Sleep timings before simulating device specific storage (in us) */
 #define TIMING_READ 25
 #define TIMING_WRITE 500
 #define TIMING_ERASE 1500
@@ -43,14 +44,13 @@
 static struct kmem_cache *_per_bio_cache;
 static struct kmem_cache *_addr_cache;
 
-static int nvm_ioctl(struct dm_target *ti, unsigned int cmd,
-                         unsigned long arg)
+static int nvm_ioctl(struct dm_target *ti, unsigned int cmd, unsigned long arg)
 {
 	struct nvmd *nvmd = ti->private;
 
 	switch (cmd) {
 	case LIGHTNVM_IOCTL_ID:
-		return 0xCECECECE; // TODO: anything else?
+		return 0xCECECECE; // TODO: Fetch ID from disk
 		break;
 	}
 
@@ -65,23 +65,22 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 	struct nvmd *nvmd = ti->private;
 	int ret = DM_MAPIO_SUBMITTED;
 
-	if(bio->bi_sector < 0 || bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages){
-		DMERR("ERROR - %s illegal address %ld", (bio_data_dir(bio) == WRITE) ? "WRITE" : "READ", bio->bi_sector / NR_PHY_IN_LOG );
+	if (bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages){
+		DMERR("Illegal nvm address: %lu %ld", bio_data_dir(bio),
+						bio->bi_sector / NR_PHY_IN_LOG);
 		bio_io_error(bio);
 		return ret;
 	};
 
 	bio->bi_bdev = nvmd->dev->bdev;
 
-	/*DMINFO("map: %s l: %llu size %d",
-			(bio_data_dir(bio) == WRITE) ? "WRITE" : "READ",
-			(unsigned long long) bio->bi_sector / NR_PHY_IN_LOG,
-			bio->bi_size);*/
-
+	/* limited currently to 4k write IOs */
 	if (bio_data_dir(bio) == WRITE) {
 		if (bio_sectors(bio) != NR_PHY_IN_LOG) {
-			DMERR("Write: num of sectors not supported (%u)", bio_sectors(bio));
-			ret = DM_MAPIO_REQUEUE;
+			DMERR("Write: sectors size not supported (%u)",
+							bio_sectors(bio));
+			bio_io_error(bio);
+			return ret;
 		}
 		ret = nvmd->type->write_bio(nvmd, bio);
 	} else {
@@ -105,8 +104,9 @@ static void nvm_status(struct dm_target *ti, status_type_t type,
 	case STATUSTYPE_TABLE:
 		ssd_for_each_ap(nvmd, ap, i) {
 			DMEMIT("Reads: %lu Writes: %lu Delayed: %lu",
-			       ap->io_accesses[0], ap->io_accesses[1],
-			       ap->io_delayed);
+				ap->io_accesses[0],
+				ap->io_accesses[1],
+				ap->io_delayed);
 		}
 		break;
 	}
@@ -124,7 +124,8 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	INIT_WORK(&nvmd->deferred_ws, nvm_deferred_bio_submit);
 	bio_list_init(&nvmd->deferred_bios);
 
-	nvmd->pools = kzalloc(sizeof(struct nvm_pool) * nvmd->nr_pools, GFP_KERNEL);
+	nvmd->pools = kzalloc(sizeof(struct nvm_pool) * nvmd->nr_pools,
+								GFP_KERNEL);
 	if (!nvmd->pools)
 		goto err_pool;
 
@@ -147,14 +148,15 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		pool->nvmd = nvmd;
 		pool->phy_addr_start = i * nvmd->nr_blks_per_pool;
 		pool->phy_addr_end = (i + 1) * nvmd->nr_blks_per_pool - 1;
-		pool->nr_free_blocks = pool->nr_blocks = pool->phy_addr_end - pool->phy_addr_start + 1;
+		pool->nr_free_blocks = pool->nr_blocks =
+				pool->phy_addr_end - pool->phy_addr_start + 1;
 		pool->nr_gc_blocks = 0;
 
 		bio_list_init(&pool->waiting_bios);
-		pool->cur_bio = NULL;
 		atomic_set(&pool->is_active, 0);
 
-		pool->blocks = kzalloc(sizeof(struct nvm_block) * pool->nr_blocks, GFP_KERNEL);
+		pool->blocks = kzalloc(sizeof(struct nvm_block) *
+						pool->nr_blocks, GFP_KERNEL);
 		if (!pool->blocks)
 			goto err_blocks;
 
@@ -178,9 +180,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			DMERR("Couldn't start knvm-worker");
 			goto err_blocks;
 		}
-
-		pool->time_to_wait = 0;
-	}
+}
 
 	nvmd->nr_aps = nvmd->nr_aps_per_pool * nvmd->nr_pools;
 	nvmd->aps = kzalloc(sizeof(struct nvm_ap) * nvmd->nr_pools *nvmd->nr_aps, GFP_KERNEL);

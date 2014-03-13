@@ -611,7 +611,6 @@ wait_longer:
 		/* we need this. updating pool current only by waiting_bios worker
 		   leaves a windows where current is bio thats was already ended */ 
 		spin_lock(&pool->waiting_lock);
-		pool->time_to_wait -= dev_wait;
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
 
@@ -727,7 +726,6 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 		goto finished;
 	}
 
-	//printk("phys_addr: %lu blockid %u bio addr: %lu bi_sectors: %u\n", phys->addr, phys->block->id, bio->bi_sector, bio_sectors(bio));
 	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL, NULL);
 finished:
 	return DM_MAPIO_SUBMITTED;
@@ -840,7 +838,6 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	struct nvm_ap *ap = block_to_ap(nvmd, block);
 	struct nvm_pool *pool = ap->pool;
 	struct per_bio_data *pb;
-	void *p_private = p->private;
 
 	pb = alloc_decorate_per_bio_data(nvmd, bio);
 	pb->ap = ap;
@@ -866,14 +863,12 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		//DMERR("nvm_submit_bio: submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
 		spin_lock(&pool->waiting_lock);
-		pool->time_to_wait += (rw == WRITE) ? ap->t_write : ap->t_read;
-		nvmd->type->bio_wait_add(&pool->waiting_bios, bio, p_private);
+		nvmd->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
 
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);
 			spin_unlock(&pool->waiting_lock);
 			//DMERR("nvm_submit_bio: queue waiting_bios l_addr %ld paddr %ld", l_addr, p->addr);
-
 			return;
 		}
 

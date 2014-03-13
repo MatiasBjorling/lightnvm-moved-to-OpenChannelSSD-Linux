@@ -180,13 +180,14 @@ struct nvm_pool {
 	struct work_struct execute_ws;
 	struct bio_list waiting_bios;
 	struct bio *cur_bio;
-	int time_to_wait;
 
 	unsigned int gc_running;
 	struct completion gc_finished;
 	struct work_struct gc_ws;
 
 	struct workqueue_struct *kbiod_wq;
+
+	void *private;
 };
 
 /*

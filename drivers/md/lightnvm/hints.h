@@ -95,6 +95,10 @@ struct nvm_ap_hint {
 	struct timeval tv; // time of last allocation in this ap
 };
 
+struct nvm_pool_hint {
+	int time_to_wait;
+};
+
 #define AP_DISASSOCIATE_TIME 10000 // permit disassociation of ap to inode after X us. XXX is 10ms right?
 #define INODE_EMPTY -1
 
@@ -103,6 +107,13 @@ static inline void init_ap_hint(struct nvm_ap *ap)
 	struct nvm_ap_hint *ap_hint = ap->private;
 	ap_hint->ino = INODE_EMPTY;
 }
+
+static inline void init_pool_hint(struct nvm_pool *pool)
+{
+	struct nvm_pool_hint *p = pool->private;
+	p->time_to_wait = 0;
+}
+
 #endif
 
 /* make sure these follow target_flags defined in dm-openssd.h */

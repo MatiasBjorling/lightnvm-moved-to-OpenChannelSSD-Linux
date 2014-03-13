@@ -1062,11 +1062,11 @@ static void nvm_exit_hint(struct nvmd *nvmd)
 	kfree(hint->ino2fc);
 	vfree(hint->shadow_map);
 
-	ssd_for_each_pool(nvmd, pool, i)
+	nvm_for_each_pool(nvmd, pool, i)
 		kfree(pool->private);
 
 	/* mark all pack hint related ap's*/
-	ssd_for_each_ap(nvmd, ap, i)
+	nvm_for_each_ap(nvmd, ap, i)
 		kfree(ap->private);
 
 	mempool_destroy(hint->map_alloc_pool);
@@ -1113,7 +1113,7 @@ static int nvm_init_hint(struct nvmd *nvmd)
 		goto err_mac;
 
 	/* initialize aps and pools. */
-	ssd_for_each_pool(nvmd, pool, i) {
+	nvm_for_each_pool(nvmd, pool, i) {
 		unsigned int last_ap;
 		/* choose the last ap in each pool */
 		last_ap = (i * nvmd->nr_aps_per_pool) + nvmd->nr_aps_per_pool - 1;
@@ -1146,10 +1146,10 @@ static int nvm_init_hint(struct nvmd *nvmd)
 
 	return 0;
 err_pool_hints:
-	ssd_for_each_pool(nvmd, pool, i)
+	nvm_for_each_pool(nvmd, pool, i)
 		kfree(pool->private);
 err_ap_hints:
-	ssd_for_each_ap(nvmd, ap, i)
+	nvm_for_each_ap(nvmd, ap, i)
 		kfree(ap->private);
 	mempool_destroy(hint->map_alloc_pool);
 err_mac:

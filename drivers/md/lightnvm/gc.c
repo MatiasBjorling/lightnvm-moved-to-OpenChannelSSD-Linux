@@ -14,7 +14,7 @@ void nvm_gc_cb(unsigned long data)
 	struct nvmd *nvmd = (void*) data;
 //	struct nvm_pool *pool;
 //	int i;
-//	ssd_for_each_pool(nvmd, pool, i)
+//	nvm_for_each_pool(nvmd, pool, i)
 //		queue_pool_gc(pool);
 	mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(nvmd->config.gc_time));
 }
@@ -197,6 +197,6 @@ void nvm_gc_kick(struct nvmd *nvmd)
 	unsigned int i;
 	BUG_ON(!nvmd);
 
-	ssd_for_each_pool(nvmd, pool, i)
+	nvm_for_each_pool(nvmd, pool, i)
 		queue_pool_gc(pool);
 }

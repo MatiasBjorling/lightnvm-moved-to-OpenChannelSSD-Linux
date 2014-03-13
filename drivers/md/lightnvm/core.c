@@ -27,7 +27,7 @@ static void show_all_pools(struct nvmd *nvmd)
 	struct nvm_pool *pool;
 	unsigned int i;
 
-	ssd_for_each_pool(nvmd, pool, i) {
+	nvm_for_each_pool(nvmd, pool, i) {
 		show_pool(pool);
 	}
 }

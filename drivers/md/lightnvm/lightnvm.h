@@ -438,11 +438,11 @@ void nvm_gc_cb(unsigned long data);
 void nvm_gc_collect(struct work_struct *work);
 void nvm_gc_kick(struct nvmd *nvmd);
 
-#define ssd_for_each_pool(nvmd, pool, i)									\
+#define nvm_for_each_pool(nvmd, pool, i)									\
 		for ((i) = 0, pool = &(nvmd)->pools[0];							\
 			 (i) < (nvmd)->nr_pools; (i)++, pool = &(nvmd)->pools[(i)])
 
-#define ssd_for_each_ap(nvmd, ap, i)										\
+#define nvm_for_each_ap(nvmd, ap, i)										\
 		for ((i) = 0, ap = &(nvmd)->aps[0];								\
 			 (i) < (nvmd)->nr_aps; (i)++, ap = &(nvmd)->aps[(i)])
 

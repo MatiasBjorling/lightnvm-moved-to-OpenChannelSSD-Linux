@@ -102,7 +102,7 @@ static void nvm_status(struct dm_target *ti, status_type_t type,
 		DMEMIT("Use table information");
 		break;
 	case STATUSTYPE_TABLE:
-		ssd_for_each_ap(nvmd, ap, i) {
+		nvm_for_each_ap(nvmd, ap, i) {
 			DMEMIT("Reads: %lu Writes: %lu Delayed: %lu",
 				ap->io_accesses[0],
 				ap->io_accesses[1],
@@ -129,7 +129,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	if (!nvmd->pools)
 		goto err_pool;
 
-	ssd_for_each_pool(nvmd, pool, i) {
+	nvm_for_each_pool(nvmd, pool, i) {
 		spin_lock_init(&pool->lock);
 		spin_lock_init(&pool->gc_lock);
 		spin_lock_init(&pool->waiting_lock);
@@ -187,7 +187,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	if (!nvmd->aps)
 		goto err_blocks;
 
-	ssd_for_each_ap(nvmd, ap, i) {
+	nvm_for_each_ap(nvmd, ap, i) {
 		spin_lock_init(&ap->lock);
 		ap->parent = nvmd;
 		ap->pool = &nvmd->pools[i / nvmd->nr_aps_per_pool];
@@ -218,7 +218,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 
 	return 0;
 err_blocks:
-	ssd_for_each_pool(nvmd, pool, i) {
+	nvm_for_each_pool(nvmd, pool, i) {
 		if (!pool->blocks)
 			break;
 		kfree(pool->blocks);
@@ -481,14 +481,14 @@ static void nvm_dtr(struct dm_target *ti)
 	if (nvmd->type->exit)
 		nvmd->type->exit(nvmd);
 
-	ssd_for_each_pool(nvmd, pool, i) {
+	nvm_for_each_pool(nvmd, pool, i) {
 		while (bio_list_peek(&pool->waiting_bios))
 			flush_scheduled_work();
 		destroy_workqueue(pool->kbiod_wq);
 	}
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */
-	ssd_for_each_pool(nvmd, pool, i)
+	nvm_for_each_pool(nvmd, pool, i)
 		kfree(pool->blocks);
 
 	kfree(nvmd->pools);

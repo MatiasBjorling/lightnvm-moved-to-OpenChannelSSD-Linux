@@ -27,9 +27,8 @@ static void show_all_pools(struct nvmd *nvmd)
 	struct nvm_pool *pool;
 	unsigned int i;
 
-	nvm_for_each_pool(nvmd, pool, i) {
+	nvm_for_each_pool(nvmd, pool, i)
 		show_pool(pool);
-	}
 }
 
 static struct per_bio_data *alloc_decorate_per_bio_data(struct nvmd *nvmd, struct bio *bio)
@@ -60,9 +59,10 @@ static void free_per_bio_data(struct nvmd *nvmd, struct per_bio_data *pb)
 	mempool_free(pb, nvmd->per_bio_pool);
 }
 
+/* deferred bios are used when no available nvm pages. Allowing GC to execute
+ * and resubmit bios */
 void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)
 {
-	//DMERR("defer_bio: %s l_addr %ld", bio_data_dir(bio)==WRITE?"write":"read", bio->bi_sector / 8);
 	spin_lock(&nvmd->deferred_lock);
 	bio_list_add(&nvmd->deferred_bios, bio);
 	spin_unlock(&nvmd->deferred_lock);
@@ -80,7 +80,6 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	while (bio) {
 		struct bio *next = bio->bi_next;
 		bio->bi_next = NULL;
-		//DMERR("undefer bio %s l_addr %ld", bio_data_dir(bio)==WRITE?"write":"read", bio->bi_sector / 8);
 		if (bio_data_dir(bio) == WRITE)
 			nvmd->type->write_bio(nvmd, bio);
 		else
@@ -89,53 +88,26 @@ void nvm_deferred_bio_submit(struct work_struct *work)
 	}
 }
 
+/* delayed bios are used for making pool accesses sequential */
 void nvm_delayed_bio_submit(struct work_struct *work)
-{
-	struct nvm_pool *pool = container_of(work, struct nvm_pool, execute_ws);
-	struct bio *bio;
-	struct per_bio_data *pb;
-
-	spin_lock(&pool->waiting_lock);
-	bio = bio_list_pop(&pool->waiting_bios);
-
-	pool->cur_bio = bio; // we're the currently executing bio
-	if (!bio) {
-		atomic_dec(&pool->is_active);
-		spin_unlock(&pool->waiting_lock);
-		return;
-	}
-
-	spin_unlock(&pool->waiting_lock);
-
-	/* setup timings - remember overhead. */
-	pb = bio->bi_private;
-	getnstimeofday(&pb->start_tv);
-
-	submit_bio(bio->bi_rw, bio);
-}
-
-void nvm_delayed_bio_defer(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
 	struct per_bio_data *pb;
 
 	spin_lock(&pool->waiting_lock);
-	if (atomic_inc_return(&pool->is_active) != 1) {
+	bio = bio_list_pop(&pool->waiting_bios);
+
+	pool->cur_bio = bio;
+	if (!bio) {
 		atomic_dec(&pool->is_active);
 		spin_unlock(&pool->waiting_lock);
 		return;
 	}
 
-	bio = bio_list_pop(&pool->waiting_bios);
 	spin_unlock(&pool->waiting_lock);
 
-	if (!bio) {
-		atomic_dec(&pool->is_active);
-		return;
-	}
-
-	/* setup timings - remember overhead. */
+	/* setup timings to track end timings accordently */
 	pb = bio->bi_private;
 	getnstimeofday(&pb->start_tv);
 
@@ -190,7 +162,6 @@ inline void nvm_reset_block(struct nvm_block *block)
 
 	BUG_ON(!block);
 
-	//DMERR("nvm_reset_block: reset block %d", block->id);
 	spin_lock(&block->lock);
 	bitmap_zero(block->invalid_pages, nvmd->nr_host_pages_in_blk);
 	block->ap = NULL;
@@ -233,7 +204,6 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 	}
 
 	block = list_first_entry(&pool->free_list, struct nvm_block, list);
-	//DMERR("nvm_pool_get_block: move block %d from free to used", block->id);
 	list_move_tail(&block->list, &pool->used_list);
 
 	pool->nr_free_blocks--;
@@ -258,7 +228,6 @@ void nvm_pool_put_block(struct nvm_block *block)
 
 	spin_lock(&pool->lock);
 
-	//DMERR("nvm_put_block: move block %d to free", block->id);
 	list_move_tail(&block->list, &pool->free_list);
 	pool->nr_free_blocks++;
 	pool->nr_gc_blocks--;
@@ -333,12 +302,10 @@ struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *nvmd)
 	}
 
 	if (p_addr == LTOP_EMPTY) {
-		//DMERR("alloc_fastest: no fast page available");
 		mempool_free(p, nvmd->per_bio_pool);
 		return NULL;
 	}
 
-	//DMERR("alloc_fastest: found fast p_addr %ld", p_addr);
 	p->addr = p_addr;
 	p->block = block;
 	return p;
@@ -470,7 +437,8 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 			goto err;
 	}
 
-	p->private = private; // for hints
+	p->private = private;
+
 	spin_unlock(&nvmd->trans_lock);
 	return p;
 err:
@@ -512,7 +480,6 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 			spin_unlock(&ap->pool->lock);
 
 			i++;
-			//DMERR("Pool %d trying to write GC data to pool %d which is too low on free pages", is_gc-1, ap->pool->id);
 			if (i == nvmd->nr_pools * 2) {
 				DMERR("Pool %d has to write GC data to pool %d"
 						"which is too low on free pages",
@@ -565,7 +532,6 @@ static void nvm_endio(struct bio *bio, int err)
 	nvmd = ap->parent;
 	pool = ap->pool;
 
-	//DMERR("nvm_endio: endio of paddr %ld", p->addr);
 	if (bio_data_dir(bio) == WRITE) {
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
@@ -573,7 +539,6 @@ static void nvm_endio(struct bio *bio, int err)
 			mempool_free(block->data, nvmd->block_page_pool);
 			block->data = NULL;
 
-			//DMERR("nvm_endio: add block %d to prio", block->id);
 			spin_lock(&pool->gc_lock);
 			list_add_tail(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->gc_lock);
@@ -614,7 +579,7 @@ wait_longer:
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
 
-		queue_work(pool->kbiod_wq, &pool->execute_ws);
+		queue_work(pool->kbiod_wq, &pool->waiting_ws);
 	}
 
 
@@ -672,7 +637,7 @@ static int nvm_handle_buffered_read(struct nvmd *nvmd, struct bio *bio, struct n
 		block = ap->cur;
 		addr = block_to_addr(block) + block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE;
 
-		// if this is the first page in a the ap buffer
+		/* if this is the first page in a the ap buffer */
 		if (addr == phys->addr) {
 			bio_for_each_segment(bv, bio, j) {
 				dst_p = kmap_atomic(bv->bv_page);
@@ -756,7 +721,7 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 	struct bio *issue_bio;
 	int i, size;
 
-	//FIXME: can fail
+	/* FIXME */
 	issue_bio = bio_alloc(GFP_NOIO, NR_HOST_PAGES_IN_FLASH_PAGE);
 	issue_bio->bi_bdev = nvmd->dev->bdev;
 	issue_bio->bi_sector = p->addr * NR_PHY_IN_LOG;
@@ -801,7 +766,6 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 									sync, trans_map);
 	} else {
 		BUG_ON(is_gc);
-		//DMERR("cant execute, defering %s %s bio l_addr", trans_map==nvmd->trans_map?"primary":"shadow", bio_data_dir(bio)==WRITE?"write":"read", l_addr);
 		nvmd->type->defer_bio(nvmd, bio, trans_map);
 		nvm_gc_kick(nvmd);
 
@@ -847,7 +811,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	pb->orig_bio = orig_bio;
 	pb->trans_map = trans_map;
 
-	/* is set prematurely because we need it for deferred bios */
+	/* is set prematurely because we need it if bio is defered */
 	bio->bi_rw |= rw;
 	if (sync)
 		bio->bi_rw |= REQ_SYNC;
@@ -857,38 +821,34 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	else
 		bio->bi_end_io = nvm_end_read_bio;
 
-	// We allow counting to be semi-accurate as theres no locking for accounting.
+	/* We allow counting to be semi-accurate as theres
+	 * no lock for accounting. */
 	ap->io_accesses[bio_data_dir(bio)]++;
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
-		//DMERR("nvm_submit_bio: submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
 		spin_lock(&pool->waiting_lock);
 		nvmd->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
 
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);
 			spin_unlock(&pool->waiting_lock);
-			//DMERR("nvm_submit_bio: queue waiting_bios l_addr %ld paddr %ld", l_addr, p->addr);
 			return;
 		}
 
 		bio = bio_list_peek(&pool->waiting_bios);
 
-		/* we're not the only bio waiting*/
+		/* we're not the only bio waiting */
 		if (!bio) {
-			//DMERR("nvm_submit_bio: serialized bio but its already gone!");
 			atomic_dec(&pool->is_active);
 			spin_unlock(&pool->waiting_lock);
 			return;
 		}
 
 		/* we're the only bio waiting. queue relevant worker*/
-		queue_work(pool->kbiod_wq, &pool->execute_ws);
+		queue_work(pool->kbiod_wq, &pool->waiting_ws);
 		spin_unlock(&pool->waiting_lock);
 		return;
 	}
 
-	//DMERR("nvm_submit_bio: truly submit serialzied bio l_addr %ld paddr %ld", l_addr, p->addr);
-	//DMERR("nvm_submit_bio: bio->bi_end_io %p nvm_end_write_bio %p", bio->bi_end_io, nvm_end_write_bio);
 	submit_bio(bio->bi_rw, bio);
 }

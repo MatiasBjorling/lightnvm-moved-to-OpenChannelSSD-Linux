@@ -177,8 +177,8 @@ struct nvm_pool {
 
 	spinlock_t waiting_lock;
 	struct work_struct waiting_ws;
-	struct work_struct execute_ws;
 	struct bio_list waiting_bios;
+
 	struct bio *cur_bio;
 
 	unsigned int gc_running;

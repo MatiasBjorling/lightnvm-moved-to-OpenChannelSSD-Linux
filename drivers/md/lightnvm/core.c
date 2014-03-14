@@ -173,14 +173,16 @@ inline void nvm_reset_block(struct nvm_block *block)
 }
 
 /* use pool_[get/put]_block to administer the blocks in use for each pool.
- * Whenever a block is in used by an append point, we store it within the used_list.
- * We then move it back when its free to be used by another append point.
+ * Whenever a block is in used by an append point, we store it within the
+ * used_list. We then move it back when its free to be used by another append
+ * point.
  *
- * The newly acclaimed block is always added to the back of user_list. As we assume
- * that the start of used list is the oldest block, and therefore higher probability
- * of invalidated pages.
+ * The newly acclaimed block is always added to the back of user_list. As we
+ * assume that the start of used list is the oldest block, and therefore higher
+ * probability of invalidated pages.
  */
-struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc)
+{
 	struct nvmd *nvmd = pool->nvmd;
 	struct nvm_block *block = NULL;
 
@@ -195,7 +197,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 		return NULL;
 	}
 
-	while(!is_gc && pool->nr_free_blocks <= nvmd->nr_pools * 2) {
+	while (!is_gc && pool->nr_free_blocks <= nvmd->nr_pools * 2) {
 		spin_unlock(&pool->lock);
 		return NULL;
 	}
@@ -216,8 +218,8 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc) {
 }
 
 /* We assume that all valid pages have already been moved when added back to the
- * free list. We add it last to allow round-robin use of all pages. Thereby provide
- * simple (naive) wear-leveling.
+ * free list. We add it last to allow round-robin use of all pages. Thereby
+ * provide simple (naive) wear-leveling.
  */
 void nvm_pool_put_block(struct nvm_block *block)
 {
@@ -230,7 +232,6 @@ void nvm_pool_put_block(struct nvm_block *block)
 	pool->nr_gc_blocks--;
 
 	spin_unlock(&pool->lock);
-
 }
 
 static sector_t __nvm_alloc_phys_addr(struct nvm_block *block,
@@ -429,8 +430,8 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *nvmd, sector_t l_addr)
 
 /* Simple round-robin Logical to physical address translation.
  *
- * Retrieve the mapping using the active append point. Then update the ap for the
- * next write to the disk.
+ * Retrieve the mapping using the active append point. Then update the ap for
+ * the next write to the disk.
  *
  * Returns nvm_addr with the physical address and block. Remember to return to
  * nvmd->addr_cache when bio is finished.
@@ -445,17 +446,18 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	ap = get_next_ap(nvmd);
 
 	if (is_gc) {
-		/* prevent GC-ing pool from devouring pages of pool with little free blocks*/
+		/* prevent GC-ing pool from devouring pages of pool with little
+		 * free blocks */
 		spin_lock(&ap->pool->lock);
-		while(ap->pool->nr_free_blocks <= nvmd->nr_pools * 2 &&
-						ap->pool->id != (is_gc-1)) {
+		while (ap->pool->nr_free_blocks <= nvmd->nr_pools * 2 &&
+						ap->pool->id != (is_gc - 1)) {
 			spin_unlock(&ap->pool->lock);
 
 			i++;
 			if (i == nvmd->nr_pools * 2) {
 				DMERR("Pool %d has to write GC data to pool %d"
-						"which is too low on free pages",
-							is_gc-1, ap->pool->id);
+					"which is too low on free pages",
+					is_gc-1, ap->pool->id);
 				spin_lock(&ap->pool->lock);
 				break;
 			}
@@ -473,7 +475,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 		ret = nvm_update_map(nvmd, l_addr, p, is_gc, trans_map);
 
 		if (ret) {
-			DMERR("Cant update map");
+			DMERR("Can't update map");
 			BUG_ON(!is_gc);
 
 			invalidate_block_page(nvmd, p);
@@ -515,8 +517,10 @@ static void nvm_endio(struct bio *bio, int err)
 			list_add_tail(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->gc_lock);
 		}
-		
-		nvm_unlock_addr(nvmd, nvmd->type->get_inflight(nvmd, pb->trans_map), pb->l_addr);
+
+		nvm_unlock_addr(nvmd,
+				nvmd->type->get_inflight(nvmd, pb->trans_map),
+				pb->l_addr);
 
 		/* physical waits if hardware doesn't have a real backend */
 		dev_wait = ap->t_write;
@@ -678,13 +682,16 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	if (p) {
 		if ((unsigned long)p == LTOP_POISON) {
 			BUG_ON(!is_gc);
-			DMERR("GC write might overwrite ongoing regular write to same l_addr. abort");
-			if(sync)
+			DMERR("GC write might overwrite ongoing regular write "\
+						"to same l_addr. abort");
+			if (sync)
 				complete(sync);
 			return NVM_WRITE_GC_ABORT;
 		}
 
-		nvm_lock_addr(nvmd, nvmd->type->get_inflight(nvmd, trans_map), l_addr);
+		nvm_lock_addr(nvmd,
+				nvmd->type->get_inflight(nvmd, trans_map),
+				l_addr);
 
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		if (complete_bio)

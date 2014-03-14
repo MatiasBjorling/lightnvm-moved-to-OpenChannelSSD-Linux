@@ -32,10 +32,10 @@ int nvm_register_target(struct nvm_target_type *t)
 void nvm_unregister_target(struct nvm_target_type *t)
 {
 	if (!t)
-	{
-		down_write(&_lock);
-		list_del(&t->list);
-		up_write(&_lock);
-	}
+		return;
+
+	down_write(&_lock);
+	list_del(&t->list);
+	up_write(&_lock);
 }
 

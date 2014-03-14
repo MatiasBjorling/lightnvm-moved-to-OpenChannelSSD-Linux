@@ -18,8 +18,7 @@ static void show_pool(struct nvm_pool *pool)
 		prio_cnt++;
 	spin_unlock(&pool->lock);
 
-	DMERR("Pool %d info %u %u %u", pool->id,
-			free_cnt, used_cnt, prio_cnt);
+	DMERR("Pool %d info %u %u %u", pool->id, free_cnt, used_cnt, prio_cnt);
 }
 
 static void show_all_pools(struct nvmd *nvmd)
@@ -31,7 +30,8 @@ static void show_all_pools(struct nvmd *nvmd)
 		show_pool(pool);
 }
 
-static struct per_bio_data *alloc_decorate_per_bio_data(struct nvmd *nvmd, struct bio *bio)
+/* alloc pbd, but also decorate it with bio */
+static struct per_bio_data *alloc_init_pbd(struct nvmd *nvmd, struct bio *bio)
 {
 	struct per_bio_data *pb = mempool_alloc(nvmd->per_bio_pool, GFP_NOIO);
 
@@ -48,15 +48,16 @@ static struct per_bio_data *alloc_decorate_per_bio_data(struct nvmd *nvmd, struc
 	return pb;
 }
 
-static void dedecorate_bio(struct per_bio_data *pb, struct bio *bio)
+static void free_pbd(struct nvmd *nvmd, struct per_bio_data *pb)
+{
+	mempool_free(pb, nvmd->per_bio_pool);
+}
+
+/* bio to be stripped from the pbd structure */
+static void exit_pbd(struct per_bio_data *pb, struct bio *bio)
 {
 	bio->bi_private = pb->bi_private;
 	bio->bi_end_io = pb->bi_end_io;
-}
-
-static void free_per_bio_data(struct nvmd *nvmd, struct per_bio_data *pb)
-{
-	mempool_free(pb, nvmd->per_bio_pool);
 }
 
 /* deferred bios are used when no available nvm pages. Allowing GC to execute
@@ -560,7 +561,7 @@ wait_longer:
 
 
 	/* Finish up */
-	dedecorate_bio(pb, bio);
+	exit_pbd(pb, bio);
 
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
@@ -578,7 +579,7 @@ wait_longer:
 
 	mempool_free(pb->addr, nvmd->addr_pool);
 free_pb:
-	free_per_bio_data(nvmd, pb);
+	free_pbd(nvmd, pb);
 }
 
 static void nvm_end_read_bio(struct bio *bio, int err)
@@ -720,7 +721,7 @@ struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd,
 
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 			int rw, struct bio *bio,
-			struct bio *orig_bio, 
+			struct bio *orig_bio,
 			struct completion *sync,
 			struct nvm_addr *trans_map)
 {
@@ -729,7 +730,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	struct nvm_pool *pool = ap->pool;
 	struct per_bio_data *pb;
 
-	pb = alloc_decorate_per_bio_data(nvmd, bio);
+	pb = alloc_init_pbd(nvmd, bio);
 	pb->ap = ap;
 	pb->addr = p;
 	pb->l_addr = l_addr;

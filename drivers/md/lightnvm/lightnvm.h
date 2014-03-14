@@ -8,7 +8,7 @@
 #define DM_LIGHTNVM_H_
 
 #define LIGHTNVM_IOC_MAGIC 'O'
-#define LIGHTNVM_IOCTL_ID          _IO(LIGHTNVM_IOC_MAGIC, 0x40)
+#define LIGHTNVM_IOCTL_ID _IO(LIGHTNVM_IOC_MAGIC, 0x40)
 
 #ifdef __KERNEL__
 #include <linux/device-mapper.h>
@@ -33,7 +33,7 @@
 
 #define DM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
-#define LTOP_POISON 3133731337
+#define LTOP_POISON 0xD3ADB33F
 
 /*
  * For now we hardcode some of the configuration for the LightNVM device that we
@@ -71,9 +71,12 @@
 #define NVM_OPT_MISC_OFFSET 15
 
 enum ltop_flags {
-	MAP_PRIMARY	= 1 << 0, /* Update primary mapping (and init secondary mapping as a result) */
-	MAP_SHADOW	= 1 << 1, /* Update only shaddow mapping */
-	MAP_SINGLE	= 1 << 2, /* Update only the relevant mapping (primary/shaddow) */
+	/* Update primary mapping (and init secondary mapping as a result) */
+	MAP_PRIMARY	= 1 << 0,
+	/* Update only shaddow mapping */
+	MAP_SHADOW	= 1 << 1,
+	/* Update only the relevant mapping (primary/shaddow) */
+	MAP_SINGLE	= 1 << 2,
 };
 
 enum target_flags {
@@ -157,17 +160,19 @@ struct nvm_pool {
 	} ____cacheline_aligned_in_smp;
 
 	struct list_head used_list;	/* In-use blocks */
-	struct list_head free_list;	/* Not used blocks i.e. released and ready for use */
+	struct list_head free_list;	/* Not used blocks i.e. released
+					 *  and ready for use */
 	struct list_head prio_list;	/* Blocks that may be GC'ed. */
 
 	unsigned int id;
-	unsigned long phy_addr_start;	/* References the physical start block */
-	unsigned int phy_addr_end;		/* References the physical end block */
+	/* References the physical start block */
+	unsigned long phy_addr_start; 
+	/* References the physical end block */
+	unsigned int phy_addr_end;
 
-	unsigned int nr_blocks;			/* Derived value from end_block - start_block. */
+	unsigned int nr_blocks;		/* end_block - start_block. */
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
-
-	unsigned int nr_gc_blocks;	/* Number of blocks undergoing gc*/
+	unsigned int nr_gc_blocks;	/* Number of blocks undergoing gc */
 
 	struct nvm_block *blocks;
 	struct nvmd *nvmd;
@@ -190,8 +195,8 @@ struct nvm_pool {
 
 /*
  * nvm_ap. ap is an append point. A pool can have 1..X append points attached.
- * An append point has a current block, that it writes to, and when its full, it requests
- * a new block, of which it continues its writes.
+ * An append point has a current block, that it writes to, and when its full,
+ * it requests a new block, of which it continues its writes.
  *
  * one ap per pool may be reserved for pack-hints related writes.
  * In those that are not not, private is NULL.
@@ -218,7 +223,7 @@ struct nvm_ap {
 struct nvm_config {
 	unsigned long flags;
 
-	unsigned int gc_time;		/* GC every X microseconds */
+	unsigned int gc_time; /* GC every X microseconds */
 
 	unsigned int t_read;
 	unsigned int t_write;
@@ -240,21 +245,27 @@ struct nvm_inflight {
 struct nvmd;
 struct per_bio_data;
 
-typedef struct nvm_addr *(*nvm_map_ltop_fn)(struct nvmd *, sector_t, int, struct nvm_addr *, void *private);
+/* overridable functionality */
+typedef struct nvm_addr *(*nvm_map_ltop_fn)(struct nvmd *, sector_t, int,
+						struct nvm_addr *, void *);
 typedef struct nvm_addr *(*nvm_lookup_ltop_fn)(struct nvmd *, sector_t);
 typedef struct nvm_rev_addr *(*nvm_lookup_ptol_fn)(struct nvmd *, sector_t);
 typedef int (*nvm_write_bio_fn)(struct nvmd *, struct bio *);
 typedef int (*nvm_read_bio_fn)(struct nvmd *, struct bio *);
 typedef void (*nvm_alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
-typedef void *(*nvm_begin_gc_fn)(struct nvmd *, sector_t, sector_t, struct nvm_block *);
+typedef void *(*nvm_begin_gc_fn)(struct nvmd *, sector_t, sector_t,
+							struct nvm_block *);
 typedef void (*nvm_end_gc_fn)(struct nvmd *, void *);
 typedef void (*nvm_defer_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef void (*nvm_bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
-typedef struct nvm_inflight* (*nvm_get_inflight_map_fn)(struct nvmd *nvmd, struct nvm_addr *trans_map);
-typedef int (*nvm_ioctl_fn)(struct nvmd *nvmd, unsigned int cmd, unsigned long arg);
-typedef int (*nvm_init_fn)(struct nvmd *nvmd);
-typedef void (*nvm_exit_fn)(struct nvmd *nvmd);
-typedef void (*nvm_endio_fn)(struct nvmd *nvmd, struct bio *bio, struct per_bio_data *pb, unsigned long *delay);
+typedef struct nvm_inflight* (*nvm_get_inflight_map_fn)(struct nvmd *nvmd,
+						struct nvm_addr *trans_map);
+typedef int (*nvm_ioctl_fn)(struct nvmd *,
+					unsigned int cmd, unsigned long arg);
+typedef int (*nvm_init_fn)(struct nvmd *);
+typedef void (*nvm_exit_fn)(struct nvmd *);
+typedef void (*nvm_endio_fn)(struct nvmd *, struct bio *,
+				struct per_bio_data *, unsigned long *delay);
 
 typedef int (*nvm_page_special_fn)(struct nvmd *, unsigned int);
 
@@ -299,8 +310,8 @@ struct nvmd {
 
 	struct nvm_target_type *type;
 
-	/* Simple translation map of logical addresses to physical addresses. The
-	 * logical addresses is known by the host system, while the physical
+	/* Simple translation map of logical addresses to physical addresses.
+	 * The logical addresses is known by the host system, while the physical
 	 * addresses are used when writing to the disk block device. */
 	struct nvm_addr *trans_map;
 	/* also store a reverse map for garbage collection */
@@ -342,8 +353,8 @@ struct nvmd {
 
 	/* Write strategy variables. Move these into each for structure for each
 	 * strategy */
-	atomic_t next_write_ap; /* Whenever a page is written, this is updated to point
-							   to the next write append point */
+	atomic_t next_write_ap; /* Whenever a page is written, this is updated
+				 * to point to the next write append point */
 	struct workqueue_struct *kbiod_wq;
 	struct workqueue_struct *kgc_wq;
 
@@ -391,7 +402,7 @@ struct nvm_target_type *find_nvm_target_type(const char *name);
 /* core.c */
 /*   Helpers */
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
-struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map);
+struct nvm_inflight* nvm_get_inflight(struct nvmd *, struct nvm_addr *);
 void invalidate_block_page(struct nvmd *, struct nvm_addr *);
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private);
@@ -404,23 +415,35 @@ void nvm_delayed_bio_submit(struct work_struct *);
 void nvm_deferred_bio_submit(struct work_struct *);
 void nvm_gc_block(struct work_struct *);
 
-/* Allocation of physical addresses from block when increasing responsibility. */
+/* Allocation of physical addresses from block
+ * when increasing responsibility. */
 struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *, int is_gc);
-struct nvm_addr *nvm_map_ltop_rr(struct nvmd *, sector_t l_addr, int is_gc, struct nvm_addr *trans_map, void *private);
+struct nvm_addr *nvm_map_ltop_rr(struct nvmd *, sector_t l_addr, int is_gc,
+				struct nvm_addr *trans_map, void *private);
 
-/* Gets an address from nvm->trans_map and take a ref count on the blocks usage. Remember to put later */
-struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *, sector_t l_addr, struct nvm_addr *l2p_map, void *private);
+/* Gets an address from nvm->trans_map and take a ref count on the blocks usage.
+ * Remember to put later */
+struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *, sector_t l_addr,
+				struct nvm_addr *l2p_map, void *private);
 struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 struct nvm_rev_addr *nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
 struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private);
-struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
+struct bio *nvm_write_init_bio(struct nvmd *, struct bio *, struct nvm_addr *);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
-int nvm_write_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync, struct nvm_addr *trans_map, unsigned int complete_bio);
+/* FIXME: Shorten */
+int nvm_write_bio(struct nvmd *, struct bio *bio, int is_gc, void *private,
+		struct completion *sync, struct nvm_addr *trans_map,
+		unsigned int complete_bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
-void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc, struct nvm_addr *trans_map);
-void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync, struct nvm_addr *trans_map);
+/* FIXME: Shorten */
+void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
+					int is_gc, struct nvm_addr *trans_map);
+/* FIXME: Shorten */
+void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw,
+		struct bio *, struct bio *orig_bio, struct completion *sync,
+		struct nvm_addr *trans_map);
 void nvm_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 
 /*   NVM device related */
@@ -436,20 +459,20 @@ void nvm_gc_cb(unsigned long data);
 void nvm_gc_collect(struct work_struct *work);
 void nvm_gc_kick(struct nvmd *nvmd);
 
-#define nvm_for_each_pool(nvmd, pool, i)									\
-		for ((i) = 0, pool = &(nvmd)->pools[0];							\
-			 (i) < (nvmd)->nr_pools; (i)++, pool = &(nvmd)->pools[(i)])
+#define nvm_for_each_pool(n, pool, i) \
+		for ((i) = 0, pool = &(n)->pools[0]; \
+			(i) < (n)->nr_pools; (i)++, pool = &(n)->pools[(i)])
 
-#define nvm_for_each_ap(nvmd, ap, i)										\
-		for ((i) = 0, ap = &(nvmd)->aps[0];								\
-			 (i) < (nvmd)->nr_aps; (i)++, ap = &(nvmd)->aps[(i)])
+#define nvm_for_each_ap(n, ap, i) \
+		for ((i) = 0, ap = &(n)->aps[0]; \
+			(i) < (n)->nr_aps; (i)++, ap = &(n)->aps[(i)])
 
-#define pool_for_each_block(pool, block, i)									\
-		for ((i) = 0, block = &(pool)->blocks[0];							\
-			 (i) < (pool)->nr_blocks; (i)++, block = &(pool)->blocks[(i)])
+#define pool_for_each_block(p, b, i) \
+		for ((i) = 0, b = &(p)->blocks[0]; \
+			(i) < (p)->nr_blocks; (i)++, b = &(p)->blocks[(i)])
 
-static inline struct nvm_ap *get_next_ap(struct nvmd *nvmd) {
-	return &nvmd->aps[atomic_inc_return(&nvmd->next_write_ap) % nvmd->nr_aps];
+static inline struct nvm_ap *get_next_ap(struct nvmd *n) {
+	return &n->aps[atomic_inc_return(&n->next_write_ap) % n->nr_aps];
 }
 
 static inline int block_is_full(struct nvm_block *block)
@@ -467,25 +490,25 @@ static inline sector_t block_to_addr(struct nvm_block *block)
 	return block->id * nvmd->nr_host_pages_in_blk;
 }
 
-static inline struct nvm_pool *paddr_to_pool(struct nvmd *nvmd, sector_t p_addr)
+static inline struct nvm_pool *paddr_to_pool(struct nvmd *n, sector_t p_addr)
 {
-	return &nvmd->pools[p_addr / (nvmd->nr_pages / nvmd->nr_pools)];
+	return &n->pools[p_addr / (n->nr_pages / n->nr_pools)];
 }
 
-static inline struct nvm_ap *block_to_ap(struct nvmd *nvmd, struct nvm_block *block)
+static inline struct nvm_ap *block_to_ap(struct nvmd *n, struct nvm_block *b)
 {
 	unsigned int ap_idx, div, mod;
 
-	div = block->id / nvmd->nr_blks_per_pool;
-	mod = block->id % nvmd->nr_blks_per_pool;
-	ap_idx = div + (mod / (nvmd->nr_blks_per_pool / nvmd->nr_aps_per_pool));
+	div = b->id / n->nr_blks_per_pool;
+	mod = b->id % n->nr_blks_per_pool;
+	ap_idx = div + (mod / (n->nr_blks_per_pool / n->nr_aps_per_pool));
 
-	return &nvmd->aps[ap_idx];
+	return &n->aps[ap_idx];
 }
 
-static inline int physical_to_slot(struct nvmd *nvm, sector_t phys)
+static inline int physical_to_slot(struct nvmd *n, sector_t phys)
 {
-	return (phys % (nvm->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) /
+	return (phys % (n->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) /
 		NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
@@ -494,15 +517,17 @@ static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 	return bio->bi_private;
 }
 
-static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvm_inflight *inflight_map,
-								sector_t addr)
+static inline struct nvm_inflight *nvm_hash_addr_to_inflight(
+			struct nvm_inflight *inflight_map, sector_t addr)
 {
 	return &inflight_map[addr % NVM_INFLIGHT_PARTITIONS];
 }
 
-static inline void nvm_lock_addr(struct nvmd *nvmd, struct nvm_inflight *inflight_map, sector_t l_addr)
+static inline void nvm_lock_addr(struct nvmd *nvmd,
+			struct nvm_inflight *inflight_map, sector_t l_addr)
 {
-	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(inflight_map, l_addr);
+	struct nvm_inflight *inflight =
+			nvm_hash_addr_to_inflight(inflight_map, l_addr);
 	struct nvm_inflight_addr *a;
 	int tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
 
@@ -528,9 +553,11 @@ retry:
 	spin_unlock(&inflight->lock);
 }
 
-static inline void nvm_unlock_addr(struct nvmd *nvmd, struct nvm_inflight *inflight_map, sector_t l_addr)
+static inline void nvm_unlock_addr(struct nvmd *nvmd,
+			struct nvm_inflight *inflight_map, sector_t l_addr)
 {
-	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(inflight_map, l_addr);
+	struct nvm_inflight *inflight =
+			nvm_hash_addr_to_inflight(inflight_map, l_addr);
 	struct nvm_inflight_addr *a;
 
 	spin_lock(&inflight->lock);

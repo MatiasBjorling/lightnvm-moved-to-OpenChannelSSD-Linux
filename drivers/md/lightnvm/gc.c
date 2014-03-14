@@ -11,20 +11,20 @@ static void queue_pool_gc(struct nvm_pool *pool)
 
 void nvm_gc_cb(unsigned long data)
 {
-	struct nvmd *nvmd = data;
-/*
- *	struct nvm_pool *pool;
- *	int i;
- *	nvm_for_each_pool(nvmd, pool, i)
- *		queue_pool_gc(pool);
- */
+	struct nvmd *nvmd = (struct nvmd *)data;
+	struct nvm_pool *pool;
+	int i;
+
+	nvm_for_each_pool(nvmd, pool, i)
+		queue_pool_gc(pool);
+
 	mod_timer(&nvmd->gc_timer,
 			jiffies + msecs_to_jiffies(nvmd->config.gc_time));
 }
 
 static void __erase_block(struct nvm_block *block)
 {
-	/* TODO: Perform device erase */
+	/* TODO: Perform device flash erase */
 }
 
 /* the block with highest number of invalid pages, will be in the beginning
@@ -64,7 +64,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	struct nvm_rev_addr *rev;
 	struct bio *src_bio;
 	struct page *page;
-	int slot = -1;
+	int slot;
 	void *gc_private = NULL;
 	DECLARE_COMPLETION(sync);
 
@@ -157,7 +157,7 @@ void nvm_gc_collect(struct work_struct *work)
 		block = block_prio_find_max(pool);
 
 		if (!block->nr_invalid_pages) {
-			DMERR("o NO INVALID PAGES IN PRIO\n");
+			DMERR("No invalid pages\n");
 			break;
 		}
 

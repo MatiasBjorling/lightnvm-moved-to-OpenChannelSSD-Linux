@@ -64,8 +64,6 @@ void nvm_hint_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)
 	struct nvm_addr *trans_map = private;
 	if (private && trans_map == nvmd->trans_map) 
 		return nvm_defer_bio(nvmd, bio, NULL);
-
-	
 }
 
 static unsigned long nvm_get_mapping_flag(struct nvmd *nvmd, sector_t logical_addr, sector_t old_p_addr);

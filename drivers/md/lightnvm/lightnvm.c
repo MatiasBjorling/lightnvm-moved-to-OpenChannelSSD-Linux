@@ -75,7 +75,7 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 	/* limited currently to 4k write IOs */
 	if (bio_data_dir(bio) == WRITE) {
 		if (bio_sectors(bio) != NR_PHY_IN_LOG) {
-			DMERR("Write: sectors size not supported (%u)",
+			DMERR("Write sectors size not supported (%u)",
 							bio_sectors(bio));
 			bio_io_error(bio);
 			return ret;
@@ -219,7 +219,7 @@ err_blocks:
 	}
 	kfree(nvmd->pools);
 err_pool:
-	ti->error = "dm-lightnvm: Cannot allocate lightnvm data structures";
+	ti->error = "Cannot allocate lightnvm data structures";
 	return -ENOMEM;
 }
 
@@ -503,7 +503,7 @@ static void nvm_dtr(struct dm_target *ti)
 
 	kfree(nvmd);
 
-	DMINFO("dm-lightnvm successfully unloaded");
+	DMINFO("successfully unloaded");
 }
 
 static int nvm_none_write_bio(struct nvmd *nvmd, struct bio *bio)

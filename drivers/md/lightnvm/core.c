@@ -453,8 +453,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 
 			i++;
 			if (i == nvmd->nr_pools * 2) {
-				DMERR("Pool %d has to write GC data to pool %d"
-					"which is too low on free pages",
+				DMERR("P %d writing to p %d is low on pages.",
 					is_gc-1, ap->pool->id);
 				spin_lock(&ap->pool->lock);
 				break;
@@ -554,9 +553,8 @@ wait_longer:
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
 
-	if (pb->orig_bio){
+	if (pb->orig_bio)
 		bio_endio(pb->orig_bio, err);
-	}
 
 	if (pb->event) {
 		complete(pb->event);
@@ -695,7 +693,7 @@ void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
 	bio_list_add(bl, bio);
 }
 
-struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd,
+struct nvm_inflight *nvm_get_inflight(struct nvmd *nvmd,
 						struct nvm_addr *trans_map)
 {
 	BUG_ON(trans_map != nvmd->trans_map);

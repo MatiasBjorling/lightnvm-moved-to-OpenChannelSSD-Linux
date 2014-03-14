@@ -11,21 +11,25 @@ static void queue_pool_gc(struct nvm_pool *pool)
 
 void nvm_gc_cb(unsigned long data)
 {
-	struct nvmd *nvmd = (void*) data;
-//	struct nvm_pool *pool;
-//	int i;
-//	nvm_for_each_pool(nvmd, pool, i)
-//		queue_pool_gc(pool);
-	mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(nvmd->config.gc_time));
+	struct nvmd *nvmd = data;
+/*
+ *	struct nvm_pool *pool;
+ *	int i;
+ *	nvm_for_each_pool(nvmd, pool, i)
+ *		queue_pool_gc(pool);
+ */
+	mod_timer(&nvmd->gc_timer,
+			jiffies + msecs_to_jiffies(nvmd->config.gc_time));
 }
 
 static void __erase_block(struct nvm_block *block)
 {
-	// Perform device erase
+	/* TODO: Perform device erase */
 }
 
-/* the block with highest number of invalid pages, will be in the beginning of the list */
-static struct nvm_block* block_max_invalid(struct nvm_block *a,
+/* the block with highest number of invalid pages, will be in the beginning
+ * of the list */
+static struct nvm_block *block_max_invalid(struct nvm_block *a,
 					   struct nvm_block *b)
 {
 	BUG_ON(!a || !b);
@@ -52,9 +56,8 @@ static struct nvm_block *block_prio_find_max(struct nvm_pool *pool)
 	return max;
 }
 
-/* Move data away from flash block to be erased. Additionally update the l to p and p to l
- * mappings.
- */
+/* Move data away from flash block to be erased. Additionally update the
+ * l to p and p to l mappings. */
 static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 {
 	struct nvm_addr src;
@@ -68,12 +71,10 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
 		return;
 
-	//DMERR("move_pages: block %d", block->id);
 	while ((slot = find_first_zero_bit(block->invalid_pages,
 					   nvmd->nr_host_pages_in_blk)) <
 						nvmd->nr_host_pages_in_blk) {
 		/* Perform read */
-		//DMERR("move_valid_pages: block %u slot %u\n", block->id, slot);
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
 
@@ -88,7 +89,6 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
-		//DMERR("move_valid_pages: submit GC READ src block %d addr %ld", src.block->id, src.addr);
 		init_completion(&sync);
 		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync, NULL);
 		wait_for_completion(&sync);
@@ -108,10 +108,13 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		gc_private = NULL;
 		if (nvmd->type->begin_gc)
-			gc_private = nvmd->type->begin_gc(nvmd, rev->addr, src.addr, block);
+			gc_private = nvmd->type->begin_gc(nvmd,
+							rev->addr, src.addr,
+									block);
 
 		init_completion(&sync);
-		nvm_write_bio(nvmd, src_bio, 1, gc_private, &sync, rev->trans_map, 1);
+		nvm_write_bio(nvmd, src_bio, 1, gc_private, &sync,
+							rev->trans_map, 1);
 		wait_for_completion(&sync);
 
 		if (nvmd->type->end_gc)
@@ -119,9 +122,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		bio_put(src_bio);
 		mempool_free(page, nvmd->page_pool);
-		//DMERR("move_valid_pages: p slot %u block %u\n", slot, block->id);
 	}
-	//DMERR("move_pages: block %d done", block->id);
 	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
 }
 
@@ -129,10 +130,10 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
  * Only GC should do this */
 void nvm_block_release(struct kref *ref)
 {
-	struct nvm_block *block = container_of(ref, struct nvm_block, ref_count);
+	struct nvm_block *block =
+				container_of(ref, struct nvm_block, ref_count);
 	struct nvmd *nvmd = block->pool->nvmd;
 
-	//DMERR("nvm_block_release: release block %d", block->id);
 	BUG_ON(atomic_read(&block->gc_running) != 1);
 
 	queue_work(nvmd->kgc_wq, &block->ws_gc);
@@ -145,11 +146,9 @@ void nvm_gc_collect(struct work_struct *work)
 	struct nvm_block *block;
 	unsigned int nr_blocks_need;
 
-	/* DMDEBUG("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d", pid, nr_blocks_need, pool->nr_free_blocks); */
 	nr_blocks_need = pool->nr_blocks / 10;
-	/*DMINFO("pool_id=%d nr_blocks_need %d pool->nr_free_blocks %d",
-	 * pid, nr_blocks_need, pool->nr_free_blocks);*/
-	//printk("i need %u %u\n", nr_blocks_need, pool->nr_free_blocks);
+
+
 	spin_lock(&pool->gc_lock);
 	spin_lock(&nvmd->trans_lock);
 	spin_lock(&pool->lock);
@@ -162,7 +161,6 @@ void nvm_gc_collect(struct work_struct *work)
 			break;
 		}
 
-		//DMERR("nvm_gc_collect: delete block %d from prio (nr_invalid_pages %d)", block->id, block->nr_invalid_pages);
 		list_del_init(&block->prio);
 		pool->nr_gc_blocks++;
 

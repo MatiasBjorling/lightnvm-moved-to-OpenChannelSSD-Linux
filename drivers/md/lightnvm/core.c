@@ -124,7 +124,7 @@ void invalidate_block_page(struct nvmd *nvmd, struct nvm_addr *p)
 	spin_unlock(&block->lock);
 }
 
-int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
+void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 					int is_gc, struct nvm_addr *trans_map)
 {
 	struct nvm_addr *gp;
@@ -148,8 +148,6 @@ int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 	rev->addr = l_addr;
 	rev->trans_map = trans_map;
 	spin_unlock(&nvmd->trans_lock);
-
-	return 0;
 }
 
 /* requires pool->lock taken */
@@ -441,7 +439,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 {
 	struct nvm_ap *ap;
 	struct nvm_addr *p;
-	int ret, i = 0;
+	int i = 0;
 
 	ap = get_next_ap(nvmd);
 
@@ -471,18 +469,8 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	p = nvm_alloc_addr_from_ap(ap, is_gc);
 	spin_unlock(&ap->lock);
 
-	if (p) {
-		ret = nvm_update_map(nvmd, l_addr, p, is_gc, trans_map);
-
-		if (ret) {
-			DMERR("Can't update map");
-			BUG_ON(!is_gc);
-
-			invalidate_block_page(nvmd, p);
-
-			return (struct nvm_addr *)LTOP_POISON;
-		}
-	}
+	if (p)
+		nvm_update_map(nvmd, l_addr, p, is_gc, trans_map);
 
 	return p;
 }
@@ -680,15 +668,6 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	p = nvmd->type->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
 
 	if (p) {
-		if ((unsigned long)p == LTOP_POISON) {
-			BUG_ON(!is_gc);
-			DMERR("GC write might overwrite ongoing regular write "\
-						"to same l_addr. abort");
-			if (sync)
-				complete(sync);
-			return NVM_WRITE_GC_ABORT;
-		}
-
 		nvm_lock_addr(nvmd,
 				nvmd->type->get_inflight(nvmd, trans_map),
 				l_addr);

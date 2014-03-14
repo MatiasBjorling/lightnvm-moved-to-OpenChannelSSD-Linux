@@ -419,7 +419,7 @@ struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
 int nvm_write_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync, struct nvm_addr *trans_map, unsigned int complete_bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
-int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc, struct nvm_addr *trans_map);
+void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc, struct nvm_addr *trans_map);
 void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync, struct nvm_addr *trans_map);
 void nvm_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 

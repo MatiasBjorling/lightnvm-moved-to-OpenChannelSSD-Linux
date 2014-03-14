@@ -718,16 +718,7 @@ static struct nvm_addr *nvm_map_swap_hint_ltop_rr(struct nvmd *nvmd,
 
 	/* got fast addr */
 	//DMERR("swap_map: hinted write lba %ld to page %ld", l_addr, p->addr);
-	ret = nvm_update_map(nvmd, l_addr, p, is_gc, trans_map);
-
-	if (ret) {
-		DMERR("swap_map: Cant update map");
-		BUG_ON(!is_gc);
-
-		invalidate_block_page(nvmd, p);
-
-		return (struct nvm_addr *)LTOP_POISON;
-	}
+	nvm_update_map(nvmd, l_addr, p, is_gc, trans_map);
 
 	return p;
 regular:

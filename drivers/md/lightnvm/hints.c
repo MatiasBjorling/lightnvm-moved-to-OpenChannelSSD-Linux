@@ -12,6 +12,26 @@ static inline unsigned long diff_tv(struct timeval *curr_tv, struct timeval *ap_
 				+ (1000000-ap_tv->tv_usec) + curr_tv->tv_usec;
 }
 
+static inline int page_is_fast(struct nvmd *nvmd, unsigned int pagenr)
+{
+	printk("larlar\n");
+	/* pages: F F F F | SSFFSS | SSFFSS | ... | S S S S . S Slow F Fast */
+	if (pagenr < 4)
+		return 1;
+
+	if (pagenr >= nvmd->nr_pages_per_blk - 4)
+		return 0;
+
+	pagenr -= 4;
+	pagenr %= 4;
+
+	if (pagenr == 2 || pagenr == 3)
+		return 1;
+	
+	return 0;
+}
+
+
 void nvm_delay_endio_hint(struct nvmd *nvmd, struct bio *bio,
                               struct per_bio_data *pb, unsigned long *delay)
 {
@@ -627,6 +647,40 @@ static struct nvm_addr *nvm_map_pack_hint_ltop_rr(struct nvmd *nvmd,
 
 	return p;
 }
+
+static struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *nvmd)
+{
+	struct nvm_ap *ap;
+	struct nvm_addr *p;
+	struct nvm_block *block = NULL;
+	sector_t p_addr = LTOP_EMPTY;
+	int i;
+
+	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
+	if (!p)
+		return NULL;
+	memset(p, 0, sizeof(struct nvm_addr));
+
+	for (i = 0; i < nvmd->nr_pools; i++) {
+		ap = get_next_ap(nvmd);
+		block = ap->cur;
+
+		p_addr = nvm_alloc_phys_addr_special(block, page_is_fast);
+
+		if (p_addr != LTOP_EMPTY)
+			break;
+	}
+
+	if (p_addr == LTOP_EMPTY) {
+		mempool_free(p, nvmd->per_bio_pool);
+		return NULL;
+	}
+
+	p->addr = p_addr;
+	p->block = block;
+	return p;
+}
+
 
 /* Swap-proned Logical to physical address translation.
  *

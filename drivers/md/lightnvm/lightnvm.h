@@ -256,6 +256,8 @@ typedef int (*nvm_init_fn)(struct nvmd *nvmd);
 typedef void (*nvm_exit_fn)(struct nvmd *nvmd);
 typedef void (*nvm_endio_fn)(struct nvmd *nvmd, struct bio *bio, struct per_bio_data *pb, unsigned long *delay);
 
+typedef int (*nvm_page_special_fn)(struct nvmd *, unsigned int);
+
 struct nvm_target_type {
 	const char *name;
 	unsigned version[3];
@@ -388,14 +390,14 @@ struct nvm_target_type *find_nvm_target_type(const char *name);
 
 /* core.c */
 /*   Helpers */
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
+struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map);
 void invalidate_block_page(struct nvmd *, struct nvm_addr *);
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
-struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
-sector_t nvm_alloc_phys_addr(struct nvm_block *);
-struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *);
 void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private);
-struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map);
+sector_t nvm_alloc_phys_addr(struct nvm_block *);
+sector_t nvm_alloc_phys_addr_special(struct nvm_block *, nvm_page_special_fn);
 
 /*   Naive implementations */
 void nvm_delayed_bio_submit(struct work_struct *);
@@ -463,24 +465,6 @@ static inline sector_t block_to_addr(struct nvm_block *block)
 	BUG_ON(!block);
 	nvmd = block->pool->nvmd;
 	return block->id * nvmd->nr_host_pages_in_blk;
-}
-
-static inline int page_is_fast(struct nvmd *nvmd, unsigned int pagenr)
-{
-	/* pages: F F F F | SSFFSS | SSFFSS | ... | S S S S . S Slow F Fast */
-	if (pagenr < 4)
-		return 1;
-
-	if (pagenr >= nvmd->nr_pages_per_blk - 4)
-		return 0;
-
-	pagenr -= 4;
-	pagenr %= 4;
-
-	if (pagenr == 2 || pagenr == 3)
-		return 1;
-	
-	return 0;
 }
 
 static inline struct nvm_pool *paddr_to_pool(struct nvmd *nvmd, sector_t p_addr)

@@ -236,7 +236,8 @@ void nvm_pool_put_block(struct nvm_block *block)
 
 }
 
-static sector_t __nvm_alloc_phys_addr(struct nvm_block *block, int req_fast)
+static sector_t __nvm_alloc_phys_addr(struct nvm_block *block,
+							nvm_page_special_fn ps)
 {
 	struct nvmd *nvmd;
 	sector_t addr = LTOP_EMPTY;
@@ -247,15 +248,14 @@ static sector_t __nvm_alloc_phys_addr(struct nvm_block *block, int req_fast)
 
 	spin_lock(&block->lock);
 
-	if (block_is_full(block)){
+	if (block_is_full(block))
 		goto out;
-	}
 
 	/* If there is multiple host pages within a flash page, we add the
 	 * the offset to the address, instead of requesting a new page
 	 * from the physical block */
 	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
-		if (req_fast && !page_is_fast(nvmd, block->next_page + 1))
+		if (ps && !ps(nvmd, block->next_page + 1))
 			goto out;
 
 		block->next_offset = 0;
@@ -263,52 +263,27 @@ static sector_t __nvm_alloc_phys_addr(struct nvm_block *block, int req_fast)
 	}
 
 	addr = block_to_addr(block) +
-	       (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) + block->next_offset;
+			(block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
+			block->next_offset;
 	block->next_offset++;
 
 	if (nvmd->type->alloc_phys_addr)
 		nvmd->type->alloc_phys_addr(nvmd, block);
+
 out:
 	spin_unlock(&block->lock);
 	return addr;
 }
 
-sector_t nvm_alloc_phys_addr(struct nvm_block *block)
+sector_t nvm_alloc_phys_addr_special(struct nvm_block *block,
+						nvm_page_special_fn ps)
 {
-	return __nvm_alloc_phys_addr(block, 0);
+	return __nvm_alloc_phys_addr(block, ps);
 }
 
-struct nvm_addr *nvm_alloc_phys_fastest_addr(struct nvmd *nvmd)
+sector_t nvm_alloc_phys_addr(struct nvm_block *block)
 {
-	struct nvm_ap *ap;
-	struct nvm_addr *p;
-	struct nvm_block *block = NULL;
-	sector_t p_addr = LTOP_EMPTY;
-	int i;
-
-	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
-	if (!p)
-		return NULL;
-	memset(p, 0, sizeof(struct nvm_addr));
-
-	for (i = 0; i < nvmd->nr_pools; i++) {
-		ap = get_next_ap(nvmd);
-		block = ap->cur;
-
-		p_addr = __nvm_alloc_phys_addr(block, 1);
-
-		if (p_addr != LTOP_EMPTY)
-			break;
-	}
-
-	if (p_addr == LTOP_EMPTY) {
-		mempool_free(p, nvmd->per_bio_pool);
-		return NULL;
-	}
-
-	p->addr = p_addr;
-	p->block = block;
-	return p;
+	return __nvm_alloc_phys_addr(block, NULL);
 }
 
 /* requires ap->lock taken */
@@ -573,8 +548,9 @@ wait_longer:
 	}
 
 	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
-		/* we need this. updating pool current only by waiting_bios worker
-		   leaves a windows where current is bio thats was already ended */ 
+		/* we need this. updating pool current only by waiting_bios
+		 * worker leaves a windows where current is bio thats was
+		 * already ended */
 		spin_lock(&pool->waiting_lock);
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
@@ -735,7 +711,8 @@ void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
 	bio_list_add(bl, bio);
 }
 
-struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map) 
+struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd,
+						struct nvm_addr *trans_map)
 {
 	BUG_ON(trans_map != nvmd->trans_map);
 	return nvmd->inflight;

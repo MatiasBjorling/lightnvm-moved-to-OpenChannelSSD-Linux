@@ -579,7 +579,7 @@ wait_longer:
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
 
-		queue_work(pool->kbiod_wq, &pool->waiting_ws);
+		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
 	}
 
 
@@ -655,12 +655,11 @@ finished:
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv)
 {
 	struct nvmd *nvmd = p->block->pool->nvmd;
-	sector_t p_addr = p->addr;
 	struct nvm_block *block = p->block;
 	unsigned int idx;
 	void *src_p, *dst_p;
 
-	idx = p_addr % nvmd->nr_host_pages_in_blk;
+	idx = p->addr % nvmd->nr_host_pages_in_blk;
 	src_p = kmap_atomic(bv->bv_page);
 	dst_p = kmap_atomic(&block->data[idx]);
 	memcpy(dst_p, src_p, bv->bv_len);
@@ -690,7 +689,7 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 	return issue_bio;
 }
 
-int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
+int nvm_write_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		void *private, struct completion *sync,
 		struct nvm_addr *trans_map, unsigned int complete_bio)
 {
@@ -716,10 +715,10 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 		issue_bio = nvm_write_init_bio(nvmd, bio, p);
 		if (complete_bio)
 			nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio,
-									sync, trans_map);
+							sync, trans_map);
 		else
 			nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, NULL,
-									sync, trans_map);
+							sync, trans_map);
 	} else {
 		BUG_ON(is_gc);
 		nvmd->type->defer_bio(nvmd, bio, trans_map);
@@ -729,12 +728,6 @@ int nvm_write_execute_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 	}
 
 	return NVM_WRITE_SUCCESS;
-}
-
-int nvm_write_bio(struct nvmd *nvmd, struct bio *bio)
-{
-	nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, nvmd->trans_map, 1);
-	return DM_MAPIO_SUBMITTED;
 }
 
 void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
@@ -801,7 +794,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 		}
 
 		/* we're the only bio waiting. queue relevant worker*/
-		queue_work(pool->kbiod_wq, &pool->waiting_ws);
+		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
 		spin_unlock(&pool->waiting_lock);
 		return;
 	}

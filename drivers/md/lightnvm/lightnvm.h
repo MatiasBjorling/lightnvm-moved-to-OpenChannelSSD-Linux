@@ -108,7 +108,7 @@ struct nvm_block {
 		   fill up the flash page before going to the next
 		   writable flash page */
 		unsigned char next_offset;
-		/* number of pages that are invalid, with respect to host page size */
+		/* number of pages that are invalid, wrt host page size */
 		unsigned int nr_invalid_pages;
 #define MAX_INVALID_PAGES_STORAGE 8
 		/* Bitmap for invalid page intries */
@@ -185,8 +185,6 @@ struct nvm_pool {
 	struct completion gc_finished;
 	struct work_struct gc_ws;
 
-	struct workqueue_struct *kbiod_wq;
-
 	void *private;
 };
 
@@ -195,7 +193,7 @@ struct nvm_pool {
  * An append point has a current block, that it writes to, and when its full, it requests
  * a new block, of which it continues its writes.
  *
- * one ap per pool may be reserved for pack-hints related writes. 
+ * one ap per pool may be reserved for pack-hints related writes.
  * In those that are not not, private is NULL.
  */
 struct nvm_ap {
@@ -400,10 +398,9 @@ void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private);
 struct nvm_inflight* nvm_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map);
 
 /*   Naive implementations */
-void nvm_delayed_bio_submit(struct work_struct *work);
-void nvm_delayed_bio_defer(struct work_struct *work);
-void nvm_deferred_bio_submit(struct work_struct *work);
-void nvm_gc_block(struct work_struct *work);
+void nvm_delayed_bio_submit(struct work_struct *);
+void nvm_deferred_bio_submit(struct work_struct *);
+void nvm_gc_block(struct work_struct *);
 
 /* Allocation of physical addresses from block when increasing responsibility. */
 struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *, int is_gc);
@@ -415,14 +412,13 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 struct nvm_rev_addr *nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
-void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync, struct nvm_addr *trans_map);
+struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private);
 struct bio *nvm_write_init_bio(struct nvmd *, struct bio *bio, struct nvm_addr *p);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
-int nvm_write_execute_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync, struct nvm_addr *trans_map, unsigned int complete_bio);
-int nvm_write_bio(struct nvmd *, struct bio *bio);
+int nvm_write_bio(struct nvmd *, struct bio *bio, int is_gc, void *private, struct completion *sync, struct nvm_addr *trans_map, unsigned int complete_bio);
 int nvm_read_bio(struct nvmd *, struct bio *bio);
 int nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p, int is_gc, struct nvm_addr *trans_map);
-struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private);
+void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw, struct bio *, struct bio *orig_bio, struct completion *sync, struct nvm_addr *trans_map);
 void nvm_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
 
 /*   NVM device related */
@@ -481,7 +477,7 @@ static inline int page_is_fast(struct nvmd *nvmd, unsigned int pagenr)
 	pagenr -= 4;
 	pagenr %= 4;
 
-	if (pagenr == 2 || pagenr == 3) 
+	if (pagenr == 2 || pagenr == 3)
 		return 1;
 	
 	return 0;

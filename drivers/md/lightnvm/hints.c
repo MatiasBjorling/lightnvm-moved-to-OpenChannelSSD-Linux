@@ -455,7 +455,7 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	}
 #endif
 	/* Submit bio for all physical addresses*/
-	ret = nvm_write_execute_bio(nvmd, bio, 0, info, NULL, nvmd->trans_map, 1);
+	ret = nvm_write_bio(nvmd, bio, 0, info, NULL, nvmd->trans_map, 1);
 	if (ret) {
 #ifndef TEST_LAT
 		if (info && info->flags & HINT_LATENCY) 
@@ -468,10 +468,10 @@ static int nvm_write_bio_hint(struct nvmd *nvmd, struct bio *bio)
 	/* Got latency hint for l_addr, and allocate bio for shadow write*/
 #ifndef TEST_LAT
 	if (info && info->flags & HINT_LATENCY)
-		nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, hint->shadow_map, 0);
+		nvm_write_bio(nvmd, bio, 0, NULL, NULL, hint->shadow_map, 0);
 #else
 	if(info)
-		nvm_write_execute_bio(nvmd, bio, 0, NULL, NULL, hint->shadow_map, 0);
+		nvm_write_bio(nvmd, bio, 0, NULL, NULL, hint->shadow_map, 0);
 #endif
 
 finished:

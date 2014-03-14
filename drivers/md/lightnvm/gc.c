@@ -111,7 +111,7 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 			gc_private = nvmd->type->begin_gc(nvmd, rev->addr, src.addr, block);
 
 		init_completion(&sync);
-		nvm_write_execute_bio(nvmd, src_bio, 1, gc_private, &sync, rev->trans_map, 1);
+		nvm_write_bio(nvmd, src_bio, 1, gc_private, &sync, rev->trans_map, 1);
 		wait_for_completion(&sync);
 
 		if (nvmd->type->end_gc)

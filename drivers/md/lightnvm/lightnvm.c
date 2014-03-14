@@ -1,8 +1,6 @@
 /*
  * Copyright (C) 2014 Matias Bjørling.
  *
- * This file is released under GPL.
- *
  * Todo
  *
  * - Implement fetching of bad pages from flash
@@ -19,10 +17,9 @@
  *   nvm_block lists.
  */
 
-#include <linux/percpu_ida.h>
 #include "lightnvm.h"
 
-/* Defaults 
+/* Defaults
  * Number of append points per pool. We assume that accesses within a pool is
  * serial (NAND flash/PCM/etc.)
  */
@@ -39,6 +36,7 @@
 /* Run GC every X seconds */
 #define GC_TIME 10
 
+/* Minimum pages needed within a pool */
 #define MIN_POOL_PAGES 16
 
 static struct kmem_cache *_per_bio_cache;
@@ -50,7 +48,7 @@ static int nvm_ioctl(struct dm_target *ti, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case LIGHTNVM_IOCTL_ID:
-		return 0xCECECECE; // TODO: Fetch ID from disk
+		return 0xCECECECE; /* TODO: Fetch ID from disk */
 		break;
 	}
 
@@ -65,7 +63,7 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 	struct nvmd *nvmd = ti->private;
 	int ret = DM_MAPIO_SUBMITTED;
 
-	if (bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages){
+	if (bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages) {
 		DMERR("Illegal nvm address: %lu %ld", bio_data_dir(bio),
 						bio->bi_sector / NR_PHY_IN_LOG);
 		bio_io_error(bio);
@@ -91,13 +89,13 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 }
 
 static void nvm_status(struct dm_target *ti, status_type_t type,
-                           unsigned status_flags, char *result, unsigned maxlen)
+			unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct nvmd *nvmd = ti->private;
 	struct nvm_ap *ap;
 	int i, sz = 0;
 
-	switch(type) {
+	switch (type) {
 	case STATUSTYPE_INFO:
 		DMEMIT("Use table information");
 		break;
@@ -173,16 +171,10 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			INIT_WORK(&block->ws_gc, nvm_gc_block);
 		}
 		spin_unlock(&pool->lock);
-
-		pool->kbiod_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
-		if (!pool->kbiod_wq) {
-			DMERR("Couldn't start knvm-worker");
-			goto err_blocks;
-		}
 }
 
 	nvmd->nr_aps = nvmd->nr_aps_per_pool * nvmd->nr_pools;
-	nvmd->aps = kzalloc(sizeof(struct nvm_ap) * nvmd->nr_pools *nvmd->nr_aps, GFP_KERNEL);
+	nvmd->aps = kzalloc(sizeof(struct nvm_ap) * nvmd->nr_aps, GFP_KERNEL);
 	if (!nvmd->aps)
 		goto err_blocks;
 
@@ -202,28 +194,28 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		ap->t_erase = nvmd->config.t_erase;
 	}
 
-	nvmd->kbiod_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND, 1);
+	/* we make room for each pool context. */
+	nvmd->kbiod_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
+						nvmd->nr_pools);
 	if (!nvmd->kbiod_wq) {
-		DMERR("Couldn't start knvm-worker");
+		DMERR("Couldn't start knvm-work");
 		goto err_blocks;
 	}
 
 	nvmd->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
 	if (!nvmd->kgc_wq) {
 		DMERR("Couldn't start knvm-gc");
-		destroy_workqueue(nvmd->kgc_wq);
-		goto err_blocks;
+		goto err_wq;
 	}
 
 	return 0;
+err_wq:
+	destroy_workqueue(nvmd->kbiod_wq);
 err_blocks:
 	nvm_for_each_pool(nvmd, pool, i) {
 		if (!pool->blocks)
 			break;
 		kfree(pool->blocks);
-
-		if(pool->kbiod_wq)
-			destroy_workqueue(pool->kbiod_wq);
 	}
 	kfree(nvmd->pools);
 err_pool:
@@ -236,12 +228,15 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	int i;
 	unsigned int order;
 
-	nvmd->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE * nvmd->nr_pages_per_blk;
-	nvmd->nr_pages = nvmd->nr_pools * nvmd->nr_blks_per_pool * nvmd->nr_host_pages_in_blk;
+	nvmd->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE
+						* nvmd->nr_pages_per_blk;
+	nvmd->nr_pages = nvmd->nr_pools * nvmd->nr_blks_per_pool
+						* nvmd->nr_host_pages_in_blk;
 	order = ffs(nvmd->nr_host_pages_in_blk) - 1;
 
 	/* Invalid pages in block bitmap is preallocated. */
-	if (nvmd->nr_host_pages_in_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG)
+	if (nvmd->nr_host_pages_in_blk >
+				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG)
 		return -EINVAL;
 
 	nvmd->trans_map = vmalloc(sizeof(struct nvm_addr) * nvmd->nr_pages);
@@ -249,13 +244,13 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 		return -ENOMEM;
 	memset(nvmd->trans_map, 0, sizeof(struct nvm_addr) * nvmd->nr_pages);
 
-	// initial l2p is LTOP_EMPTY
 	for (i = 0; i < nvmd->nr_pages; i++) {
 		struct nvm_addr *p = &nvmd->trans_map[i];
 		p->addr = LTOP_EMPTY;
 	}
 
-	nvmd->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr) * nvmd->nr_pages);
+	nvmd->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr)
+							* nvmd->nr_pages);
 	if (!nvmd->rev_trans_map)
 		goto err_rev_trans_map;
 
@@ -276,8 +271,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 		goto err_addr_pool;
 
 	if (bdev_physical_block_size(nvmd->dev->bdev) > EXPOSED_PAGE_SIZE) {
-		ti->error = "dm-lightnvm: Got bad sector size. Device sector size \
-			is larger than exposed";
+		ti->error = "bad sector size.";
 		goto err_block_page_pool;
 	}
 	nvmd->sector_size = EXPOSED_PAGE_SIZE;
@@ -302,7 +296,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	if (nvmd->type->init && nvmd->type->init(nvmd))
 		goto err_block_page_pool;
 
-	// FIXME: Clean up pool init on failure.
+	/* FIXME: Clean up pool init on failure. */
 	setup_timer(&nvmd->gc_timer, nvm_gc_cb, (unsigned long)nvmd);
 	mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(1000));
 
@@ -324,8 +318,8 @@ err_rev_trans_map:
 
 /*
  * Accepts an LightNVM-backed block-device. The LightNVM device should run the
- * corresponding physical firmware that exports the flash as physical without any
- * mapping and garbage collection as it will be taken care of.
+ * corresponding physical firmware that exports the flash as physical without
+ * any mapping and garbage collection as it will be taken care of.
  */
 static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 {
@@ -333,7 +327,6 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	unsigned int tmp;
 	char dummy;
 
-	// Which device it should map onto?
 	if (argc < 5) {
 		ti->error = "Insufficient arguments";
 		return -EINVAL;
@@ -345,7 +338,8 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		return -ENOMEM;
 	}
 
-	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table), &nvmd->dev))
+	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table),
+								&nvmd->dev))
 		goto err_map;
 
 	dm_set_target_max_io_len(ti, NR_PHY_IN_LOG);
@@ -446,15 +440,15 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	}
 
 	DMINFO("Configured with");
-	DMINFO("Pools: %u Blocks: %u Pages: %u Host Pages: %u \
-			Aps: %u Aps Pool: %u",
+	DMINFO("Pools: %u Blocks: %u Pages: %u APs: %u Pool per AP: %u",
 	       nvmd->nr_pools,
 	       nvmd->nr_blks_per_pool,
 	       nvmd->nr_pages_per_blk,
-	       nvmd->nr_host_pages_in_blk,
 	       nvmd->nr_aps,
 	       nvmd->nr_aps_per_pool);
-	DMINFO("Timings: %u/%u/%u", nvmd->config.t_read, nvmd->config.t_write,
+	DMINFO("Timings: %u/%u/%u",
+			nvmd->config.t_read,
+			nvmd->config.t_write,
 			nvmd->config.t_erase);
 	DMINFO("Target sector size=%d", nvmd->sector_size);
 	DMINFO("Disk logical sector size=%d",
@@ -483,7 +477,6 @@ static void nvm_dtr(struct dm_target *ti)
 	nvm_for_each_pool(nvmd, pool, i) {
 		while (bio_list_peek(&pool->waiting_bios))
 			flush_scheduled_work();
-		destroy_workqueue(pool->kbiod_wq);
 	}
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */
@@ -513,6 +506,12 @@ static void nvm_dtr(struct dm_target *ti)
 	DMINFO("dm-lightnvm successfully unloaded");
 }
 
+static int nvm_none_write_bio(struct nvmd *nvmd, struct bio *bio)
+{
+	nvm_write_bio(nvmd, bio, 0, NULL, NULL, nvmd->trans_map, 1);
+	return DM_MAPIO_SUBMITTED;
+}
+
 /* none target type, round robin, page-based FTL, and cost-based GC */
 static struct nvm_target_type nvm_target_none = {
 	.name			= "none",
@@ -520,7 +519,7 @@ static struct nvm_target_type nvm_target_none = {
 	.lookup_ltop	= nvm_lookup_ltop,
 	.lookup_ptol	= nvm_lookup_ptol,
 	.map_ltop	= nvm_map_ltop_rr,
-	.write_bio	= nvm_write_bio,
+	.write_bio	= nvm_none_write_bio,
 	.read_bio	= nvm_read_bio,
 	.defer_bio	= nvm_defer_bio,
 	.bio_wait_add	= nvm_bio_wait_add,

@@ -1,8 +1,4 @@
 #include "lightnvm.h"
-#include <linux/list.h>
-#include <linux/blkdev.h>
-#include <linux/time.h>
-#include <linux/percpu_ida.h>
 
 static void show_pool(struct nvm_pool *pool)
 {
@@ -572,7 +568,8 @@ wait_longer:
 
 	if (pb->event) {
 		complete(pb->event);
-		/* all submitted bios allocate their own addr, except GC reads*/
+		/* all submitted bios allocate their own addr,
+		 * except GC reads */
 		if (bio_data_dir(bio) == READ)
 			goto free_pb;
 	}

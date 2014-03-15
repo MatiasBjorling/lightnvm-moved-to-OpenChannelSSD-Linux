@@ -744,12 +744,6 @@ void nvm_bio_wait_add_prio(struct bio_list *bl, struct bio *bio, void *p_private
 	bio_list_add(bl, bio);
 }
 
-struct nvm_inflight* nvm_hint_get_inflight(struct nvmd *nvmd, struct nvm_addr *trans_map) 
-{
-	struct nvm_hint *hint = nvmd->private;
-	return (trans_map==nvmd->trans_map)?nvmd->inflight:hint->inflight;
-}
-
 #if 0
 static struct nvm_addr *nvm_latency_lookup_ltop(struct nvmd *nvmd, sector_t logical_addr, void *prio_o)
 {
@@ -1179,12 +1173,6 @@ static int nvm_init_hint(struct nvmd *nvmd)
 		init_pool_hint(pool);
 	}
 
-	/* inflight maintainence */
-	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
-		spin_lock_init(&hint->inflight[i].lock);
-		INIT_LIST_HEAD(&hint->inflight[i].list);
-	}
-
 	nvmd->private = hint;
 
 	return 0;
@@ -1233,7 +1221,6 @@ static struct nvm_target_type nvm_target_swap = {
 	.lookup_ptol	= nvm_lookup_ptol,
 	.defer_bio	= nvm_defer_bio,
 	.bio_wait_add	= nvm_bio_wait_add,
-	.get_inflight	= nvm_get_inflight,
 };
 
 static struct nvm_target_type nvm_target_latency = {
@@ -1246,7 +1233,6 @@ static struct nvm_target_type nvm_target_latency = {
 	.read_bio = nvm_read_bio_hint,
 	.defer_bio = nvm_hint_defer_bio,
 	.bio_wait_add = nvm_bio_wait_add_prio,
-	.get_inflight = nvm_hint_get_inflight,
 	.endio = nvm_delay_endio_hint,
 	.init = nvm_init_hint,
 	.exit = nvm_exit_hint,
@@ -1274,7 +1260,6 @@ static struct nvm_target_type nvm_target_pack = {
 	.lookup_ptol	= nvm_lookup_ptol,
 	.defer_bio	= nvm_defer_bio,
 	.bio_wait_add	= nvm_bio_wait_add,
-	.get_inflight	= nvm_get_inflight,
 };
 
 

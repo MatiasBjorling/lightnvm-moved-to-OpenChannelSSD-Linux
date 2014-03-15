@@ -117,7 +117,6 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	struct nvm_ap *ap;
 	int i, j;
 
-	spin_lock_init(&nvmd->trans_lock);
 	spin_lock_init(&nvmd->deferred_lock);
 	INIT_WORK(&nvmd->deferred_ws, nvm_deferred_bio_submit);
 	bio_list_init(&nvmd->deferred_bios);
@@ -147,8 +146,6 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		pool->phy_addr_end = (i + 1) * nvmd->nr_blks_per_pool - 1;
 		pool->nr_free_blocks = pool->nr_blocks =
 				pool->phy_addr_end - pool->phy_addr_start + 1;
-		pool->nr_gc_blocks = 0;
-
 		bio_list_init(&pool->waiting_bios);
 		atomic_set(&pool->is_active, 0);
 
@@ -228,17 +225,6 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	int i;
 	unsigned int order;
 
-	nvmd->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE
-						* nvmd->nr_pages_per_blk;
-	nvmd->nr_pages = nvmd->nr_pools * nvmd->nr_blks_per_pool
-						* nvmd->nr_host_pages_in_blk;
-	order = ffs(nvmd->nr_host_pages_in_blk) - 1;
-
-	/* Invalid pages in block bitmap is preallocated. */
-	if (nvmd->nr_host_pages_in_blk >
-				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG)
-		return -EINVAL;
-
 	nvmd->trans_map = vmalloc(sizeof(struct nvm_addr) * nvmd->nr_pages);
 	if (!nvmd->trans_map)
 		return -ENOMEM;
@@ -266,6 +252,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	if (!nvmd->addr_pool)
 		goto err_page_pool;
 
+	order = ffs(nvmd->nr_host_pages_in_blk) - 1;
 	nvmd->block_page_pool = mempool_create_page_pool(nvmd->nr_aps, order);
 	if (!nvmd->block_page_pool)
 		goto err_addr_pool;
@@ -280,8 +267,8 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	percpu_ida_init(&nvmd->free_inflight, NVM_INFLIGHT_TAGS);
 
 	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
-		spin_lock_init(&nvmd->inflight[i].lock);
-		INIT_LIST_HEAD(&nvmd->inflight[i].list);
+		spin_lock_init(&nvmd->inflight_map[i].lock);
+		INIT_LIST_HEAD(&nvmd->inflight_map[i].addrs);
 	}
 
 	/* simple round-robin strategy */
@@ -434,6 +421,19 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		}
 	}
 
+	nvmd->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE
+						* nvmd->nr_pages_per_blk;
+	nvmd->nr_pages = nvmd->nr_pools * nvmd->nr_blks_per_pool
+						* nvmd->nr_host_pages_in_blk;
+
+	/* Invalid pages in block bitmap is preallocated. */
+	if (nvmd->nr_host_pages_in_blk >
+				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
+		ti->error = "Num pages per block is too high";
+		return -EINVAL;
+	}
+
+
 	if (nvm_init(ti, nvmd) < 0) {
 		ti->error = "Cannot initialize lightnvm structure";
 		goto err_map;
@@ -474,6 +474,8 @@ static void nvm_dtr(struct dm_target *ti)
 	if (nvmd->type->exit)
 		nvmd->type->exit(nvmd);
 
+	del_timer(&nvmd->gc_timer);
+
 	nvm_for_each_pool(nvmd, pool, i) {
 		while (bio_list_peek(&pool->waiting_bios))
 			flush_scheduled_work();
@@ -489,10 +491,9 @@ static void nvm_dtr(struct dm_target *ti)
 	vfree(nvmd->trans_map);
 	vfree(nvmd->rev_trans_map);
 
-	del_timer(&nvmd->gc_timer);
-
 	destroy_workqueue(nvmd->kbiod_wq);
 	destroy_workqueue(nvmd->kgc_wq);
+
 	mempool_destroy(nvmd->per_bio_pool);
 	mempool_destroy(nvmd->page_pool);
 	mempool_destroy(nvmd->addr_pool);
@@ -523,7 +524,6 @@ static struct nvm_target_type nvm_target_none = {
 	.read_bio	= nvm_read_bio,
 	.defer_bio	= nvm_defer_bio,
 	.bio_wait_add	= nvm_bio_wait_add,
-	.get_inflight	= nvm_get_inflight,
 };
 
 static struct target_type lightnvm_target = {

@@ -15,9 +15,9 @@ void nvm_gc_cb(unsigned long data)
 	struct nvm_pool *pool;
 	int i;
 
-	nvm_for_each_pool(nvmd, pool, i)
+/*	nvm_for_each_pool(nvmd, pool, i)
 		queue_pool_gc(pool);
-
+*/
 	mod_timer(&nvmd->gc_timer,
 			jiffies + msecs_to_jiffies(nvmd->config.gc_time));
 }
@@ -89,20 +89,21 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
 			DMERR("Could not add page");
 
-		init_completion(&sync);
-		nvm_submit_bio(nvmd, &src, 0, READ, src_bio, NULL, &sync, NULL);
-		wait_for_completion(&sync);
-
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
 		rev = nvmd->type->lookup_ptol(nvmd, src.addr);
 
-		/* remap src_bio to write the logical addr to new physical
-		 * place */
-
-		/* already updated by concurrent regular write*/
+		/* already updated by previous regular write */
 		if (rev->addr == LTOP_POISON)
 			continue;
+
+		/* unlocked by nvm_submit_bio nvm_endio */
+		nvm_lock_addr(nvmd, rev->addr);
+
+		init_completion(&sync);
+		nvm_submit_bio(nvmd, &src, rev->addr, READ, src_bio, NULL,
+								&sync, NULL);
+		wait_for_completion(&sync);
 
 		src_bio->bi_sector = rev->addr * NR_PHY_IN_LOG;
 
@@ -126,19 +127,6 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
 }
 
-/* Push erase condition to automatically be executed when block goes to zero.
- * Only GC should do this */
-void nvm_block_release(struct kref *ref)
-{
-	struct nvm_block *block =
-				container_of(ref, struct nvm_block, ref_count);
-	struct nvmd *nvmd = block->pool->nvmd;
-
-	BUG_ON(atomic_read(&block->gc_running) != 1);
-
-	queue_work(nvmd->kgc_wq, &block->ws_gc);
-}
-
 void nvm_gc_collect(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, gc_ws);
@@ -148,11 +136,12 @@ void nvm_gc_collect(struct work_struct *work)
 
 	nr_blocks_need = pool->nr_blocks / 10;
 
+	if (nr_blocks_need < nvmd->nr_aps)
+		nr_blocks_need = nvmd->nr_aps;
 
 	spin_lock(&pool->gc_lock);
-	spin_lock(&nvmd->trans_lock);
 	spin_lock(&pool->lock);
-	while (nr_blocks_need > (pool->nr_gc_blocks + pool->nr_free_blocks) &&
+	while (nr_blocks_need > pool->nr_free_blocks &&
 						!list_empty(&pool->prio_list)) {
 		block = block_prio_find_max(pool);
 
@@ -162,15 +151,15 @@ void nvm_gc_collect(struct work_struct *work)
 		}
 
 		list_del_init(&block->prio);
-		pool->nr_gc_blocks++;
 
 		BUG_ON(!block_is_full(block));
 		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
 
-		kref_put(&block->ref_count, nvm_block_release);
+		queue_work(nvmd->kgc_wq, &block->ws_gc);
+
+		nr_blocks_need--;
 	}
 	spin_unlock(&pool->lock);
-	spin_unlock(&nvmd->trans_lock);
 	spin_unlock(&pool->gc_lock);
 	nvmd->next_collect_pool++;
 

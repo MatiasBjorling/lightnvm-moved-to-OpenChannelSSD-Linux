@@ -108,6 +108,7 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 	pb = bio->bi_private;
 	getnstimeofday(&pb->start_tv);
 
+	printk("lar\n");
 	submit_bio(bio->bi_rw, bio);
 }
 
@@ -130,12 +131,13 @@ void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 	struct nvm_addr *gp;
 	struct nvm_rev_addr *rev;
 
+	if (l_addr >= nvmd->nr_pages)
+		printk("l_addr %llu %llu", l_addr, nvmd->nr_pages);
+
 	BUG_ON(l_addr >= nvmd->nr_pages);
 	BUG_ON(p->addr >= nvmd->nr_pages);
 
-	spin_lock(&nvmd->trans_lock);
 	gp = &trans_map[l_addr];
-
 	if (gp->block) {
 		invalidate_block_page(nvmd, gp);
 		nvmd->rev_trans_map[gp->addr].addr = LTOP_POISON;
@@ -147,7 +149,6 @@ void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 	rev = &nvmd->rev_trans_map[p->addr];
 	rev->addr = l_addr;
 	rev->trans_map = trans_map;
-	spin_unlock(&nvmd->trans_lock);
 }
 
 /* requires pool->lock taken */
@@ -166,7 +167,6 @@ inline void nvm_reset_block(struct nvm_block *block)
 	atomic_set(&block->gc_running, 0);
 	atomic_set(&block->data_size, 0);
 	atomic_set(&block->data_cmnt_size, 0);
-	kref_init(&block->ref_count);
 	spin_unlock(&block->lock);
 }
 
@@ -195,7 +195,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc)
 		return NULL;
 	}
 
-	while (!is_gc && pool->nr_free_blocks <= nvmd->nr_pools * 2) {
+	while (!is_gc && pool->nr_free_blocks < nvmd->nr_aps) {
 		spin_unlock(&pool->lock);
 		return NULL;
 	}
@@ -227,7 +227,6 @@ void nvm_pool_put_block(struct nvm_block *block)
 
 	list_move_tail(&block->list, &pool->free_list);
 	pool->nr_free_blocks++;
-	pool->nr_gc_blocks--;
 
 	spin_unlock(&pool->lock);
 }
@@ -300,11 +299,7 @@ void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 
 struct nvm_rev_addr *nvm_lookup_ptol(struct nvmd *nvmd, sector_t p_addr)
 {
-	struct nvm_rev_addr *rev;
-	spin_lock(&nvmd->trans_lock);
-	rev = &nvmd->rev_trans_map[p_addr];
-	spin_unlock(&nvmd->trans_lock);
-	return rev;
+	return &nvmd->rev_trans_map[p_addr];
 }
 
 /* requires ap->lock held */
@@ -314,7 +309,7 @@ struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *ap, int is_gc)
 	struct nvm_block *p_block;
 	struct nvm_pool *pool;
 	struct nvm_addr *p;
-	sector_t p_addr = LTOP_EMPTY;
+	sector_t p_addr;
 
 	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
 	if (!p)
@@ -390,7 +385,6 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 	if (!p)
 		return NULL;
 
-	spin_lock(&nvmd->trans_lock);
 	gp = &map[l_addr];
 
 	p->addr = gp->addr;
@@ -403,17 +397,12 @@ struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 		 * is copied to the new place. */
 		if (atomic_read(&p->block->gc_running))
 			goto err;
-
-		if (!kref_get_unless_zero(&p->block->ref_count))
-			goto err;
 	}
 
 	p->private = private;
 
-	spin_unlock(&nvmd->trans_lock);
 	return p;
 err:
-	spin_unlock(&nvmd->trans_lock);
 	mempool_free(p, nvmd->addr_pool);
 	return NULL;
 
@@ -444,17 +433,17 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	ap = get_next_ap(nvmd);
 
 	if (is_gc) {
-		/* prevent GC-ing pool from devouring pages of pool with little
-		 * free blocks */
+		/* prevent GC-ing pool from devouring pages of a pool with
+		 * little free blocks */
 		spin_lock(&ap->pool->lock);
-		while (ap->pool->nr_free_blocks <= nvmd->nr_pools * 2 &&
-						ap->pool->id != (is_gc - 1)) {
+		while (ap->pool->nr_free_blocks <=
+				nvmd->nr_pools * 2 && ap->pool->id != 0) {
 			spin_unlock(&ap->pool->lock);
 
 			i++;
 			if (i == nvmd->nr_pools * 2) {
 				DMERR("P %d writing to p %d is low on pages.",
-					is_gc-1, ap->pool->id);
+					0, ap->pool->id);
 				spin_lock(&ap->pool->lock);
 				break;
 			}
@@ -464,6 +453,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 		}
 		spin_unlock(&ap->pool->lock);
 	}
+
 	spin_lock(&ap->lock);
 	p = nvm_alloc_addr_from_ap(ap, is_gc);
 	spin_unlock(&ap->lock);
@@ -493,6 +483,8 @@ static void nvm_endio(struct bio *bio, int err)
 	nvmd = ap->parent;
 	pool = ap->pool;
 
+	nvm_unlock_addr(nvmd, pb->l_addr);
+
 	if (bio_data_dir(bio) == WRITE) {
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
@@ -505,18 +497,12 @@ static void nvm_endio(struct bio *bio, int err)
 			spin_unlock(&pool->gc_lock);
 		}
 
-		nvm_unlock_addr(nvmd,
-				nvmd->type->get_inflight(nvmd, pb->trans_map),
-				pb->l_addr);
-
 		/* physical waits if hardware doesn't have a real backend */
 		dev_wait = ap->t_write;
 	} else {
 		dev_wait = ap->t_read;
-		spin_lock(&nvmd->trans_lock);
-		kref_put(&block->ref_count, nvm_block_release);
-		spin_unlock(&nvmd->trans_lock);
 	}
+
 
 	if (nvmd->type->endio)
 		nvmd->type->endio(nvmd, bio, pb, &dev_wait);
@@ -545,7 +531,6 @@ wait_longer:
 
 		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
 	}
-
 
 	/* Finish up */
 	exit_pbd(pb, bio);
@@ -593,9 +578,12 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
+	nvm_lock_addr(nvmd, l_addr);
+
 	p = nvmd->type->lookup_ltop(nvmd, l_addr);
 
 	if (!p) {
+		nvm_unlock_addr(nvmd, l_addr);
 		nvm_defer_bio(nvmd, bio, NULL);
 		nvm_gc_kick(nvmd);
 		goto finished;
@@ -608,10 +596,11 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 		bio->bi_sector = 0;
 		nvm_fill_bio_and_end(bio);
 		mempool_free(p, nvmd->addr_pool);
+		nvm_unlock_addr(nvmd, l_addr);
 		goto finished;
 	}
 
-	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL, NULL);
+	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL, nvmd->trans_map);
 finished:
 	return DM_MAPIO_SUBMITTED;
 }
@@ -663,27 +652,25 @@ int nvm_write_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
 
 	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
+	nvm_lock_addr(nvmd, l_addr);
+
 	p = nvmd->type->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
-
-	if (p) {
-		nvm_lock_addr(nvmd,
-				nvmd->type->get_inflight(nvmd, trans_map),
-				l_addr);
-
-		issue_bio = nvm_write_init_bio(nvmd, bio, p);
-		if (complete_bio)
-			nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio,
-							sync, trans_map);
-		else
-			nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, NULL,
-							sync, trans_map);
-	} else {
+	if (!p) {
 		BUG_ON(is_gc);
+		nvm_unlock_addr(nvmd, l_addr);
 		nvmd->type->defer_bio(nvmd, bio, trans_map);
 		nvm_gc_kick(nvmd);
 
 		return NVM_WRITE_DEFERRED;
 	}
+
+	issue_bio = nvm_write_init_bio(nvmd, bio, p);
+	if (complete_bio)
+		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio, sync,
+								trans_map);
+	else
+		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, NULL, sync,
+								trans_map);
 
 	return NVM_WRITE_SUCCESS;
 }
@@ -693,13 +680,7 @@ void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
 	bio_list_add(bl, bio);
 }
 
-struct nvm_inflight *nvm_get_inflight(struct nvmd *nvmd,
-						struct nvm_addr *trans_map)
-{
-	BUG_ON(trans_map != nvmd->trans_map);
-	return nvmd->inflight;
-}
-
+/* remember to lock l_addr before calling nvm_submit_bio */
 void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 			int rw, struct bio *bio,
 			struct bio *orig_bio,

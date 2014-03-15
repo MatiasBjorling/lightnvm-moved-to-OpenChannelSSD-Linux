@@ -62,7 +62,7 @@
 /* We partition the namespace of translation map into these pieces for tracking
  * in-flight addresses. */
 #define NVM_INFLIGHT_PARTITIONS 8
-#define NVM_INFLIGHT_TAGS 128
+#define NVM_INFLIGHT_TAGS 256
 
 #define NVM_WRITE_SUCCESS  0
 #define NVM_WRITE_DEFERRED 1
@@ -133,7 +133,6 @@ struct nvm_block {
 
 	/* Block state handling */
 	atomic_t gc_running;
-	struct kref ref_count; /* Outstanding IOs to be completed on block */
 	struct work_struct ws_gc;
 };
 
@@ -172,7 +171,6 @@ struct nvm_pool {
 
 	unsigned int nr_blocks;		/* end_block - start_block. */
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
-	unsigned int nr_gc_blocks;	/* Number of blocks undergoing gc */
 
 	struct nvm_block *blocks;
 	struct nvmd *nvmd;
@@ -234,13 +232,12 @@ struct nvm_inflight_addr {
 	struct list_head list;
 	sector_t l_addr;
 	int tag;
-	struct completion completed;
 };
 
 struct nvm_inflight {
 	spinlock_t lock;
-	struct list_head list;
-} ____cacheline_aligned_in_smp;
+	struct list_head addrs;
+};
 
 struct nvmd;
 struct per_bio_data;
@@ -258,8 +255,6 @@ typedef void *(*nvm_begin_gc_fn)(struct nvmd *, sector_t, sector_t,
 typedef void (*nvm_end_gc_fn)(struct nvmd *, void *);
 typedef void (*nvm_defer_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef void (*nvm_bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
-typedef struct nvm_inflight* (*nvm_get_inflight_map_fn)(struct nvmd *nvmd,
-						struct nvm_addr *trans_map);
 typedef int (*nvm_ioctl_fn)(struct nvmd *,
 					unsigned int cmd, unsigned long arg);
 typedef int (*nvm_init_fn)(struct nvmd *);
@@ -292,7 +287,6 @@ struct nvm_target_type {
 	nvm_alloc_phys_addr_fn alloc_phys_addr;
 	nvm_defer_bio_fn defer_bio;
 	nvm_bio_wait_add_fn bio_wait_add;
-	nvm_get_inflight_map_fn get_inflight;
 
 	/* module specific init/teardown */
 	nvm_init_fn init;
@@ -317,7 +311,6 @@ struct nvmd {
 	/* also store a reverse map for garbage collection */
 	struct nvm_rev_addr *rev_trans_map;
 
-	spinlock_t trans_lock;
 	/* Usually instantiated to the number of available parallel channels
 	 * within the hardware device. i.e. a controller with 4 flash channels,
 	 * would have 4 pools.
@@ -368,7 +361,7 @@ struct nvmd {
 	 * overhead of cachelines being used. Keep it low for better cache
 	 * utilization. */
 	struct percpu_ida free_inflight;
-	struct nvm_inflight inflight[NVM_INFLIGHT_PARTITIONS];
+	struct nvm_inflight inflight_map[NVM_INFLIGHT_PARTITIONS];
 	struct nvm_inflight_addr inflight_addrs[NVM_INFLIGHT_TAGS];
 
 	/* nvm module specific data */
@@ -402,7 +395,6 @@ struct nvm_target_type *find_nvm_target_type(const char *name);
 /* core.c */
 /*   Helpers */
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
-struct nvm_inflight* nvm_get_inflight(struct nvmd *, struct nvm_addr *);
 void invalidate_block_page(struct nvmd *, struct nvm_addr *);
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private);
@@ -517,28 +509,27 @@ static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
 	return bio->bi_private;
 }
 
-static inline struct nvm_inflight *nvm_hash_addr_to_inflight(
-			struct nvm_inflight *inflight_map, sector_t addr)
+static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,
+								sector_t l_addr)
 {
-	return &inflight_map[addr % NVM_INFLIGHT_PARTITIONS];
+	return &nvmd->inflight_map[l_addr % NVM_INFLIGHT_PARTITIONS];
 }
 
-static inline void nvm_lock_addr(struct nvmd *nvmd,
-			struct nvm_inflight *inflight_map, sector_t l_addr)
+static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr)
 {
-	struct nvm_inflight *inflight =
-			nvm_hash_addr_to_inflight(inflight_map, l_addr);
+	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, l_addr);
 	struct nvm_inflight_addr *a;
 	int tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
 
 retry:
 	spin_lock(&inflight->lock);
-	list_for_each_entry(a, &inflight->list, list) {
+
+	list_for_each_entry(a, &inflight->addrs, list) {
 		if (a->l_addr == l_addr) {
 			spin_unlock(&inflight->lock);
 			/* TODO: give up control and come back. I haven't found
-			   a good way to complete the work, when the data the
-			   complete structure is being reused */
+			 * a good way to complete the work, when the data the
+			 * complete structure is being reused */
 			schedule();
 			goto retry;
 		}
@@ -549,24 +540,27 @@ retry:
 	a->l_addr = l_addr;
 	a->tag = tag;
 
-	list_add_tail(&a->list, &inflight->list);
+	list_add_tail(&a->list, &inflight->addrs);
 	spin_unlock(&inflight->lock);
 }
 
-static inline void nvm_unlock_addr(struct nvmd *nvmd,
-			struct nvm_inflight *inflight_map, sector_t l_addr)
+static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t l_addr)
 {
 	struct nvm_inflight *inflight =
-			nvm_hash_addr_to_inflight(inflight_map, l_addr);
-	struct nvm_inflight_addr *a;
+			nvm_hash_addr_to_inflight(nvmd, l_addr);
+	struct nvm_inflight_addr *a = NULL;
 
 	spin_lock(&inflight->lock);
-	list_for_each_entry(a, &inflight->list, list) {
+
+	BUG_ON(list_empty(&inflight->addrs));
+
+	list_for_each_entry(a, &inflight->addrs, list)
 		if (a->l_addr == l_addr)
 			break;
-	}
 
 	BUG_ON(!a && a->l_addr != l_addr);
+
+	a->l_addr = LTOP_POISON;
 
 	list_del_init(&a->list);
 	spin_unlock(&inflight->lock);

@@ -118,6 +118,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	int i, j;
 
 	spin_lock_init(&nvmd->deferred_lock);
+	spin_lock_init(&nvmd->rev_lock);
 	INIT_WORK(&nvmd->deferred_ws, nvm_deferred_bio_submit);
 	bio_list_init(&nvmd->deferred_bios);
 
@@ -128,7 +129,6 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 
 	nvm_for_each_pool(nvmd, pool, i) {
 		spin_lock_init(&pool->lock);
-		spin_lock_init(&pool->gc_lock);
 		spin_lock_init(&pool->waiting_lock);
 
 		init_completion(&pool->gc_finished);
@@ -230,15 +230,20 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 		return -ENOMEM;
 	memset(nvmd->trans_map, 0, sizeof(struct nvm_addr) * nvmd->nr_pages);
 
-	for (i = 0; i < nvmd->nr_pages; i++) {
-		struct nvm_addr *p = &nvmd->trans_map[i];
-		p->addr = LTOP_EMPTY;
-	}
-
 	nvmd->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr)
 							* nvmd->nr_pages);
 	if (!nvmd->rev_trans_map)
 		goto err_rev_trans_map;
+
+	for (i = 0; i < nvmd->nr_pages; i++) {
+		struct nvm_addr *p = &nvmd->trans_map[i];
+		struct nvm_rev_addr *r = &nvmd->rev_trans_map[i];
+
+		p->addr = LTOP_EMPTY;
+
+		r->addr = 0xDEADBEEF;
+		r->trans_map = NULL;
+	}
 
 	nvmd->per_bio_pool = mempool_create_slab_pool(16, _per_bio_cache);
 	if (!nvmd->per_bio_pool)
@@ -509,6 +514,9 @@ static void nvm_dtr(struct dm_target *ti)
 
 static int nvm_none_write_bio(struct nvmd *nvmd, struct bio *bio)
 {
+	sector_t l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+	nvm_lock_addr(nvmd, l_addr);
+
 	nvm_write_bio(nvmd, bio, 0, NULL, NULL, nvmd->trans_map, 1);
 	return DM_MAPIO_SUBMITTED;
 }
@@ -518,7 +526,6 @@ static struct nvm_target_type nvm_target_none = {
 	.name			= "none",
 	.version		= {1, 0, 0},
 	.lookup_ltop	= nvm_lookup_ltop,
-	.lookup_ptol	= nvm_lookup_ptol,
 	.map_ltop	= nvm_map_ltop_rr,
 	.write_bio	= nvm_none_write_bio,
 	.read_bio	= nvm_read_bio,

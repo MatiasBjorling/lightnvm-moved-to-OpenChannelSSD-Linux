@@ -15,9 +15,9 @@ void nvm_gc_cb(unsigned long data)
 	struct nvm_pool *pool;
 	int i;
 
-/*	nvm_for_each_pool(nvmd, pool, i)
+	nvm_for_each_pool(nvmd, pool, i)
 		queue_pool_gc(pool);
-*/
+
 	mod_timer(&nvmd->gc_timer,
 			jiffies + msecs_to_jiffies(nvmd->config.gc_time));
 }
@@ -41,7 +41,7 @@ static struct nvm_block *block_max_invalid(struct nvm_block *a,
 }
 
 /* linearly find the block with highest number of invalid pages
- * requires pool->gc_lock */
+ * requires pool->lock */
 static struct nvm_block *block_prio_find_max(struct nvm_pool *pool)
 {
 	struct list_head *list = &pool->prio_list;
@@ -65,7 +65,6 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 	struct bio *src_bio;
 	struct page *page;
 	int slot;
-	void *gc_private = NULL;
 	DECLARE_COMPLETION(sync);
 
 	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
@@ -78,6 +77,8 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
 
+		BUG_ON(src.addr >= nvmd->nr_pages);
+
 		/* TODO: check for memory failure */
 		src_bio = bio_alloc(GFP_NOIO, 1);
 		src_bio->bi_bdev = nvmd->dev->bdev;
@@ -85,42 +86,59 @@ static void nvm_move_valid_pages(struct nvmd *nvmd, struct nvm_block *block)
 
 		page = mempool_alloc(nvmd->page_pool, GFP_NOIO);
 
-		/* TODO: check return value */
-		if (!bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0))
-			DMERR("Could not add page");
+		/* TODO: may fail with EXP_PG_SIZE > PAGE_SIZE */
+		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
 
+		/* We take the reverse lock here, and make sure that we only
+		 * release it when we have locked its logical address. If
+		 * another write on the same logical address is
+		 * occuring, we just let it stall the pipeline.
+		 *
+		 * We do this for both the read and write. Fixing it after each
+		 * IO.
+		 */
+		spin_lock(&nvmd->rev_lock);
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
-		rev = nvmd->type->lookup_ptol(nvmd, src.addr);
+		rev = &nvmd->rev_trans_map[src.addr];
 
 		/* already updated by previous regular write */
-		if (rev->addr == LTOP_POISON)
-			continue;
+		if (rev->addr == LTOP_POISON) {
+			spin_unlock(&nvmd->rev_lock);
+			goto overwritten;
+		}
 
 		/* unlocked by nvm_submit_bio nvm_endio */
-		nvm_lock_addr(nvmd, rev->addr);
+		__nvm_lock_addr(nvmd, rev->addr, 1);
+		spin_unlock(&nvmd->rev_lock);
 
 		init_completion(&sync);
 		nvm_submit_bio(nvmd, &src, rev->addr, READ, src_bio, NULL,
-								&sync, NULL);
+							&sync, rev->trans_map);
 		wait_for_completion(&sync);
+
+		/* ok, now fix the write and make sure that it haven't been
+		 * moved in the meantime. */
+		spin_lock(&nvmd->rev_lock);
+
+		/* already updated by previous regular write */
+		if (rev->addr == LTOP_POISON) {
+			spin_unlock(&nvmd->rev_lock);
+			goto overwritten;
+		}
 
 		src_bio->bi_sector = rev->addr * NR_PHY_IN_LOG;
 
-		gc_private = NULL;
-		if (nvmd->type->begin_gc)
-			gc_private = nvmd->type->begin_gc(nvmd,
-							rev->addr, src.addr,
-									block);
+		/* again, unlocked by nvm_endio */
+		__nvm_lock_addr(nvmd, rev->addr, 1);
+		spin_unlock(&nvmd->rev_lock);
 
 		init_completion(&sync);
-		nvm_write_bio(nvmd, src_bio, 1, gc_private, &sync,
+		nvm_write_bio(nvmd, src_bio, 1, NULL, &sync,
 							rev->trans_map, 1);
 		wait_for_completion(&sync);
 
-		if (nvmd->type->end_gc)
-			nvmd->type->end_gc(nvmd, gc_private);
-
+overwritten:
 		bio_put(src_bio);
 		mempool_free(page, nvmd->page_pool);
 	}
@@ -139,13 +157,15 @@ void nvm_gc_collect(struct work_struct *work)
 	if (nr_blocks_need < nvmd->nr_aps)
 		nr_blocks_need = nvmd->nr_aps;
 
-	spin_lock(&pool->gc_lock);
 	spin_lock(&pool->lock);
 	while (nr_blocks_need > pool->nr_free_blocks &&
 						!list_empty(&pool->prio_list)) {
 		block = block_prio_find_max(pool);
 
 		if (!block->nr_invalid_pages) {
+			spin_unlock(&pool->lock);
+			show_pool(pool);
+			spin_lock(&pool->lock);
 			DMERR("No invalid pages\n");
 			break;
 		}
@@ -160,7 +180,6 @@ void nvm_gc_collect(struct work_struct *work)
 		nr_blocks_need--;
 	}
 	spin_unlock(&pool->lock);
-	spin_unlock(&pool->gc_lock);
 	nvmd->next_collect_pool++;
 
 	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);

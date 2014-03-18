@@ -1218,7 +1218,6 @@ static struct nvm_target_type nvm_target_swap = {
 
 	/* core routines */
 	.lookup_ltop	= nvm_lookup_ltop,
-	.lookup_ptol	= nvm_lookup_ptol,
 	.defer_bio	= nvm_defer_bio,
 	.bio_wait_add	= nvm_bio_wait_add,
 };
@@ -1238,7 +1237,6 @@ static struct nvm_target_type nvm_target_latency = {
 	.exit = nvm_exit_hint,
 
 	/* core routines */
-	.lookup_ptol	= nvm_lookup_ptol,
 	.map_ltop	= nvm_map_ltop_rr,
 };
 
@@ -1257,7 +1255,6 @@ static struct nvm_target_type nvm_target_pack = {
 
 	/* core routines */
 	.lookup_ltop	= nvm_lookup_ltop,
-	.lookup_ptol	= nvm_lookup_ptol,
 	.defer_bio	= nvm_defer_bio,
 	.bio_wait_add	= nvm_bio_wait_add,
 };

@@ -154,9 +154,6 @@ struct nvm_pool {
 	struct {
 		spinlock_t lock;
 	} ____cacheline_aligned_in_smp;
-	struct {
-		spinlock_t gc_lock;
-	} ____cacheline_aligned_in_smp;
 
 	struct list_head used_list;	/* In-use blocks */
 	struct list_head free_list;	/* Not used blocks i.e. released
@@ -246,13 +243,9 @@ struct per_bio_data;
 typedef struct nvm_addr *(*nvm_map_ltop_fn)(struct nvmd *, sector_t, int,
 						struct nvm_addr *, void *);
 typedef struct nvm_addr *(*nvm_lookup_ltop_fn)(struct nvmd *, sector_t);
-typedef struct nvm_rev_addr *(*nvm_lookup_ptol_fn)(struct nvmd *, sector_t);
 typedef int (*nvm_write_bio_fn)(struct nvmd *, struct bio *);
 typedef int (*nvm_read_bio_fn)(struct nvmd *, struct bio *);
 typedef void (*nvm_alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
-typedef void *(*nvm_begin_gc_fn)(struct nvmd *, sector_t, sector_t,
-							struct nvm_block *);
-typedef void (*nvm_end_gc_fn)(struct nvmd *, void *);
 typedef void (*nvm_defer_bio_fn)(struct nvmd *, struct bio *, void *);
 typedef void (*nvm_bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
 typedef int (*nvm_ioctl_fn)(struct nvmd *,
@@ -271,17 +264,12 @@ struct nvm_target_type {
 
 	/* lookup functions */
 	nvm_lookup_ltop_fn lookup_ltop;
-	nvm_lookup_ptol_fn lookup_ptol;
 
 	/* handling of bios */
 	nvm_write_bio_fn write_bio;
 	nvm_read_bio_fn read_bio;
 	nvm_ioctl_fn ioctl;
 	nvm_endio_fn endio;
-
-	/* GC specific */
-	nvm_begin_gc_fn begin_gc;
-	nvm_end_gc_fn end_gc;
 
 	/* engine specific overrides */
 	nvm_alloc_phys_addr_fn alloc_phys_addr;
@@ -310,7 +298,7 @@ struct nvmd {
 	struct nvm_addr *trans_map;
 	/* also store a reverse map for garbage collection */
 	struct nvm_rev_addr *rev_trans_map;
-
+	spinlock_t rev_lock;
 	/* Usually instantiated to the number of available parallel channels
 	 * within the hardware device. i.e. a controller with 4 flash channels,
 	 * would have 4 pools.
@@ -418,7 +406,6 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *, sector_t l_addr, int is_gc,
 struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *, sector_t l_addr,
 				struct nvm_addr *l2p_map, void *private);
 struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
-struct nvm_rev_addr *nvm_lookup_ptol(struct nvmd *, sector_t p_addr);
 
 /*   I/O bio related */
 struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private);
@@ -515,11 +502,15 @@ static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,
 	return &nvmd->inflight_map[l_addr % NVM_INFLIGHT_PARTITIONS];
 }
 
-static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr)
+static inline void __nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr, int spin)
 {
 	struct nvm_inflight *inflight = nvm_hash_addr_to_inflight(nvmd, l_addr);
 	struct nvm_inflight_addr *a;
 	int tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
+
+	if (l_addr >= nvmd->nr_pages)
+		printk("%x\b", l_addr);
+	BUG_ON(l_addr >= nvmd->nr_pages);
 
 retry:
 	spin_lock(&inflight->lock);
@@ -530,7 +521,8 @@ retry:
 			/* TODO: give up control and come back. I haven't found
 			 * a good way to complete the work, when the data the
 			 * complete structure is being reused */
-			schedule();
+			if (!spin)
+				schedule();
 			goto retry;
 		}
 	}
@@ -542,6 +534,11 @@ retry:
 
 	list_add_tail(&a->list, &inflight->addrs);
 	spin_unlock(&inflight->lock);
+}
+
+static inline void nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr)
+{
+	__nvm_lock_addr(nvmd, l_addr, 0);
 }
 
 static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t l_addr)
@@ -566,6 +563,33 @@ static inline void nvm_unlock_addr(struct nvmd *nvmd, sector_t l_addr)
 	spin_unlock(&inflight->lock);
 	percpu_ida_free(&nvmd->free_inflight, a->tag);
 }
+
+static inline void show_pool(struct nvm_pool *pool)
+{
+	struct list_head *head, *cur;
+	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
+
+	spin_lock(&pool->lock);
+	list_for_each_safe(head, cur, &pool->free_list)
+		free_cnt++;
+	list_for_each_safe(head, cur, &pool->used_list)
+		used_cnt++;
+	list_for_each_safe(head, cur, &pool->prio_list)
+		prio_cnt++;
+	spin_unlock(&pool->lock);
+
+	DMERR("P-%d F:%u U:%u P:%u", pool->id, free_cnt, used_cnt, prio_cnt);
+}
+
+static inline void show_all_pools(struct nvmd *nvmd)
+{
+	struct nvm_pool *pool;
+	unsigned int i;
+
+	nvm_for_each_pool(nvmd, pool, i)
+		show_pool(pool);
+}
+
 
 #endif
 #endif /* DM_LIGHTNVM_H_ */

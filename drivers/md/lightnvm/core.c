@@ -1,31 +1,5 @@
 #include "lightnvm.h"
 
-static void show_pool(struct nvm_pool *pool)
-{
-	struct list_head *head, *cur;
-	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
-
-	spin_lock(&pool->lock);
-	list_for_each_safe(head, cur, &pool->free_list)
-		free_cnt++;
-	list_for_each_safe(head, cur, &pool->used_list)
-		used_cnt++;
-	list_for_each_safe(head, cur, &pool->prio_list)
-		prio_cnt++;
-	spin_unlock(&pool->lock);
-
-	DMERR("Pool %d info %u %u %u", pool->id, free_cnt, used_cnt, prio_cnt);
-}
-
-static void show_all_pools(struct nvmd *nvmd)
-{
-	struct nvm_pool *pool;
-	unsigned int i;
-
-	nvm_for_each_pool(nvmd, pool, i)
-		show_pool(pool);
-}
-
 /* alloc pbd, but also decorate it with bio */
 static struct per_bio_data *alloc_init_pbd(struct nvmd *nvmd, struct bio *bio)
 {
@@ -108,7 +82,6 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 	pb = bio->bi_private;
 	getnstimeofday(&pb->start_tv);
 
-	printk("lar\n");
 	submit_bio(bio->bi_rw, bio);
 }
 
@@ -131,13 +104,11 @@ void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 	struct nvm_addr *gp;
 	struct nvm_rev_addr *rev;
 
-	if (l_addr >= nvmd->nr_pages)
-		printk("l_addr %llu %llu", l_addr, nvmd->nr_pages);
-
 	BUG_ON(l_addr >= nvmd->nr_pages);
 	BUG_ON(p->addr >= nvmd->nr_pages);
 
 	gp = &trans_map[l_addr];
+	spin_lock(&nvmd->rev_lock);
 	if (gp->block) {
 		invalidate_block_page(nvmd, gp);
 		nvmd->rev_trans_map[gp->addr].addr = LTOP_POISON;
@@ -149,6 +120,7 @@ void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 	rev = &nvmd->rev_trans_map[p->addr];
 	rev->addr = l_addr;
 	rev->trans_map = trans_map;
+	spin_unlock(&nvmd->rev_lock);
 }
 
 /* requires pool->lock taken */
@@ -295,11 +267,6 @@ void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 	}
 	ap->cur = block;
 	ap->cur->ap = ap;
-}
-
-struct nvm_rev_addr *nvm_lookup_ptol(struct nvmd *nvmd, sector_t p_addr)
-{
-	return &nvmd->rev_trans_map[p_addr];
 }
 
 /* requires ap->lock held */
@@ -492,9 +459,9 @@ static void nvm_endio(struct bio *bio, int err)
 			mempool_free(block->data, nvmd->block_page_pool);
 			block->data = NULL;
 
-			spin_lock(&pool->gc_lock);
+			spin_lock(&pool->lock);
 			list_add_tail(&block->prio, &pool->prio_list);
-			spin_unlock(&pool->gc_lock);
+			spin_unlock(&pool->lock);
 		}
 
 		/* physical waits if hardware doesn't have a real backend */
@@ -642,17 +609,15 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 	return issue_bio;
 }
 
-int nvm_write_bio(struct nvmd *nvmd, struct bio *bio, int is_gc,
-		void *private, struct completion *sync,
-		struct nvm_addr *trans_map, unsigned int complete_bio)
+/* Assumes that l_addr is locked with nvm_lock_addr() */
+int nvm_write_bio(struct nvmd *nvmd,
+		  struct bio *bio, int is_gc,
+		  void *private, struct completion *sync,
+		  struct nvm_addr *trans_map, unsigned int complete_bio)
 {
 	struct nvm_addr *p;
 	struct bio *issue_bio;
-	sector_t l_addr;
-
-	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
-
-	nvm_lock_addr(nvmd, l_addr);
+	sector_t l_addr = bio->bi_sector / NR_PHY_IN_LOG;
 
 	p = nvmd->type->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
 	if (!p) {

@@ -397,28 +397,25 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	struct nvm_addr *p;
 	int i = 0;
 
-	ap = get_next_ap(nvmd);
 
-	if (is_gc) {
+	if (!is_gc) {
+		ap = get_next_ap(nvmd);
+	} else {
+		/* during GC, we don't care about RR, instead we want to make
+		 * sure that we maintain evenness between the block pools. */
+		unsigned int i;
+		struct nvm_pool *pool, *max_free;
+
+		max_free = &nvmd->pools[0];
 		/* prevent GC-ing pool from devouring pages of a pool with
-		 * little free blocks */
-		spin_lock(&ap->pool->lock);
-		while (ap->pool->nr_free_blocks <=
-				nvmd->nr_pools * 2 && ap->pool->id != 0) {
-			spin_unlock(&ap->pool->lock);
-
-			i++;
-			if (i == nvmd->nr_pools * 2) {
-				DMERR("P %d writing to p %d is low on pages.",
-					0, ap->pool->id);
-				spin_lock(&ap->pool->lock);
-				break;
-			}
-
-			ap = get_next_ap(nvmd);
-			spin_lock(&ap->pool->lock);
+		 * little free blocks. We don't take the lock as we only need an
+		 * estimate. */
+		nvm_for_each_pool(nvmd, pool, i) {
+			if (pool->nr_free_blocks > max_free->nr_free_blocks)
+				max_free = pool;
 		}
-		spin_unlock(&ap->pool->lock);
+
+		ap = &nvmd->aps[max_free->id];
 	}
 
 	spin_lock(&ap->lock);
@@ -596,7 +593,7 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 	struct bio *issue_bio;
 	int i, size;
 
-	/* FIXME */
+	/* FIXME: check for failure */
 	issue_bio = bio_alloc(GFP_NOIO, NR_HOST_PAGES_IN_FLASH_PAGE);
 	issue_bio->bi_bdev = nvmd->dev->bdev;
 	issue_bio->bi_sector = p->addr * NR_PHY_IN_LOG;

@@ -7,10 +7,6 @@
 #ifndef DM_LIGHTNVM_H_
 #define DM_LIGHTNVM_H_
 
-#define LIGHTNVM_IOC_MAGIC 'O'
-#define LIGHTNVM_IOCTL_ID _IO(LIGHTNVM_IOC_MAGIC, 0x40)
-
-#ifdef __KERNEL__
 #include <linux/device-mapper.h>
 #include <linux/dm-io.h>
 #include <linux/dm-kcopyd.h>
@@ -34,6 +30,9 @@
 #define DM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
 #define LTOP_POISON 0xD3ADB33F
+
+#define LIGHTNVM_IOC_MAGIC 'O'
+#define LIGHTNVM_IOCTL_ID _IO(LIGHTNVM_IOC_MAGIC, 0x40)
 
 /*
  * For now we hardcode some of the configuration for the LightNVM device that we
@@ -122,11 +121,11 @@ struct nvm_block {
 	struct nvm_pool *pool;
 	struct nvm_ap *ap;
 
-	// Management and GC structures
+	/* Management and GC structures */
 	struct list_head list;
 	struct list_head prio;
 
-	// Persistent data structures
+	/* Persistent data structures */
 	struct page *data;
 	atomic_t data_size; /* data pages inserted into data variable */
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
@@ -162,7 +161,7 @@ struct nvm_pool {
 
 	unsigned int id;
 	/* References the physical start block */
-	unsigned long phy_addr_start; 
+	unsigned long phy_addr_start;
 	/* References the physical end block */
 	unsigned int phy_addr_end;
 
@@ -365,7 +364,7 @@ struct per_bio_data {
 	struct timespec start_tv;
 	sector_t l_addr;
 
-	// Hook up for our overwritten bio fields
+	/* Hook up for our overwritten bio fields */
 	bio_end_io_t *bi_end_io;
 	void *bi_private;
 	struct completion *event;
@@ -450,15 +449,16 @@ void nvm_gc_kick(struct nvmd *nvmd);
 		for ((i) = 0, b = &(p)->blocks[0]; \
 			(i) < (p)->nr_blocks; (i)++, b = &(p)->blocks[(i)])
 
-static inline struct nvm_ap *get_next_ap(struct nvmd *n) {
+static inline struct nvm_ap *get_next_ap(struct nvmd *n)
+{
 	return &n->aps[atomic_inc_return(&n->next_write_ap) % n->nr_aps];
 }
 
 static inline int block_is_full(struct nvm_block *block)
 {
 	struct nvmd *nvmd = block->pool->nvmd;
-	return ((block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
-			block->next_offset == nvmd->nr_host_pages_in_blk);
+	return (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
+			block->next_offset == nvmd->nr_host_pages_in_blk;
 }
 
 static inline sector_t block_to_addr(struct nvm_block *block)
@@ -508,8 +508,6 @@ static inline void __nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr, int spin)
 	struct nvm_inflight_addr *a;
 	int tag = percpu_ida_alloc(&nvmd->free_inflight, __GFP_WAIT);
 
-	if (l_addr >= nvmd->nr_pages)
-		printk("%x\b", l_addr);
 	BUG_ON(l_addr >= nvmd->nr_pages);
 
 retry:
@@ -590,6 +588,5 @@ static inline void show_all_pools(struct nvmd *nvmd)
 		show_pool(pool);
 }
 
-
-#endif
 #endif /* DM_LIGHTNVM_H_ */
+

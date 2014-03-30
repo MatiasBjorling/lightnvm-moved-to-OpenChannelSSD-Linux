@@ -1013,6 +1013,7 @@ void scsi_attach_vpd(struct scsi_device *sdev)
 	int vpd_len = SCSI_VPD_PG_LEN;
 	int pg80_supported = 0;
 	int pg83_supported = 0;
+	int pgb0_supported = 0;
 	unsigned char *vpd_buf;
 
 	if (sdev->skip_vpd_pages)
@@ -1039,6 +1040,8 @@ retry_pg0:
 			pg80_supported = 1;
 		if (vpd_buf[i] == 0x83)
 			pg83_supported = 1;
+		if (vpd_buf[i] == 0xb0)
+			pgb0_supported = 1;
 	}
 	kfree(vpd_buf);
 	vpd_len = SCSI_VPD_PG_LEN;
@@ -1082,6 +1085,27 @@ retry_pg83:
 		}
 		sdev->vpd_pg83_len = result;
 		sdev->vpd_pg83 = vpd_buf;
+	}
+
+	if (pgb0_supported) {
+retry_pgb0:
+		vpd_buf = kmalloc(vpd_len, GFP_KERNEL);
+		if (!vpd_buf)
+			return;
+
+		result = scsi_vpd_inquiry(sdev, vpd_buf, 0xb0, vpd_len);
+		if (result < 0) {
+			kfree(vpd_buf);
+			return;
+		}
+		if (result > vpd_len) {
+			vpd_len = result;
+			kfree(vpd_buf);
+			goto retry_pgb0;
+		}
+
+		if (vpd_len > 44)
+			sdev->use_lightnvm = vpd_buf[44] & 0x1;
 	}
 }
 

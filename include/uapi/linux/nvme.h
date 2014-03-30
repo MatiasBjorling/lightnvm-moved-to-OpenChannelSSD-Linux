@@ -85,6 +85,30 @@ struct nvme_id_ctrl {
 	__u8			vs[1024];
 };
 
+struct nvme_lnvm_id_ctrl {
+	__le16			ver_id;
+	__u8			nvm_type;
+	__le16			nchannels;
+	__u8			unused[4091];
+} __attribute__((packed));
+
+struct nvme_lnvm_id_chnl {
+	__le64			queue_size;
+	__le64			gran_read;
+	__le64			gran_write;
+	__le64			gran_erase;
+	__le64			oob_size;
+	__le32			t_r;
+	__le32			t_sqr;
+	__le32			t_w;
+	__le32			t_sqw;
+	__le32			t_e;
+	__u8			io_sched;
+	__le64			laddr_begin;
+	__le64			laddr_end;
+	__u8			unused[4034];
+} __attribute__((packed));
+
 enum {
 	NVME_CTRL_ONCS_COMPARE			= 1 << 0,
 	NVME_CTRL_ONCS_WRITE_UNCORRECTABLE	= 1 << 1,
@@ -123,7 +147,12 @@ struct nvme_id_ns {
 };
 
 enum {
+	NVME_CTRL_OACS_LIGHTNVM	= 1 << 3,
+};
+
+enum {
 	NVME_NS_FEAT_THIN	= 1 << 0,
+	NVME_NS_FEAT_LIGHTNVM	= 1 << 1,
 	NVME_LBAF_RP_BEST	= 0,
 	NVME_LBAF_RP_BETTER	= 1,
 	NVME_LBAF_RP_GOOD	= 2,
@@ -190,6 +219,11 @@ enum nvme_opcode {
 	nvme_cmd_write_uncor	= 0x04,
 	nvme_cmd_compare	= 0x05,
 	nvme_cmd_dsm		= 0x09,
+};
+
+enum lnvme_opcode {
+	lnvme_cmd_erase_sync	= 0x80,
+	lnvme_cmd_erase_async	= 0x81,
 };
 
 struct nvme_common_command {
@@ -285,6 +319,15 @@ enum nvme_admin_opcode {
 	nvme_admin_format_nvm		= 0x80,
 	nvme_admin_security_send	= 0x81,
 	nvme_admin_security_recv	= 0x82,
+};
+
+enum lnvm_admin_opcode {
+	lnvm_admin_identify		= 0xc0,
+	lnvm_admin_identify_channel	= 0xc1,
+	lnvm_admin_get_features		= 0xc2,
+	lnvm_admin_set_responsibility	= 0xc3,
+	lnvm_admin_get_l2p_tbl		= 0xc4,
+	lnvm_admin_get_p2l_tbl		= 0xc5,
 };
 
 enum {
@@ -410,6 +453,18 @@ struct nvme_format_cmd {
 	__u32			rsvd11[5];
 };
 
+struct nvme_lnvm_identify {
+	__u8			opcode;
+	__u8			flags;
+	__u16			command_id;
+	__le32			nsid;
+	__u64			rsvd[2];
+	__le64			prp1;
+	__le64			prp2;
+	__le32			cns;
+	__u32			rsvd11[5];
+};
+
 struct nvme_command {
 	union {
 		struct nvme_common_command common;
@@ -423,6 +478,7 @@ struct nvme_command {
 		struct nvme_format_cmd format;
 		struct nvme_dsm_cmd dsm;
 		struct nvme_abort_cmd abort;
+		struct nvme_lnvm_identify lnvm_identify;
 	};
 };
 
@@ -487,6 +543,7 @@ struct nvme_user_io {
 	__u32	reftag;
 	__u16	apptag;
 	__u16	appmask;
+	__u32	host_lba;
 };
 
 struct nvme_admin_cmd {

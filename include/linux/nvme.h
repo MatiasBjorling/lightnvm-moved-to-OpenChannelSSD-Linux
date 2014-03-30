@@ -20,6 +20,7 @@
 #include <linux/miscdevice.h>
 #include <linux/kref.h>
 #include <linux/blk-mq.h>
+#include <linux/openvsl.h>
 
 struct nvme_bar {
 	__u64			cap;	/* Controller Capabilities */
@@ -100,6 +101,7 @@ struct nvme_dev {
 	u32 max_hw_sectors;
 	u32 stripe_size;
 	u16 oncs;
+	u16 oacs;
 	u16 abort_limit;
 	u8 vwc;
 	u8 initialized;
@@ -120,6 +122,8 @@ struct nvme_ns {
 	int ms;
 	u64 mode_select_num_blocks;
 	u32 mode_select_block_len;
+
+	struct vsl_dev *vsl_dev;
 };
 
 /*

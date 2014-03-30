@@ -53,6 +53,7 @@
 #include <linux/pm_runtime.h>
 #include <asm/uaccess.h>
 #include <asm/unaligned.h>
+#include <linux/openvsl.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -1325,6 +1326,12 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
 					(mode & FMODE_NDELAY) != 0);
 	if (!scsi_block_when_processing_errors(sdp) || !error)
 		goto out;
+
+	if (sdp->vsl_dev) {
+		error = vsl_ioctl(bdev, mode, cmd, arg);
+		if (error != -ENOTTY)
+			goto out;
+	}
 
 	/*
 	 * Send SCSI addressing ioctls directly to mid level, send other
@@ -2877,6 +2884,60 @@ static int sd_format_disk_name(char *prefix, int index, char *buf, int buflen)
 	return 0;
 }
 
+static int scsi_vsl_id(struct vsl_dev *dev, struct vsl_id *vsl_id)
+{
+	vsl_id->ver_id = 0x2;
+	vsl_id->nvm_type = VSL_NVMT_BLK;
+	vsl_id->nchannels = 2;
+	return 0;
+}
+
+static int scsi_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
+							struct vsl_id_chnl *ic)
+{
+	const ulong VSL_PAGES_PER_BLOCK = 128;
+	const ulong VSL_BLOCK_PER_BANK = 4096;
+	const ulong VSL_NUM_BANKS = 4;
+	const ulong VSL_SECTORS_PER_PAGE = 32;
+
+	ic->queue_size = 32;
+	ic->gran_read = VSL_SECTORS_PER_PAGE << 9;
+	ic->gran_write = VSL_SECTORS_PER_PAGE << 9;
+	ic->gran_erase = (VSL_SECTORS_PER_PAGE * VSL_PAGES_PER_BLOCK) << 9;
+	ic->oob_size = 0;
+	ic->t_r = ic->t_sqr = 25000; /* 25us */
+	ic->t_w = ic->t_sqw = 500000; /* 500us */
+	ic->t_e = 1500000; /* 1.500us */
+	ic->io_sched = VSL_IOSCHED_CHANNEL;
+	ic->laddr_begin = 0;
+	ic->laddr_end = (VSL_SECTORS_PER_PAGE *
+			 VSL_PAGES_PER_BLOCK *
+			 VSL_BLOCK_PER_BANK *
+			 VSL_NUM_BANKS * 1024) -1 ;
+	return 0;
+}
+
+static int scsi_vsl_get_features(struct vsl_dev *dev,
+						struct vsl_get_features *gf)
+{
+	gf->rsp[0] = (1 << VSL_RSP_L2P);
+	gf->rsp[0] |= (1 << VSL_RSP_P2L);
+	gf->rsp[0] |= (1 << VSL_RSP_GC);
+	return 0;
+}
+
+static int scsi_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
+{
+	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
+}
+
+static struct vsl_dev_ops scsi_vsl_dev_ops = {
+	.identify		= scsi_vsl_id,
+	.identify_channel	= scsi_vsl_id_chnl,
+	.get_features		= scsi_vsl_get_features,
+	.set_responsibility	= scsi_vsl_set_rsp,
+};
+
 /*
  * The asynchronous part of sd_probe
  */
@@ -2887,6 +2948,7 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 	struct gendisk *gd;
 	u32 index;
 	struct device *dev;
+	struct vsl_dev *vsl_dev;
 
 	sdp = sdkp->device;
 	gd = sdkp->disk;
@@ -2923,7 +2985,26 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 	}
 
 	blk_pm_runtime_init(sdp->request_queue, dev);
+
+	if (sdp->use_lightnvm) {
+		vsl_dev = vsl_alloc();
+		if (vsl_dev) {
+			vsl_dev->ops = &scsi_vsl_dev_ops;
+			vsl_dev->drv_cmd_size = sdp->host->tag_set.cmd_size -
+								vsl_cmd_size();
+			vsl_dev->q = sdkp->device->request_queue;
+			vsl_dev->disk = gd;
+
+			sdp->vsl_dev = vsl_dev;
+
+			if (vsl_init(gd, sdp->vsl_dev))
+				printk("failed VSL initialization\n");
+		}
+
+	}
 	add_disk(gd);
+	if (sdp->use_lightnvm)
+		vsl_add_sysfs(sdp->vsl_dev);
 	if (sdkp->capacity)
 		sd_dif_config_host(sdkp);
 
@@ -3089,11 +3170,17 @@ static int sd_remove(struct device *dev)
 static void scsi_disk_release(struct device *dev)
 {
 	struct scsi_disk *sdkp = to_scsi_disk(dev);
+	struct scsi_device *sdp = sdkp->device;
 	struct gendisk *disk = sdkp->disk;
-	
+
 	spin_lock(&sd_index_lock);
 	ida_remove(&sd_index_ida, sdkp->index);
 	spin_unlock(&sd_index_lock);
+
+	if (sdp->use_lightnvm) {
+		vsl_remove_sysfs(sdp->vsl_dev);
+		vsl_free(sdp->vsl_dev);
+	}
 
 	disk->private_data = NULL;
 	put_disk(disk);

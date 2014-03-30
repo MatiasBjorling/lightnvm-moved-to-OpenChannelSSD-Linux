@@ -174,6 +174,7 @@ struct scsi_device {
 	unsigned wce_default_on:1;	/* Cache is ON by default */
 	unsigned no_dif:1;	/* T10 PI (DIF) should be disabled */
 	unsigned broken_fua:1;		/* Don't set FUA bit */
+	unsigned use_lightnvm:1;	/* Requires LightNVM FTL */
 
 	atomic_t disk_events_disable_depth; /* disable depth for disk events */
 
@@ -191,6 +192,8 @@ struct scsi_device {
 
 	struct device		sdev_gendev,
 				sdev_dev;
+
+	struct vsl_dev		*vsl_dev;
 
 	struct execute_work	ew; /* used to get process context on put */
 	struct work_struct	requeue_work;

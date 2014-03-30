@@ -1,0 +1,29 @@
+#
+# Storage device IO Remapping configuration
+#
+
+menuconfig REM_DEV
+	bool "Storage device I/O remapping support"
+	depends on NVM
+	default y
+	---help---
+	  Say Y here to get to see options for various different remapping
+	  algorithms for storage devices. This option alone does not add any kernel
+	  code.
+
+	  If you say N, all options in this submenu will be skipped and disabled;
+	  only do this if you know what you are doing.
+
+if REM_DEV
+
+
+config REM_DEV
+	tristate "Remapping Support"
+	---help---
+	  If you want to enable remapping of IOs beneath the block layer and or
+	  direct access from DAX. Say Y.
+
+	  To compile this as a module, choose M here: the
+	  module will be called rem.
+
+endif # REM_DEV

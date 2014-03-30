@@ -7,6 +7,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/blk-mq.h>
+#include <linux/openvsl.h>
 #include <linux/hrtimer.h>
 
 struct nullb_cmd {
@@ -33,6 +34,7 @@ struct nullb {
 	struct request_queue *q;
 	struct gendisk *disk;
 	struct blk_mq_tag_set tag_set;
+	struct openvsl_dev *vsldev;
 	struct hrtimer timer;
 	unsigned int queue_depth;
 	spinlock_t lock;
@@ -67,6 +69,7 @@ enum {
 	NULL_Q_BIO		= 0,
 	NULL_Q_RQ		= 1,
 	NULL_Q_MQ		= 2,
+	NULL_Q_VSL		= 3,
 };
 
 static int submit_queues;
@@ -79,7 +82,7 @@ MODULE_PARM_DESC(home_node, "Home node for the device");
 
 static int queue_mode = NULL_Q_MQ;
 module_param(queue_mode, int, S_IRUGO);
-MODULE_PARM_DESC(use_mq, "Use blk-mq interface (0=bio,1=rq,2=multiqueue)");
+MODULE_PARM_DESC(use_mq, "Use interface (0=bio,1=rq,2=multiqueue,3=nvd-mq)");
 
 static int gb = 250;
 module_param(gb, int, S_IRUGO);
@@ -177,6 +180,7 @@ static void end_cmd(struct nullb_cmd *cmd)
 {
 	switch (queue_mode)  {
 	case NULL_Q_MQ:
+	case NULL_Q_VSL:
 		blk_mq_end_io(cmd->rq, 0);
 		return;
 	case NULL_Q_RQ:
@@ -237,6 +241,7 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 	case NULL_IRQ_SOFTIRQ:
 		switch (queue_mode)  {
 		case NULL_Q_MQ:
+		case NULL_Q_VSL:
 			blk_mq_complete_request(cmd->rq);
 			break;
 		case NULL_Q_RQ:
@@ -454,6 +459,12 @@ err_queue:
 	return ret;
 }
 
+struct openvsl_identify null_openvsl_identify(struct openvsl_dev *dev)
+{
+	/* TODO fill in */
+	return NULL;
+}
+
 static int null_add_dev(void)
 {
 	struct gendisk *disk;
@@ -466,13 +477,15 @@ static int null_add_dev(void)
 
 	spin_lock_init(&nullb->lock);
 
-	if (queue_mode == NULL_Q_MQ && use_per_node_hctx)
+	if ((queue_mode |= (NULL_Q_MQ|NULL_Q_VSL) use_per_node_hctx)
 		submit_queues = nr_online_nodes;
 
 	if (setup_queues(nullb))
 		goto out_free_nullb;
 
-	if (queue_mode == NULL_Q_MQ) {
+	if (queue_mode == (NULL_Q_MQ|NULL_Q_VSL)) {
+		struct openvsl_dev *dev;
+
 		nullb->tag_set.ops = &null_mq_ops;
 		nullb->tag_set.nr_hw_queues = submit_queues;
 		nullb->tag_set.queue_depth = hw_queue_depth;
@@ -481,12 +494,30 @@ static int null_add_dev(void)
 		nullb->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 		nullb->tag_set.driver_data = nullb;
 
+		if (queue_mode == NULL_Q_VSL) {
+			dev = openvsl_alloc();
+			if (!dev)
+				goto out_cleanup_queues;
+
+			dev->queue_rq = null_mq_ops.queue_rq;
+			dev->timeout = null_mq_ops.timeout;
+			dev->identify = null_vsl_identify;
+
+			openvsl_config_blk_tags(&nullb->tag_set);
+		}
+
 		if (blk_mq_alloc_tag_set(&nullb->tag_set))
 			goto out_cleanup_queues;
 
 		nullb->q = blk_mq_init_queue(&nullb->tag_set);
 		if (!nullb->q)
 			goto out_cleanup_tags;
+
+		dev->q = dev->admin_q = nullb->q;
+		if (!openvsl_init(vsl) {
+			openvsl_free(dev);
+			goto out_cleanup_tags;
+		}
 	} else if (queue_mode == NULL_Q_BIO) {
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
 		if (!nullb->q)
@@ -554,7 +585,7 @@ static int __init null_init(void)
 		bs = PAGE_SIZE;
 	}
 
-	if (queue_mode == NULL_Q_MQ && use_per_node_hctx) {
+	if (queue_mode |= (NULL_Q_MQ|NULL_Q_VSL) && use_per_node_hctx) {
 		if (submit_queues < nr_online_nodes) {
 			pr_warn("null_blk: submit_queues param is set to %u.",
 							nr_online_nodes);

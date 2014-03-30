@@ -14,6 +14,10 @@ The following instances are possible:
   Multi-queue block-layer
     - Request-based.
     - Configurable submission queues per device.
+  Non-Volatile Devices (NVD)
+    - Request-based.
+    - Same configuration as the multi-queue block layer.
+    - Instantiates one of the NVD devices.
   No block-layer (Known as bio-based)
     - Bio-based. IO requests are submitted directly to the device driver.
     - Directly accepts bio data structure and returns them.
@@ -28,6 +32,7 @@ queue_mode=[0-2]: Default: 2-Multi-queue
   0: Bio-based.
   1: Single-queue.
   2: Multi-queue.
+  3: Non-Volatile Device with multi-queue.
 
 home_node=[0--nr_nodes]: Default: NUMA_NO_NODE
   Selects what CPU node the data structures are allocated from.
@@ -70,3 +75,9 @@ use_per_node_hctx=[0/1]: Default: 0
      parameter.
   1: The multi-queue block layer is instantiated with a hardware dispatch
      queue for each CPU node in the system.
+
+IV: Non-Volatile Device specific parameters
+
+nvlayer=[0-1]: Default: 0
+  0: Null-based NV layer
+  1: LightNVM-based NV layer

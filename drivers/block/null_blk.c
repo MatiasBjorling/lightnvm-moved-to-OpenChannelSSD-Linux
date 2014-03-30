@@ -7,6 +7,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/blk-mq.h>
+#include <linux/openvsl.h>
 #include <linux/hrtimer.h>
 
 struct nullb_cmd {
@@ -33,6 +34,7 @@ struct nullb {
 	struct request_queue *q;
 	struct gendisk *disk;
 	struct blk_mq_tag_set tag_set;
+	struct vsl_dev *vsl_dev;
 	struct hrtimer timer;
 	unsigned int queue_depth;
 	spinlock_t lock;
@@ -67,6 +69,7 @@ enum {
 	NULL_Q_BIO		= 0,
 	NULL_Q_RQ		= 1,
 	NULL_Q_MQ		= 2,
+	NULL_Q_VSL		= 3,
 };
 
 static int submit_queues;
@@ -79,7 +82,7 @@ MODULE_PARM_DESC(home_node, "Home node for the device");
 
 static int queue_mode = NULL_Q_MQ;
 module_param(queue_mode, int, S_IRUGO);
-MODULE_PARM_DESC(use_mq, "Use blk-mq interface (0=bio,1=rq,2=multiqueue)");
+MODULE_PARM_DESC(use_mq, "Use interface (0=bio,1=rq,2=multiqueue,3=nvd-mq)");
 
 static int gb = 250;
 module_param(gb, int, S_IRUGO);
@@ -179,6 +182,9 @@ static void end_cmd(struct nullb_cmd *cmd)
 	case NULL_Q_MQ:
 		blk_mq_end_io(cmd->rq, 0);
 		return;
+	case NULL_Q_VSL:
+		vsl_end_io(cmd->rq, 0);
+		return;
 	case NULL_Q_RQ:
 		INIT_LIST_HEAD(&cmd->rq->queuelist);
 		blk_end_request_all(cmd->rq, 0);
@@ -238,6 +244,9 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 		switch (queue_mode)  {
 		case NULL_Q_MQ:
 			blk_mq_complete_request(cmd->rq);
+			break;
+		case NULL_Q_VSL:
+			vsl_complete_request(cmd->rq);
 			break;
 		case NULL_Q_RQ:
 			blk_complete_request(cmd->rq);
@@ -310,15 +319,60 @@ static void null_request_fn(struct request_queue *q)
 	}
 }
 
-static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
+static struct vsl_id null_vsl_id(struct vsl_dev *dev)
+{
+	struct vsl_id i;
+	i.ver_id = 0x1;
+	i.nvm_type = VSL_NVMT_BLK;
+	i.nchannels = 1;
+	return i;
+}
+
+static struct vsl_id_chnl null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num)
+{
+	struct vsl_id_chnl ic;
+	ic.queue_size = hw_queue_depth;
+	ic.gran_read = bs;
+	ic.gran_write = bs;
+	ic.gran_erase = bs;
+	ic.oob_size = 0;
+	ic.t_r = ic.t_sqr = completion_nsec;
+	ic.t_w = ic.t_sqw = completion_nsec;
+	ic.t_e = completion_nsec;
+	ic.io_sched = VSL_IOSCHED_CHANNEL;
+	ic.laddr_begin = 0;
+	ic.laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;
+	return ic;
+}
+
+static struct vsl_get_features null_vsl_get_features(struct vsl_dev *dev)
+{
+	struct vsl_get_features gf;
+	gf.rsp[0] = (1 << VSL_RSP_L2P);
+	gf.rsp[0] |= (1 << VSL_RSP_P2L);
+	gf.rsp[0] |= (1 << VSL_RSP_GC);
+	return gf;
+}
+
+static int null_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
+{
+	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
+}
+
+static int __null_queue_rq(struct request *rq, void *driver_data)
 {
 	struct nullb_cmd *cmd = blk_mq_rq_to_pdu(rq);
 
 	cmd->rq = rq;
-	cmd->nq = hctx->driver_data;
+	cmd->nq = driver_data;
 
 	null_handle_cmd(cmd);
 	return BLK_MQ_RQ_QUEUE_OK;
+}
+
+static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
+{
+	return __null_queue_rq(rq, hctx->driver_data);
 }
 
 static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
@@ -328,6 +382,20 @@ static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
 
 	init_waitqueue_head(&nq->wait);
 	nq->queue_depth = nullb->queue_depth;
+}
+
+static int null_vsl_init_hctx(struct vsl_dev *dev, void *data,
+			  unsigned int index)
+{
+	struct nullb *nullb = data;
+	struct nullb_queue *nq = &nullb->queues[index];
+
+	dev->driver_data = nq;
+	null_init_queue(nullb, nq);
+	nullb->nr_queues++;
+
+	return 0;
+
 }
 
 static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
@@ -342,6 +410,24 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 
 	return 0;
 }
+
+static struct vsl_dev_ops null_vsl_dev_ops = {
+	.identify		= null_vsl_id,
+	.identify_channel	= null_vsl_id_chnl,
+	.get_features		= null_vsl_get_features,
+	.set_responsibility	= null_vsl_set_rsp,
+
+	.vsl_queue_rq		= __null_queue_rq,
+	.vsl_init_hctx		= null_vsl_init_hctx,
+};
+
+static struct blk_mq_ops null_vsl_blk_ops = {
+	.queue_rq	= vsl_queue_rq,
+	.map_queue	= blk_mq_map_queue,
+	.init_hctx	= vsl_init_hctx,
+	.init_request	= vsl_init_request,
+	.complete	= null_softirq_done_fn,
+};
 
 static struct blk_mq_ops null_mq_ops = {
 	.queue_rq       = null_queue_rq,
@@ -466,13 +552,15 @@ static int null_add_dev(void)
 
 	spin_lock_init(&nullb->lock);
 
-	if (queue_mode == NULL_Q_MQ && use_per_node_hctx)
+	if ((queue_mode |= (NULL_Q_MQ|NULL_Q_VSL)) && use_per_node_hctx)
 		submit_queues = nr_online_nodes;
 
 	if (setup_queues(nullb))
 		goto out_free_nullb;
 
-	if (queue_mode == NULL_Q_MQ) {
+	if (queue_mode == (NULL_Q_MQ|NULL_Q_VSL)) {
+		struct vsl_dev *dev;
+
 		nullb->tag_set.ops = &null_mq_ops;
 		nullb->tag_set.nr_hw_queues = submit_queues;
 		nullb->tag_set.queue_depth = hw_queue_depth;
@@ -481,12 +569,33 @@ static int null_add_dev(void)
 		nullb->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 		nullb->tag_set.driver_data = nullb;
 
+		if (queue_mode == NULL_Q_VSL) {
+			dev = vsl_alloc();
+			if (!dev)
+				goto out_cleanup_queues;
+
+			nullb->tag_set.ops = &null_vsl_blk_ops;
+			nullb->tag_set.driver_data = dev;
+
+			dev->ops = &null_vsl_dev_ops;
+			dev->driver_data = nullb;
+
+			vsl_config_cmd_size(dev, &nullb->tag_set);
+		}
+
 		if (blk_mq_alloc_tag_set(&nullb->tag_set))
 			goto out_cleanup_queues;
 
 		nullb->q = blk_mq_init_queue(&nullb->tag_set);
 		if (!nullb->q)
 			goto out_cleanup_tags;
+
+		dev->q = dev->admin_q = nullb->q;
+		if (!vsl_init(dev)) {
+			vsl_free(dev);
+			goto out_cleanup_tags;
+		}
+		nullb->vsl_dev = dev;
 	} else if (queue_mode == NULL_Q_BIO) {
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
 		if (!nullb->q)
@@ -554,7 +663,7 @@ static int __init null_init(void)
 		bs = PAGE_SIZE;
 	}
 
-	if (queue_mode == NULL_Q_MQ && use_per_node_hctx) {
+	if (queue_mode |= (NULL_Q_MQ|NULL_Q_VSL) && use_per_node_hctx) {
 		if (submit_queues < nr_online_nodes) {
 			pr_warn("null_blk: submit_queues param is set to %u.",
 							nr_online_nodes);

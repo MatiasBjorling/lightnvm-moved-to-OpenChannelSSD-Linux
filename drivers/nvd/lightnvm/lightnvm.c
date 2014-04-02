@@ -42,25 +42,9 @@
 static struct kmem_cache *_per_bio_cache;
 static struct kmem_cache *_addr_cache;
 
-static int nvm_ioctl(struct dm_target *ti, unsigned int cmd, unsigned long arg)
+static int nvm_map(struct nv_queue *nvq, struct bio *bio)
 {
-	struct nvmd *nvmd = ti->private;
-
-	switch (cmd) {
-	case LIGHTNVM_IOCTL_ID:
-		return 0xCECECECE; /* TODO: Fetch ID from disk */
-		break;
-	}
-
-	if (nvmd->type->ioctl)
-		return nvmd->type->ioctl(nvmd, cmd, arg);
-
-	return 0;
-}
-
-static int nvm_map(struct dm_target *ti, struct bio *bio)
-{
-	struct nvmd *nvmd = ti->private;
+	struct nvmd *nvmd = nvq->target_private;
 	int ret = DM_MAPIO_SUBMITTED;
 
 	if (bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages) {
@@ -86,28 +70,6 @@ static int nvm_map(struct dm_target *ti, struct bio *bio)
 	}
 
 	return ret;
-}
-
-static void nvm_status(struct dm_target *ti, status_type_t type,
-			unsigned status_flags, char *result, unsigned maxlen)
-{
-	struct nvmd *nvmd = ti->private;
-	struct nvm_ap *ap;
-	int i, sz = 0;
-
-	switch (type) {
-	case STATUSTYPE_INFO:
-		DMEMIT("Use table information");
-		break;
-	case STATUSTYPE_TABLE:
-		nvm_for_each_ap(nvmd, ap, i) {
-			DMEMIT("Reads: %lu Writes: %lu Delayed: %lu",
-				ap->io_accesses[0],
-				ap->io_accesses[1],
-				ap->io_delayed);
-		}
-		break;
-	}
 }
 
 static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
@@ -216,11 +178,11 @@ err_blocks:
 	}
 	kfree(nvmd->pools);
 err_pool:
-	ti->error = "Cannot allocate lightnvm data structures";
+	pr_err("lightnvm: cannot allocate lightnvm data structures");
 	return -ENOMEM;
 }
 
-static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
+static int nvm_init(struct nv_queue *nvq, struct nvmd *nvmd)
 {
 	int i;
 	unsigned int order;
@@ -263,7 +225,7 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 		goto err_addr_pool;
 
 	if (bdev_physical_block_size(nvmd->dev->bdev) > EXPOSED_PAGE_SIZE) {
-		ti->error = "bad sector size.";
+		pr_err("lightnvm: bad sector size.");
 		goto err_block_page_pool;
 	}
 	nvmd->sector_size = EXPOSED_PAGE_SIZE;
@@ -279,8 +241,8 @@ static int nvm_init(struct dm_target *ti, struct nvmd *nvmd)
 	/* simple round-robin strategy */
 	atomic_set(&nvmd->next_write_ap, -1);
 
-	nvmd->ti = ti;
-	ti->private = nvmd;
+	nvmd->nvq = nvq;
+	nvq->target_data = nvmd;
 
 	/* Initialize pools. */
 	nvm_pool_init(nvmd, ti);
@@ -308,124 +270,43 @@ err_rev_trans_map:
 	return -ENOMEM;
 }
 
-/*
- * Accepts an LightNVM-backed block-device. The LightNVM device should run the
- * corresponding physical firmware that exports the flash as physical without
- * any mapping and garbage collection as it will be taken care of.
- */
-static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
+#define NVM_TARGET_TYPE noop
+#define NVM_NUM_POOLS 8
+#define NVM_NUM_BLOCKS 256
+#define NVM_NUM_PAGES 256
+
+static int nvm_probe(struct nv_queue *nvq)
 {
 	struct nvmd *nvmd;
 	unsigned int tmp;
 	char dummy;
 
-	if (argc < 5) {
-		ti->error = "Insufficient arguments";
-		return -EINVAL;
-	}
-
 	nvmd = kzalloc(sizeof(*nvmd), GFP_KERNEL);
 	if (!nvmd) {
-		ti->error = "No enough memory for data structures";
+		pr_err("lightnvm: Insufficient memory");
 		return -ENOMEM;
 	}
 
-	if (dm_get_device(ti, argv[0], dm_table_get_mode(ti->table),
-								&nvmd->dev))
-		goto err_map;
-
-	dm_set_target_max_io_len(ti, NR_PHY_IN_LOG);
-
-	nvmd->type = find_nvm_target_type(argv[1]);
+	/* hardcode initialization values until user-space util is avail. */
+	nvmd->type = find_nvm_target_type(NVM_TARGET_TYPE);
 	if (!nvmd->type) {
-		ti->error = "NVM target type doesn't exist";
+		pr_err("lightnvm: %s doesn't exist.", NVM_TARGET_TYPE;
 		goto err_map;
 	}
 
-	if (sscanf(argv[2], "%u%c", &tmp, &dummy) != 1) {
-		ti->error = "Cannot read number of pools";
-		goto err_map;
-	}
-	nvmd->nr_pools = tmp;
-
-	if (sscanf(argv[3], "%u%c", &tmp, &dummy) != 1) {
-		ti->error = "Cannot read number of blocks within a pool";
-		goto err_map;
-	}
-	nvmd->nr_blks_per_pool = tmp;
-
-	if (sscanf(argv[4], "%u%c", &tmp, &dummy) != 1) {
-		ti->error = "Cannot read number of pages within a block";
-		goto err_map;
-	}
-	nvmd->nr_pages_per_blk = tmp;
+	nvmd->nr_pools = NVM_NUM_POOLS;
+	nvmd->nr_blks_per_pool = NVM_NUM_BLOCKS;
+	nvmd->nr_pages_per_blk = NVM_NUM_PAGES;
 
 	/* Optional */
-	nvmd->nr_aps_per_pool = APS_PER_POOL;
-	if (argc > 5) {
-		if (sscanf(argv[5], "%u%c", &tmp, &dummy) == 1) {
-			if (!tmp) {
-				DMERR("Number of aps set to 1.");
-				tmp = APS_PER_POOL;
-			}
-			nvmd->nr_aps_per_pool = tmp;
-		} else {
-			ti->error = "Cannot read number of append points";
-			goto err_map;
-		}
-	}
-
-	if (argc > 6) {
-		if (sscanf(argv[6], "%u%c", &tmp, &dummy) == 1) {
-			nvmd->config.flags |= (tmp << NVM_OPT_MISC_OFFSET);
-		} else {
-			ti->error = "Cannot read flags";
-			goto err_map;
-		}
-	}
-
+	nvmd->nr_aps_per_pool 0= APS_PER_POOL;
+	/* nvmd->config.flags = NVM_OPT_* */
 	nvmd->config.gc_time = GC_TIME;
-	if (argc > 7) {
-		if (sscanf(argv[7], "%u%c", &tmp, &dummy) == 1) {
-			nvmd->config.gc_time = tmp;
-			if (nvmd->config.gc_time <= 0)
-				nvmd->config.gc_time = 1000;
-		} else {
-			ti->error = "Cannot read gc timing";
-			goto err_map;
-		}
-	}
-
 	nvmd->config.t_read = TIMING_READ;
-	if (argc > 8) {
-		if (sscanf(argv[8], "%u%c", &tmp, &dummy) == 1) {
-			nvmd->config.t_read = tmp;
-		} else {
-			ti->error = "Cannot read read access timing";
-			goto err_map;
-		}
-	}
-
 	nvmd->config.t_write = TIMING_WRITE;
-	if (argc > 9) {
-		if (sscanf(argv[9], "%u%c", &tmp, &dummy) == 1) {
-			nvmd->config.t_write = tmp;
-		} else {
-			ti->error = "Cannot read write access timing";
-			goto err_map;
-		}
-	}
-
 	nvmd->config.t_erase = TIMING_ERASE;
-	if (argc > 10) {
-		if (sscanf(argv[10], "%u%c", &tmp, &dummy) == 1) {
-			nvmd->config.t_erase = tmp;
-		} else {
-			ti->error = "Cannot read erase access timing";
-			goto err_map;
-		}
-	}
 
+	/* Constants */
 	nvmd->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE
 						* nvmd->nr_pages_per_blk;
 	nvmd->nr_pages = nvmd->nr_pools * nvmd->nr_blks_per_pool
@@ -434,34 +315,32 @@ static int nvm_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	/* Invalid pages in block bitmap is preallocated. */
 	if (nvmd->nr_host_pages_in_blk >
 				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
-		ti->error = "Num pages per block is too high";
+		pr_err("lightnvm: Num. pages per block too high";
 		return -EINVAL;
 	}
 
-
 	if (nvm_init(ti, nvmd) < 0) {
-		ti->error = "Cannot initialize lightnvm structure";
+		pr_err("lightnvm: cannot initialize lightnvm structure");
 		goto err_map;
 	}
 
-	DMINFO("Configured with");
-	DMINFO("Pools: %u Blocks: %u Pages: %u APs: %u Pool per AP: %u",
+	pr_info("lightnvm: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
 	       nvmd->nr_pools,
 	       nvmd->nr_blks_per_pool,
 	       nvmd->nr_pages_per_blk,
 	       nvmd->nr_aps,
 	       nvmd->nr_aps_per_pool);
-	DMINFO("Timings: %u/%u/%u",
+	pr_info("lightnvm: timings: %u/%u/%u",
 			nvmd->config.t_read,
 			nvmd->config.t_write,
 			nvmd->config.t_erase);
-	DMINFO("Target sector size=%d", nvmd->sector_size);
-	DMINFO("Disk logical sector size=%d",
+	pr_info("lightnvm: target sector size=%d", nvmd->sector_size);
+	pr_info("lightnvm: disk logical sector size=%d",
 	       bdev_logical_block_size(nvmd->dev->bdev));
-	DMINFO("Disk physical sector size=%d",
+	pr_info("lightnvm: disk physical sector size=%d",
 	       bdev_physical_block_size(nvmd->dev->bdev));
-	DMINFO("Disk flash page size=%d", FLASH_PAGE_SIZE);
-	DMINFO("Allocated %lu physical pages (%lu KB)",
+	pr_info("lightnvm: disk flash page size=%d", FLASH_PAGE_SIZE);
+	pr_info("lightnvm: allocated %lu physical pages (%lu KB)",
 	       nvmd->nr_pages, nvmd->nr_pages * nvmd->sector_size / 1024);
 
 	return 0;
@@ -470,11 +349,24 @@ err_map:
 	return -ENOMEM;
 }
 
-static void nvm_dtr(struct dm_target *ti)
+/*
+ * Accepts an LightNVM-backed block-device. The LightNVM device should run the
+ * corresponding physical firmware that exports the flash as physical without
+ * any mapping and garbage collection as it will be taken care of.
+ */
+static int nvm_ctr(struct nv_queue *nvq)
 {
-	struct nvmd *nvmd = ti->private;
+	return nvm_probe(nvq);
+}
+
+static void nvm_dtr(struct nvd_queue *nvq)
+{
+	struct nvmd *nvmd = nvq->target_data;;
 	struct nvm_pool *pool;
 	int i;
+
+	if (!nvmd)
+		return;
 
 	if (nvmd->type->exit)
 		nvmd->type->exit(nvmd);
@@ -533,22 +425,20 @@ static struct nvm_target_type nvm_target_none = {
 	.bio_wait_add	= nvm_bio_wait_add,
 };
 
-static struct target_type lightnvm_target = {
+static struct nvd_target lightnvm_target = {
 	.name		= "lightnvm",
 	.version	= {1, 0, 0},
-	.module		= THIS_MODULE,
 	.ctr		= nvm_ctr,
 	.dtr		= nvm_dtr,
-	.map		= nvm_map,
-	.ioctl		= nvm_ioctl,
-	.status		= nvm_status,
+	.remap		= nvm_remap,
+	.end_rq		= nvm_end_io,
 };
 
-static int __init dm_lightnvm_init(void)
+static int __init lightnvm_init(void)
 {
 	int ret = -ENOMEM;
 
-	_per_bio_cache = kmem_cache_create("lightnvm_per_bio_cache",
+	_per_bio_cache = kmem_cache_create("lightnvm_per_rq_cache",
 				sizeof(struct per_bio_data), 0, 0, NULL);
 	if (!_per_bio_cache)
 		return ret;
@@ -558,11 +448,11 @@ static int __init dm_lightnvm_init(void)
 	if (!_addr_cache)
 		goto err_pbc;
 
-	nvm_register_target(&nvm_target_none);
+	nvm_register_target(&lightnvm_target_none);
 
-	ret = dm_register_target(&lightnvm_target);
-	if (ret < 0) {
-		DMERR("register failed %d", ret);
+	ret = nvd_register_target(&lightnvm_target);
+	if (ret) {
+		pr_err("nvd: couldn't register lightnvm target.");
 		goto err_adp;
 	}
 
@@ -574,16 +464,16 @@ err_pbc:
 	return ret;
 }
 
-static void __exit dm_lightnvm_exit(void)
+static void __exit lightnvm_exit(void)
 {
-	dm_unregister_target(&lightnvm_target);
+	nvd_register_target(&lightnvm_target);
 	kmem_cache_destroy(_per_bio_cache);
 	kmem_cache_destroy(_addr_cache);
 }
 
-module_init(dm_lightnvm_init);
-module_exit(dm_lightnvm_exit);
+module_init(lightnvm_init);
+module_exit(lightnvm_exit);
 
-MODULE_DESCRIPTION(DM_NAME " target");
+MODULE_DESCRIPTION("LightNVM NVD target");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");
 MODULE_LICENSE("GPL");

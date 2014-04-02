@@ -7,7 +7,9 @@ struct nv_queue {
 	struct nvd_target *target;
 	struct request_queue *blkq;
 	struct blk_mq_ops blk_ops;
+
 	void *driver_data;
+	void *target_data;
 };
 
 typedef int (nvd_remap_fn)(struct nvd_map *map);
@@ -17,6 +19,9 @@ typedef int (*nvd_init_fn)(struct nvd_target *);
 typedef void (*nvd_exit_fn)(struct nvd_target *);
 
 struct nvd_target {
+	/* name of nv target module to initialize */
+	const char		*name;
+	unsigned int		version[3];
 	/*
 	 * Remap request
 	 */
@@ -33,15 +38,15 @@ struct nvd_target {
 	nvd_complete_rq_fn		*complete_rq;
 
 	/*
-	 * Rescan information from a device.
+	 * Probe information from a device.
 	 */
-	nvd_rescan_fn		*rescan_nvd;
+	nvd_probe_fn		*probe_nvd;
 
 	/*
 	 * Module specific init/teardown
 	 */
-	nvd_init_fn		*init;
-	nvd_exit_fn		*exit;
+	nvd_init_fn		*ctr;
+	nvd_exit_fn		*dtr;
 
 	/*
 	 * For nvd internal use

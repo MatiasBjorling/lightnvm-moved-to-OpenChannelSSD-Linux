@@ -4,12 +4,9 @@
  * This file is released under the GPL.
  */
 
-#ifndef DM_LIGHTNVM_H_
-#define DM_LIGHTNVM_H_
+#ifndef LIGHTNVM_H_
+#define LIGHTNVM_H_
 
-#include <linux/device-mapper.h>
-#include <linux/dm-io.h>
-#include <linux/dm-kcopyd.h>
 #include <linux/blkdev.h>
 #include <linux/list.h>
 #include <linux/list_sort.h>
@@ -26,8 +23,9 @@
 #include <linux/completion.h>
 #include <linux/hashtable.h>
 #include <linux/percpu_ida.h>
+#include <linux/nvdev.h>
 
-#define DM_MSG_PREFIX "lightnvm"
+#define NVM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1
 #define LTOP_POISON 0xD3ADB33F
 
@@ -285,8 +283,7 @@ struct nvm_target_type {
 
 /* Main structure */
 struct nvmd {
-	struct dm_dev *dev;
-	struct dm_target *ti;
+	struct nvd_queue *nvq;
 	uint32_t sector_size;
 
 	struct nvm_target_type *type;
@@ -576,7 +573,7 @@ static inline void show_pool(struct nvm_pool *pool)
 		prio_cnt++;
 	spin_unlock(&pool->lock);
 
-	DMERR("P-%d F:%u U:%u P:%u", pool->id, free_cnt, used_cnt, prio_cnt);
+	pr_err("lightnvm: P-%d F:%u U:%u P:%u", pool->id, free_cnt, used_cnt, prio_cnt);
 }
 
 static inline void show_all_pools(struct nvmd *nvmd)
@@ -588,5 +585,5 @@ static inline void show_all_pools(struct nvmd *nvmd)
 		show_pool(pool);
 }
 
-#endif /* DM_LIGHTNVM_H_ */
+#endif /* LIGHTNVM_H_ */
 

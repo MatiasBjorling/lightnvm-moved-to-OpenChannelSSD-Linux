@@ -7,9 +7,9 @@
 static LIST_HEAD(_targets);
 static DECLARE_RWSEM(_lock);
 
-inline struct nvd_target_type *nvd_find_target(const char *name)
+inline struct nvd_target *nvd_find_target(const char *name)
 {
-	struct nvd_target_type *t;
+	struct nvd_target *t;
 
 	list_for_each_entry(t, &_targets, list)
 		if (!strcmp(name, t->name))
@@ -47,11 +47,12 @@ struct nvd_map *nvd_init_queue(struct nvd_reg *reg,
 				  struct blk_mq_reg *blk_reg, void *driver_data)
 {
 	struct nv_queue *nvq;
+	struct nvd_target *target;
 
 	if (!reg || !reg->target_name || !blk_reg)
 		return ERR_PTR(-EINVAL);
 
-	if (nvd_find_target(reg->target_name))
+	if (target = nvd_find_target(reg->target_name))
 		return ERR_PTR(-EINVAL);
 
 	nvq = kmalloc(sizeof(struct nvdev), GFP_ATOMIC);
@@ -61,15 +62,21 @@ struct nvd_map *nvd_init_queue(struct nvd_reg *reg,
 	nvq->target = reg->target;
 	nvq->driver_data = driver_data;
 
-	/* redirect blk calls to shim layer before driver */
-
-
 	nvq->blkq = blk_mq_init_queue(blk_reg, nv);
 	if (!nvq->blkq)
 		goto fail_blk_queue;
 
+	/* redirect blk calls to shim layer before driver */
+	if (target->ctr(nvq))
+		goto fail_blk_queue;
+
 	return nvq->blkq;
-}
+fail_target:
+	blk_mq_free_queue(nvq->blkq);
+fail_blk_queue:
+	kfree(nvq);
+	return ERR_PTR(-EINVAL);
+
 EXPORT_SYMBOL(nvd_init_queue);
 
 void nvd_free_remap(struct nvd_map *m)
@@ -110,8 +117,8 @@ static int __exit nvd_exit(void)
 	nvd_unregister_target(&nvd_target_noop);
 }
 
-module_init(nvd_mod_init);
-module_init(nvd_mod_exit);
+module_init(nvd_init);
+module_init(nvd_exit);
 
 MODULE_DESCRIPTION("Non-Volatile Device Layer");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");

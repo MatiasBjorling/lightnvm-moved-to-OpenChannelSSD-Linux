@@ -25,4 +25,6 @@ config NV_DEV_MAP
 	  To compile this as a module, choose M here: the
 	  module will be called rem.
 
+source "drivers/nvd/lightnvm/Kconfig"
+
 endif # NV_DEV

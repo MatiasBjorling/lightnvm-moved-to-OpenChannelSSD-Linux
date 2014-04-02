@@ -113,6 +113,6 @@ static int __exit nvd_exit(void)
 module_init(nvd_mod_init);
 module_init(nvd_mod_exit);
 
-MODULE_DESCRIPTION("Non-Volatile Device Mapper");
+MODULE_DESCRIPTION("Non-Volatile Device Layer");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");
 MODULE_LICENSE("GPL");

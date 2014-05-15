@@ -234,7 +234,7 @@ struct nvm_inflight {
 };
 
 struct nvmd;
-struct per_bio_data;
+struct per_rq_data;
 
 /* overridable functionality */
 typedef struct nvm_addr *(*nvm_map_ltop_fn)(struct nvmd *, sector_t, int,
@@ -250,7 +250,7 @@ typedef int (*nvm_ioctl_fn)(struct nvmd *,
 typedef int (*nvm_init_fn)(struct nvmd *);
 typedef void (*nvm_exit_fn)(struct nvmd *);
 typedef void (*nvm_endio_fn)(struct nvmd *, struct bio *,
-				struct per_bio_data *, unsigned long *delay);
+				struct per_rq_data *, unsigned long *delay);
 
 typedef int (*nvm_page_special_fn)(struct nvmd *, unsigned int);
 
@@ -310,7 +310,7 @@ struct nvmd {
 	/* Append points */
 	struct nvm_ap *aps;
 
-	mempool_t *per_bio_pool;
+	mempool_t *per_rq_pool;
 	mempool_t *addr_pool;
 	mempool_t *page_pool;
 	mempool_t *block_page_pool;
@@ -355,7 +355,7 @@ struct nvmd {
 	struct nvm_config config;
 };
 
-struct per_bio_data {
+struct per_rq_data {
 	struct nvm_ap *ap;
 	struct nvm_addr *addr;
 	struct timespec start_tv;
@@ -488,7 +488,7 @@ static inline int physical_to_slot(struct nvmd *n, sector_t phys)
 		NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
-static inline struct per_bio_data *get_per_bio_data(struct bio *bio)
+static inline struct per_rq_data *get_per_rq_data(struct bio *bio)
 {
 	return bio->bi_private;
 }

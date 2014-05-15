@@ -207,8 +207,8 @@ static int nvm_init(struct nv_queue *nvq, struct nvmd *nvmd)
 		r->trans_map = NULL;
 	}
 
-	nvmd->per_bio_pool = mempool_create_slab_pool(16, _per_rq_cache);
-	if (!nvmd->per_bio_pool)
+	nvmd->per_rq_pool = mempool_create_slab_pool(16, _per_rq_cache);
+	if (!nvmd->per_rq_pool)
 		goto err_dev_lookup;
 
 	nvmd->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
@@ -262,7 +262,7 @@ err_addr_pool:
 err_page_pool:
 	mempool_destroy(nvmd->page_pool);
 err_per_rq_pool:
-	mempool_destroy(nvmd->per_bio_pool);
+	mempool_destroy(nvmd->per_rq_pool);
 err_dev_lookup:
 	vfree(nvmd->rev_trans_map);
 err_rev_trans_map:
@@ -391,7 +391,7 @@ static void nvm_dtr(struct nvd_queue *nvq)
 	destroy_workqueue(nvmd->kbiod_wq);
 	destroy_workqueue(nvmd->kgc_wq);
 
-	mempool_destroy(nvmd->per_bio_pool);
+	mempool_destroy(nvmd->per_rq_pool);
 	mempool_destroy(nvmd->page_pool);
 	mempool_destroy(nvmd->addr_pool);
 
@@ -439,7 +439,7 @@ static int __init lightnvm_init(void)
 	int ret = -ENOMEM;
 
 	_per_rq_cache = kmem_cache_create("lightnvm_per_rq_cache",
-				sizeof(struct per_bio_data), 0, 0, NULL);
+				sizeof(struct per_rq_data), 0, 0, NULL);
 	if (!_per_rq_cache)
 		return ret;
 

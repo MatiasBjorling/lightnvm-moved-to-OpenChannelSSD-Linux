@@ -1,12 +1,12 @@
 #include "lightnvm.h"
 
 /* alloc pbd, but also decorate it with bio */
-static struct per_bio_data *alloc_init_pbd(struct nvmd *nvmd, struct bio *bio)
+static struct per_rq_data *alloc_init_pbd(struct nvmd *nvmd, struct bio *bio)
 {
-	struct per_bio_data *pb = mempool_alloc(nvmd->per_bio_pool, GFP_NOIO);
+	struct per_rq_data *pb = mempool_alloc(nvmd->per_rq_pool, GFP_NOIO);
 
 	if (!pb) {
-		DMERR("Couldn't allocate per_bio_data");
+		DMERR("Couldn't allocate per_rq_data");
 		return NULL;
 	}
 
@@ -18,13 +18,13 @@ static struct per_bio_data *alloc_init_pbd(struct nvmd *nvmd, struct bio *bio)
 	return pb;
 }
 
-static void free_pbd(struct nvmd *nvmd, struct per_bio_data *pb)
+static void free_pbd(struct nvmd *nvmd, struct per_rq_data *pb)
 {
-	mempool_free(pb, nvmd->per_bio_pool);
+	mempool_free(pb, nvmd->per_rq_pool);
 }
 
 /* bio to be stripped from the pbd structure */
-static void exit_pbd(struct per_bio_data *pb, struct bio *bio)
+static void exit_pbd(struct per_rq_data *pb, struct bio *bio)
 {
 	bio->bi_private = pb->bi_private;
 	bio->bi_end_io = pb->bi_end_io;
@@ -64,7 +64,7 @@ void nvm_delayed_bio_submit(struct work_struct *work)
 {
 	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
 	struct bio *bio;
-	struct per_bio_data *pb;
+	struct per_rq_data *pb;
 
 	spin_lock(&pool->waiting_lock);
 	bio = bio_list_pop(&pool->waiting_bios);
@@ -430,7 +430,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 
 static void nvm_endio(struct bio *bio, int err)
 {
-	struct per_bio_data *pb;
+	struct per_rq_data *pb;
 	struct nvmd *nvmd;
 	struct nvm_ap *ap;
 	struct nvm_pool *pool;
@@ -440,7 +440,7 @@ static void nvm_endio(struct bio *bio, int err)
 	unsigned long diff, dev_wait, total_wait = 0;
 	unsigned int data_cnt;
 
-	pb = get_per_bio_data(bio);
+	pb = get_per_rq_data(bio);
 	p = pb->addr;
 	block = p->block;
 	ap = pb->ap;
@@ -652,7 +652,7 @@ void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
 	struct nvm_block *block = p->block;
 	struct nvm_ap *ap = block_to_ap(nvmd, block);
 	struct nvm_pool *pool = ap->pool;
-	struct per_bio_data *pb;
+	struct per_rq_data *pb;
 
 	pb = alloc_init_pbd(nvmd, bio);
 	pb->ap = ap;

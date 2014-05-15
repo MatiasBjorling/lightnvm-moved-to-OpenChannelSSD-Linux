@@ -48,7 +48,7 @@ struct nvd_map *nvd_init_queue(struct nvd_reg *reg,
 {
 	struct nv_queue *nvq;
 	struct nvd_target *target;
-
+	unsigned int cmd_size = blk_reg->cmd_size + reg->per_rq_size;
 	if (!reg || !reg->target_name || !blk_reg)
 		return ERR_PTR(-EINVAL);
 
@@ -61,6 +61,7 @@ struct nvd_map *nvd_init_queue(struct nvd_reg *reg,
 
 	nvq->target = reg->target;
 	nvq->driver_data = driver_data;
+
 
 	nvq->blkq = blk_mq_init_queue(blk_reg, nv);
 	if (!nvq->blkq)

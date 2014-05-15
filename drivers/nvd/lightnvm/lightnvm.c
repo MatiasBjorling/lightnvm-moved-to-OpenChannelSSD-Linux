@@ -25,7 +25,7 @@
  */
 #define APS_PER_POOL 1
 
-/* If enabled, we delay bios on each ap to run serialized. */
+/* If enabled, we delay requests on each ap to run serialized. */
 #define SERIALIZE_POOL_ACCESS 0
 
 /* Sleep timings before simulating device specific storage (in us) */
@@ -39,35 +39,32 @@
 /* Minimum pages needed within a pool */
 #define MIN_POOL_PAGES 16
 
-static struct kmem_cache *_per_rq_cache;
 static struct kmem_cache *_addr_cache;
 
-static int nvm_map(struct nv_queue *nvq, struct bio *bio)
+static int nvm_map_rq(struct nv_queue *nvq, struct request *rq)
 {
 	struct nvmd *nvmd = nvq->target_private;
 	int ret = DM_MAPIO_SUBMITTED;
 
-	if (bio->bi_sector / NR_PHY_IN_LOG >= nvmd->nr_pages) {
-		DMERR("Illegal nvm address: %lu %ld", bio_data_dir(bio),
-						bio->bi_sector / NR_PHY_IN_LOG);
-		bio_io_error(bio);
+	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= nvmd->nr_pages) {
+		DMERR("Illegal nvm address: %lu %ld", rq_data_dir(rq),
+						blk_rq_pos(rq) / NR_PHY_IN_LOG);
 		return ret;
 	};
 
-	bio->bi_bdev = nvmd->dev->bdev;
+	/* TODO: What to do? */
+	/*bio->bi_bdev = nvmd->dev->bdev;*/
 
 	/* limited currently to 4k write IOs */
-	if (bio_data_dir(bio) == WRITE) {
-		if (bio_sectors(bio) != NR_PHY_IN_LOG) {
+	if (rq_data_dir(rq) == WRITE) {
+		if (blk_rq_sectors(rq) != NR_PHY_IN_LOG) {
 			DMERR("Write sectors size not supported (%u)",
-							bio_sectors(bio));
-			bio_io_error(bio);
+							blk_rq_sectors(rq));
 			return ret;
 		}
-		ret = nvmd->type->write_bio(nvmd, bio);
-	} else {
-		ret = nvmd->type->read_bio(nvmd, bio);
-	}
+		ret = nvmd->type->write_rq(nvmd, rq);
+	} else
+		ret = nvmd->type->read_rq(nvmd, rq);
 
 	return ret;
 }
@@ -154,9 +151,9 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	}
 
 	/* we make room for each pool context. */
-	nvmd->kbiod_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
+	nvmd->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
 						nvmd->nr_pools);
-	if (!nvmd->kbiod_wq) {
+	if (!nvmd->krqd_wq) {
 		DMERR("Couldn't start knvm-work");
 		goto err_blocks;
 	}
@@ -169,7 +166,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 
 	return 0;
 err_wq:
-	destroy_workqueue(nvmd->kbiod_wq);
+	destroy_workqueue(nvmd->krqd_wq);
 err_blocks:
 	nvm_for_each_pool(nvmd, pool, i) {
 		if (!pool->blocks)
@@ -207,13 +204,9 @@ static int nvm_init(struct nv_queue *nvq, struct nvmd *nvmd)
 		r->trans_map = NULL;
 	}
 
-	nvmd->per_rq_pool = mempool_create_slab_pool(16, _per_rq_cache);
-	if (!nvmd->per_rq_pool)
-		goto err_dev_lookup;
-
 	nvmd->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
 	if (!nvmd->page_pool)
-		goto err_per_rq_pool;
+		goto err_dev_lookup;
 
 	nvmd->addr_pool = mempool_create_slab_pool(64, _addr_cache);
 	if (!nvmd->addr_pool)
@@ -261,8 +254,6 @@ err_addr_pool:
 	mempool_destroy(nvmd->addr_pool);
 err_page_pool:
 	mempool_destroy(nvmd->page_pool);
-err_per_rq_pool:
-	mempool_destroy(nvmd->per_rq_pool);
 err_dev_lookup:
 	vfree(nvmd->rev_trans_map);
 err_rev_trans_map:
@@ -388,10 +379,9 @@ static void nvm_dtr(struct nvd_queue *nvq)
 	vfree(nvmd->trans_map);
 	vfree(nvmd->rev_trans_map);
 
-	destroy_workqueue(nvmd->kbiod_wq);
+	destroy_workqueue(nvmd->krqd_wq);
 	destroy_workqueue(nvmd->kgc_wq);
 
-	mempool_destroy(nvmd->per_rq_pool);
 	mempool_destroy(nvmd->page_pool);
 	mempool_destroy(nvmd->addr_pool);
 
@@ -404,12 +394,13 @@ static void nvm_dtr(struct nvd_queue *nvq)
 	DMINFO("successfully unloaded");
 }
 
-static int nvm_none_write_bio(struct nvmd *nvmd, struct bio *bio)
+static int nvm_none_write_rq(struct nvmd *nvmd, struct request *rq)
 {
-	sector_t l_addr = bio->bi_sector / NR_PHY_IN_LOG;
-	nvm_lock_addr(nvmd, l_addr);
+	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
-	nvm_write_bio(nvmd, bio, 0, NULL, NULL, nvmd->trans_map, 1);
+	nvm_lock_addr(nvmd, l_addr);
+	nvm_write_rq(nvmd, rq, 0, NULL, NULL, nvmd->trans_map, 1);
+
 	return DM_MAPIO_SUBMITTED;
 }
 
@@ -419,29 +410,25 @@ static struct nvm_target_type nvm_target_none = {
 	.version		= {1, 0, 0},
 	.lookup_ltop	= nvm_lookup_ltop,
 	.map_ltop	= nvm_map_ltop_rr,
-	.write_bio	= nvm_none_write_bio,
-	.read_bio	= nvm_read_bio,
-	.defer_bio	= nvm_defer_bio,
-	.bio_wait_add	= nvm_bio_wait_add,
+	.write_rq	= nvm_none_write_rq,
+	.read_rq	= nvm_read_rq,
+	.defer_rq	= nvm_defer_rq,
+	.rq_wait_add	= nvm_rq_wait_add,
 };
 
 static struct nvd_target lightnvm_target = {
 	.name		= "lightnvm",
 	.version	= {1, 0, 0},
+	.per_rq_size	= sizeof(struct per_rq_data),
 	.ctr		= nvm_ctr,
 	.dtr		= nvm_dtr,
-	.remap		= nvm_remap,
-	.end_rq		= nvm_end_io,
+	.remap		= nvm_map_rq,
+	.end_rq		= nvm_end_rq,
 };
 
 static int __init lightnvm_init(void)
 {
 	int ret = -ENOMEM;
-
-	_per_rq_cache = kmem_cache_create("lightnvm_per_rq_cache",
-				sizeof(struct per_rq_data), 0, 0, NULL);
-	if (!_per_rq_cache)
-		return ret;
 
 	_addr_cache = kmem_cache_create("lightnvm_addr_cache",
 				sizeof(struct nvm_addr), 0, 0, NULL);
@@ -460,14 +447,12 @@ static int __init lightnvm_init(void)
 err_adp:
 	kmem_cache_destroy(_addr_cache);
 err_pbc:
-	kmem_cache_destroy(_per_rq_cache);
 	return ret;
 }
 
 static void __exit lightnvm_exit(void)
 {
 	nvd_register_target(&lightnvm_target);
-	kmem_cache_destroy(_per_rq_cache);
 	kmem_cache_destroy(_addr_cache);
 }
 

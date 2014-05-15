@@ -1,35 +1,5 @@
 #include "lightnvm.h"
 
-/* alloc pbd, but also decorate it with bio */
-static struct per_rq_data *alloc_init_pbd(struct nvmd *nvmd, struct bio *bio)
-{
-	struct per_rq_data *pb = mempool_alloc(nvmd->per_rq_pool, GFP_NOIO);
-
-	if (!pb) {
-		DMERR("Couldn't allocate per_rq_data");
-		return NULL;
-	}
-
-	pb->bi_end_io = bio->bi_end_io;
-	pb->bi_private = bio->bi_private;
-
-	bio->bi_private = pb;
-
-	return pb;
-}
-
-static void free_pbd(struct nvmd *nvmd, struct per_rq_data *pb)
-{
-	mempool_free(pb, nvmd->per_rq_pool);
-}
-
-/* bio to be stripped from the pbd structure */
-static void exit_pbd(struct per_rq_data *pb, struct bio *bio)
-{
-	bio->bi_private = pb->bi_private;
-	bio->bi_end_io = pb->bi_end_io;
-}
-
 /* deferred bios are used when no available nvm pages. Allowing GC to execute
  * and resubmit bios */
 void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)

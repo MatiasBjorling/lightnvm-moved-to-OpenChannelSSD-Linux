@@ -240,38 +240,40 @@ struct per_rq_data;
 typedef struct nvm_addr *(*nvm_map_ltop_fn)(struct nvmd *, sector_t, int,
 						struct nvm_addr *, void *);
 typedef struct nvm_addr *(*nvm_lookup_ltop_fn)(struct nvmd *, sector_t);
-typedef int (*nvm_write_bio_fn)(struct nvmd *, struct bio *);
-typedef int (*nvm_read_bio_fn)(struct nvmd *, struct bio *);
+typedef int (*nvm_write_rq_fn)(struct nvmd *, struct rq_end_io_fn *);
+typedef int (*nvm_read_rq_fn)(struct nvmd *, struct rq *);
 typedef void (*nvm_alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
-typedef void (*nvm_defer_bio_fn)(struct nvmd *, struct bio *, void *);
-typedef void (*nvm_bio_wait_add_fn)(struct bio_list *, struct bio *, void *);
+typedef void (*nvm_defer_rq_fn)(struct nvmd *, struct rq *, void *);
+typedef void (*nvm_rq_wait_add_fn)(struct rq_list *, struct rq *, void *);
 typedef int (*nvm_ioctl_fn)(struct nvmd *,
 					unsigned int cmd, unsigned long arg);
 typedef int (*nvm_init_fn)(struct nvmd *);
 typedef void (*nvm_exit_fn)(struct nvmd *);
-typedef void (*nvm_endio_fn)(struct nvmd *, struct bio *,
+typedef void (*nvm_endio_fn)(struct nvmd *, struct rq *,
 				struct per_rq_data *, unsigned long *delay);
 
 typedef int (*nvm_page_special_fn)(struct nvmd *, unsigned int);
 
 struct nvm_target_type {
 	const char *name;
-	unsigned version[3];
+	unsigned int version[3];
+	unsigned int per_rq_size; 
+
 	nvm_map_ltop_fn map_ltop;
 
 	/* lookup functions */
 	nvm_lookup_ltop_fn lookup_ltop;
 
-	/* handling of bios */
-	nvm_write_bio_fn write_bio;
-	nvm_read_bio_fn read_bio;
+	/* handling of rqs */
+	nvm_write_rq_fn write_rq;
+	nvm_read_rq_fn read_rq;
 	nvm_ioctl_fn ioctl;
-	nvm_endio_fn endio;
+	nvm_endio_fn end_rq;
 
 	/* engine specific overrides */
 	nvm_alloc_phys_addr_fn alloc_phys_addr;
-	nvm_defer_bio_fn defer_bio;
-	nvm_bio_wait_add_fn bio_wait_add;
+	nvm_defer_rq_fn defer_rq;
+	nvm_rq_wait_add_fn rq_wait_add;
 
 	/* module specific init/teardown */
 	nvm_init_fn init;
@@ -310,7 +312,6 @@ struct nvmd {
 	/* Append points */
 	struct nvm_ap *aps;
 
-	mempool_t *per_rq_pool;
 	mempool_t *addr_pool;
 	mempool_t *page_pool;
 	mempool_t *block_page_pool;
@@ -332,7 +333,7 @@ struct nvmd {
 	 * strategy */
 	atomic_t next_write_ap; /* Whenever a page is written, this is updated
 				 * to point to the next write append point */
-	struct workqueue_struct *kbiod_wq;
+	struct workqueue_struct *krqd_wq;
 	struct workqueue_struct *kgc_wq;
 
 	spinlock_t deferred_lock;
@@ -405,21 +406,21 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *, sector_t l_addr);
 
 /*   I/O bio related */
 struct nvm_addr *nvm_get_trans_map(struct nvmd *nvmd, void *private);
-struct bio *nvm_write_init_bio(struct nvmd *, struct bio *, struct nvm_addr *);
+struct request *nvm_write_init_rq(struct nvmd *, struct request *, struct nvm_addr *);
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv);
 /* FIXME: Shorten */
-int nvm_write_bio(struct nvmd *, struct bio *bio, int is_gc, void *private,
+int nvm_write_rq(struct nvmd *, struct request *rq, int is_gc, void *private,
 		struct completion *sync, struct nvm_addr *trans_map,
-		unsigned int complete_bio);
-int nvm_read_bio(struct nvmd *, struct bio *bio);
+		unsigned int complete_rq);
+int nvm_read_rq(struct nvmd *, struct request *rq);
 /* FIXME: Shorten */
 void nvm_update_map(struct nvmd *nvmd, sector_t l_addr, struct nvm_addr *p,
 					int is_gc, struct nvm_addr *trans_map);
 /* FIXME: Shorten */
-void nvm_submit_bio(struct nvmd *, struct nvm_addr *, sector_t, int rw,
-		struct bio *, struct bio *orig_bio, struct completion *sync,
+void nvm_submit_rq(struct nvmd *, struct nvm_addr *, sector_t, int rw,
+		struct request *, struct request *orig_rq, struct completion *sync,
 		struct nvm_addr *trans_map);
-void nvm_defer_write_bio(struct nvmd *nvmd, struct bio *bio, void *private);
+void nvm_defer_write_rq(struct nvmd *nvmd, struct request *rq, void *private);
 
 /*   NVM device related */
 void nvm_block_release(struct kref *);
@@ -488,9 +489,9 @@ static inline int physical_to_slot(struct nvmd *n, sector_t phys)
 		NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
-static inline struct per_rq_data *get_per_rq_data(struct bio *bio)
+static inline struct per_rq_data *get_per_rq_data(struct request *rq)
 {
-	return bio->bi_private;
+	return blk_mq_rq_to_pdu(rq);
 }
 
 static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,

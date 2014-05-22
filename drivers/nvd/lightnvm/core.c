@@ -305,10 +305,10 @@ void nvm_erase_block(struct nvm_block *block)
 	/* Send erase command to device. */
 }
 
-static void nvm_fill_bio_and_end(struct bio *bio)
+static void nvm_rq_zero_end(struct request *rq)
 {
-	zero_fill_bio(bio);
-	bio_endio(bio, 0);
+	/* TODO: fill rq with zeroes */
+	blk_mq_complete_request(rq);
 }
 
 struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
@@ -505,12 +505,12 @@ static void nvm_end_write_bio(struct bio *bio, int err)
 	bio_put(bio);
 }
 
-int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
+int nvm_read_rq(struct nvmd *nvmd, struct request *rq)
 {
 	struct nvm_addr *p;
 	sector_t l_addr;
 
-	l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+	l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
 	nvm_lock_addr(nvmd, l_addr);
 
@@ -518,9 +518,8 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 
 	if (!p) {
 		nvm_unlock_addr(nvmd, l_addr);
-		nvm_defer_bio(nvmd, bio, NULL);
 		nvm_gc_kick(nvmd);
-		goto finished;
+		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
 	bio->bi_sector = p->addr * NR_PHY_IN_LOG +
@@ -528,7 +527,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 
 	if (!p->block) {
 		bio->bi_sector = 0;
-		nvm_fill_bio_and_end(bio);
+		nvm_rq_zero_end(rq);
 		mempool_free(p, nvmd->addr_pool);
 		nvm_unlock_addr(nvmd, l_addr);
 		goto finished;
@@ -536,7 +535,7 @@ int nvm_read_bio(struct nvmd *nvmd, struct bio *bio)
 
 	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL, nvmd->trans_map);
 finished:
-	return DM_MAPIO_SUBMITTED;
+	return BLK_MQ_RQ_QUEUE_OK;
 }
 
 int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv)

@@ -2,7 +2,7 @@
 
 /* deferred bios are used when no available nvm pages. Allowing GC to execute
  * and resubmit bios */
-void nvm_defer_bio(struct nvmd *nvmd, struct bio *bio, void *private)
+void nvm_defer_rq(struct nvmd *nvmd, struct bio *bio, void *private)
 {
 	spin_lock(&nvmd->deferred_lock);
 	bio_list_add(&nvmd->deferred_bios, bio);
@@ -358,7 +358,7 @@ struct nvm_addr *nvm_lookup_ltop(struct nvmd *nvmd, sector_t l_addr)
  * the next write to the disk.
  *
  * Returns nvm_addr with the physical address and block. Remember to return to
- * nvmd->addr_cache when bio is finished.
+ * nvmd->addr_cache when request is finished.
  */
 struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 				 struct nvm_addr *trans_map, void *private)
@@ -398,7 +398,7 @@ struct nvm_addr *nvm_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	return p;
 }
 
-static void nvm_endio(struct bio *bio, int err)
+static void nvm_endio(struct request *rq, int err)
 {
 	struct per_rq_data *pb;
 	struct nvmd *nvmd;
@@ -410,7 +410,7 @@ static void nvm_endio(struct bio *bio, int err)
 	unsigned long diff, dev_wait, total_wait = 0;
 	unsigned int data_cnt;
 
-	pb = get_per_rq_data(bio);
+	pb = get_per_rq_data(rq);
 	p = pb->addr;
 	block = p->block;
 	ap = pb->ap;
@@ -419,7 +419,7 @@ static void nvm_endio(struct bio *bio, int err)
 
 	nvm_unlock_addr(nvmd, pb->l_addr);
 
-	if (bio_data_dir(bio) == WRITE) {
+	if (rq_data_dir(rq) == WRITE) {
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
 		if (data_cnt == nvmd->nr_host_pages_in_blk) {
@@ -439,7 +439,7 @@ static void nvm_endio(struct bio *bio, int err)
 
 
 	if (nvmd->type->endio)
-		nvmd->type->endio(nvmd, bio, pb, &dev_wait);
+		nvmd->type->endio(nvmd, rq, pb, &dev_wait);
 
 	if (!(nvmd->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
 wait_longer:
@@ -467,7 +467,7 @@ wait_longer:
 	}
 
 	/* Finish up */
-	exit_pbd(pb, bio);
+	exit_pbd(pb, rq);
 
 	if (bio->bi_end_io)
 		bio->bi_end_io(bio, err);
@@ -477,23 +477,15 @@ wait_longer:
 
 	if (pb->event) {
 		complete(pb->event);
-		/* all submitted bios allocate their own addr,
+		/* all submitted requests allocate their own addr,
 		 * except GC reads */
-		if (bio_data_dir(bio) == READ)
+		if (rq_data_dir(rq) == READ)
 			goto free_pb;
 	}
 
 	mempool_free(pb->addr, nvmd->addr_pool);
 free_pb:
 	free_pbd(nvmd, pb);
-}
-
-static void nvm_end_read_bio(struct bio *bio, int err)
-{
-	/* FIXME: Implement error handling of reads
-	 * Remember that bio->bi_end_io is overwritten during bio_split()
-	 */
-	nvm_endio(bio, err);
 }
 
 static void nvm_end_write_bio(struct bio *bio, int err)
@@ -589,7 +581,6 @@ int nvm_write_bio(struct nvmd *nvmd,
 	if (!p) {
 		BUG_ON(is_gc);
 		nvm_unlock_addr(nvmd, l_addr);
-		nvmd->type->defer_bio(nvmd, bio, trans_map);
 		nvm_gc_kick(nvmd);
 
 		return NVM_WRITE_DEFERRED;
@@ -606,7 +597,7 @@ int nvm_write_bio(struct nvmd *nvmd,
 	return NVM_WRITE_SUCCESS;
 }
 
-void nvm_bio_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
+void nvm_rq_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
 {
 	bio_list_add(bl, bio);
 }

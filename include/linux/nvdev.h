@@ -49,6 +49,11 @@ struct nvd_target {
 	nvd_exit_fn		*dtr;
 
 	/*
+	 * Device driver hooks
+	 */
+	struct blk_mq_ops	*dev_ops;
+
+	/*
 	 * For nvd internal use
 	 */
 	struct list_head	list;

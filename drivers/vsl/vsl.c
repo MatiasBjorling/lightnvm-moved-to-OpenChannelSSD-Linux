@@ -82,15 +82,14 @@ void vsl_unregister_target(struct vsl_target_type *t)
 	up_write(&_lock);
 }
 
-static int vsl_map_rq(struct openvsl_dev *dev, struct request *rq)
+static int vsl_queue_rq(struct openvsl_dev *dev, struct request *rq)
 {
-	struct vsl_stor *s = nvq->target_private;
-	int ret = DM_MAPIO_SUBMITTED;
+	struct vsl_stor *s = dev->stor;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
-		DMERR("Illegal nvm address: %lu %ld", rq_data_dir(rq),
+		DMERR("Illegal vsl address: %lu %ld", rq_data_dir(rq),
 						blk_rq_pos(rq) / NR_PHY_IN_LOG);
-		return ret;
+		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
 
 	/* limited currently to 4k write IOs */
@@ -98,13 +97,11 @@ static int vsl_map_rq(struct openvsl_dev *dev, struct request *rq)
 		if (blk_rq_sectors(rq) != NR_PHY_IN_LOG) {
 			DMERR("Write sectors size not supported (%u)",
 							blk_rq_sectors(rq));
-			return ret;
+			return BLK_MQ_RQ_QUEUE_ERROR;
 		}
-		ret = s->type->write_rq(s, rq);
+		return s->type->write_rq(s, rq);
 	} else
-		ret = s->type->read_rq(s, rq);
-
-	return ret;
+		return s->type->read_rq(s, rq);
 }
 
 static int vsl_pool_init(struct vsl_stor *s, struct dm_target *ti)
@@ -310,7 +307,7 @@ static struct vsl_target_type vsl_target_rrpc = {
 	.version		= {1, 0, 0},
 	.lookup_ltop	= vsl_lookup_ltop,
 	.map_ltop	= vsl_map_ltop_rr,
-	.write_rq	= vsl_none_write_rq,
+	.write_rq	= vsl_write_rq,
 	.read_rq	= vsl_read_rq,
 };
 
@@ -449,6 +446,12 @@ void openvsl_exit(struct openvsl_dev *dev)
 	kmem_cache_destroy(_addr_cache);
 
 	pr_info("openvsl: successfully unloaded");
+}
+
+int openvsl_config_blk_tags(struct blk_mq_tag_set *tagset)
+{
+	tagset->cmd_size += sizeof(per_rq_data);
+	tagset->ops.queue_rq = vsl_queue_rq;
 }
 
 MODULE_DESCRIPTION("OpenVSL");

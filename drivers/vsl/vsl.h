@@ -241,8 +241,8 @@ struct per_rq_data;
 typedef struct vsl_addr *(*vsl_map_ltop_fn)(struct nvmd *, sector_t, int,
 						struct vsl_addr *, void *);
 typedef struct vsl_addr *(*vsl_lookup_ltop_fn)(struct nvmd *, sector_t);
-typedef int (*vsl_write_rq_fn)(struct nvmd *, struct rq_end_io_fn *);
-typedef int (*vsl_read_rq_fn)(struct nvmd *, struct rq *);
+typedef int (*vsl_write_rq_fn)(struct nvmd *, struct request *);
+typedef int (*vsl_read_rq_fn)(struct nvmd *, struct request *);
 typedef void (*vsl_alloc_phys_addr_fn)(struct nvmd *, struct vsl_block *);
 typedef int (*vsl_ioctl_fn)(struct nvmd *,
 					unsigned int cmd, unsigned long arg);

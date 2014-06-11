@@ -498,6 +498,7 @@ void vsl_submit_rq(struct nvmd *nvmd, struct vsl_addr *p, sector_t l_addr,
 
 	submit_bio(bio->bi_rw, bio);
 }
+
 int vsl_read_rq(struct nvmd *nvmd, struct request *rq)
 {
 	struct vsl_addr *p;
@@ -552,7 +553,7 @@ struct bio *vsl_write_init_bio(struct nvmd *nvmd, struct request *rq,
 }
 
 /* Assumes that l_addr is locked with vsl_lock_addr() */
-int vsl_write_rq(struct nvmd *nvmd,
+int __vsl_write_rq(struct nvmd *nvmd,
 		  struct request *rq, int is_gc,
 		  void *private, struct completion *sync,
 		  struct vsl_addr *trans_map, unsigned int complete_bio)
@@ -575,9 +576,13 @@ int vsl_write_rq(struct nvmd *nvmd,
 		vsl_submit_rq(nvmd, p, l_addr, WRITE, issue_bio, bio, sync,
 								trans_map);
 	else
-		vsl_submit_rq(nvmd, p, l_addr, WRITE, issue_bio, NULL, sync,
+		vsl_submit_rq(nvmd, p, l_addri WRITE, issue_bio, NULL, sync,
 								trans_map);
 
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
+int vsl_write_rq(struct vsl_stor *s, struct request *rq)
+{
+
+}

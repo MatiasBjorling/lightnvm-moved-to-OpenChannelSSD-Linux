@@ -2,8 +2,8 @@
 # Open Virtual Storage Layer (OpenVSL) configuration
 #
 
-menuconfig VSL
-	bool "Open Virtual Storage Layer (OpenVSL) support"
+menuconfig OPENVSL
+	bool "Open Virtual Storage Layer support"
 	depends on BLK_DEV
 	default y
 	---help---

@@ -1,25 +1,25 @@
-#include "lightnvm.h"
+#include "vsl.h"
 
 /* Run only GC if less than 1/X blocks are free */
 #define GC_LIMIT_INVERSE 10
 
 static void queue_pool_gc(struct vsl_pool *pool)
 {
-	struct nvmd *nvmd = pool->nvmd;
-	queue_work(nvmd->kbiod_wq, &pool->gc_ws);
+	struct vsl_stor *s = pool->s;
+	queue_work(s->kbiod_wq, &pool->gc_ws);
 }
 
 void vsl_gc_cb(unsigned long data)
 {
-	struct nvmd *nvmd = (struct nvmd *)data;
+	struct vsl_stor *s = (struct vsl_stor *)data;
 	struct vsl_pool *pool;
 	int i;
 
-	vsl_for_each_pool(nvmd, pool, i)
+	vsl_for_each_pool(s, pool, i)
 		queue_pool_gc(pool);
 
-	mod_timer(&nvmd->gc_timer,
-			jiffies + msecs_to_jiffies(nvmd->config.gc_time));
+	mod_timer(&s->gc_timer,
+			jiffies + msecs_to_jiffies(s->config.gc_time));
 }
 
 static void __erase_block(struct vsl_block *block)
@@ -58,7 +58,7 @@ static struct vsl_block *block_prio_find_max(struct vsl_pool *pool)
 
 /* Move data away from flash block to be erased. Additionally update the
  * l to p and p to l mappings. */
-static void vsl_move_valid_pages(struct nvmd *nvmd, struct vsl_block *block)
+static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 {
 	struct vsl_addr src;
 	struct vsl_rev_addr *rev;
@@ -67,24 +67,24 @@ static void vsl_move_valid_pages(struct nvmd *nvmd, struct vsl_block *block)
 	int slot;
 	DECLARE_COMPLETION(sync);
 
-	if (bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk))
+	if (bitmap_full(block->invalid_pages, s->nr_host_pages_in_blk))
 		return;
 
 	while ((slot = find_first_zero_bit(block->invalid_pages,
-					   nvmd->nr_host_pages_in_blk)) <
-						nvmd->nr_host_pages_in_blk) {
+					   s->nr_host_pages_in_blk)) <
+						s->nr_host_pages_in_blk) {
 		/* Perform read */
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
 
-		BUG_ON(src.addr >= nvmd->nr_pages);
+		BUG_ON(src.addr >= s->nr_pages);
 
 		/* TODO: check for memory failure */
 		src_bio = bio_alloc(GFP_NOIO, 1);
-		src_bio->bi_bdev = nvmd->dev->bdev;
+		src_bio->bi_bdev = s->dev->bdev;
 		src_bio->bi_sector = src.addr * NR_PHY_IN_LOG;
 
-		page = mempool_alloc(nvmd->page_pool, GFP_NOIO);
+		page = mempool_alloc(s->page_pool, GFP_NOIO);
 
 		/* TODO: may fail with EXP_PG_SIZE > PAGE_SIZE */
 		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
@@ -97,65 +97,65 @@ static void vsl_move_valid_pages(struct nvmd *nvmd, struct vsl_block *block)
 		 * We do this for both the read and write. Fixing it after each
 		 * IO.
 		 */
-		spin_lock(&nvmd->rev_lock);
+		spin_lock(&s->rev_lock);
 		/* We use the physical address to go to the logical page addr,
 		 * and then update its mapping to its new place. */
-		rev = &nvmd->rev_trans_map[src.addr];
+		rev = &s->rev_trans_map[src.addr];
 
 		/* already updated by previous regular write */
 		if (rev->addr == LTOP_POISON) {
-			spin_unlock(&nvmd->rev_lock);
+			spin_unlock(&s->rev_lock);
 			goto overwritten;
 		}
 
 		/* unlocked by vsl_submit_bio vsl_endio */
-		__vsl_lock_addr(nvmd, rev->addr, 1);
-		spin_unlock(&nvmd->rev_lock);
+		__vsl_lock_addr(s, rev->addr, 1);
+		spin_unlock(&s->rev_lock);
 
 		init_completion(&sync);
-		vsl_submit_bio(nvmd, &src, rev->addr, READ, src_bio, NULL,
+		vsl_submit_bio(s, &src, rev->addr, READ, src_bio, NULL,
 							&sync, rev->trans_map);
 		wait_for_completion(&sync);
 
 		/* ok, now fix the write and make sure that it haven't been
 		 * moved in the meantime. */
-		spin_lock(&nvmd->rev_lock);
+		spin_lock(&s->rev_lock);
 
 		/* already updated by previous regular write */
 		if (rev->addr == LTOP_POISON) {
-			spin_unlock(&nvmd->rev_lock);
+			spin_unlock(&s->rev_lock);
 			goto overwritten;
 		}
 
 		src_bio->bi_sector = rev->addr * NR_PHY_IN_LOG;
 
 		/* again, unlocked by vsl_endio */
-		__vsl_lock_addr(nvmd, rev->addr, 1);
-		spin_unlock(&nvmd->rev_lock);
+		__vsl_lock_addr(s, rev->addr, 1);
+		spin_unlock(&s->rev_lock);
 
 		init_completion(&sync);
-		vsl_write_bio(nvmd, src_bio, 1, NULL, &sync,
+		vsl_write_bio(s, src_bio, 1, NULL, &sync,
 							rev->trans_map, 1);
 		wait_for_completion(&sync);
 
 overwritten:
 		bio_put(src_bio);
-		mempool_free(page, nvmd->page_pool);
+		mempool_free(page, s->page_pool);
 	}
-	WARN_ON(!bitmap_full(block->invalid_pages, nvmd->nr_host_pages_in_blk));
+	WARN_ON(!bitmap_full(block->invalid_pages, s->nr_host_pages_in_blk));
 }
 
 void vsl_gc_collect(struct work_struct *work)
 {
 	struct vsl_pool *pool = container_of(work, struct vsl_pool, gc_ws);
-	struct nvmd *nvmd = pool->nvmd;
+	struct vsl_stor *s = pool->s;
 	struct vsl_block *block;
 	unsigned int nr_blocks_need;
 
 	nr_blocks_need = pool->nr_blocks / 10;
 
-	if (nr_blocks_need < nvmd->nr_aps)
-		nr_blocks_need = nvmd->nr_aps;
+	if (nr_blocks_need < s->nr_aps)
+		nr_blocks_need = s->nr_aps;
 
 	spin_lock(&pool->lock);
 	while (nr_blocks_need > pool->nr_free_blocks &&
@@ -175,34 +175,34 @@ void vsl_gc_collect(struct work_struct *work)
 		BUG_ON(!block_is_full(block));
 		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
 
-		queue_work(nvmd->kgc_wq, &block->ws_gc);
+		queue_work(s->kgc_wq, &block->ws_gc);
 
 		nr_blocks_need--;
 	}
 	spin_unlock(&pool->lock);
-	nvmd->next_collect_pool++;
+	s->next_collect_pool++;
 
-	queue_work(nvmd->kbiod_wq, &nvmd->deferred_ws);
+	queue_work(s->kbiod_wq, &s->deferred_ws);
 }
 
 void vsl_gc_block(struct work_struct *work)
 {
 	struct vsl_block *block = container_of(work, struct vsl_block, ws_gc);
-	struct nvmd *nvmd = block->pool->nvmd;
+	struct vsl_stor *s = block->pool->s;
 
 	/* TODO: move outside lock to allow multiple pages
 	 * in parallel to be erased. */
-	vsl_move_valid_pages(nvmd, block);
+	vsl_move_valid_pages(s, block);
 	__erase_block(block);
 	vsl_pool_put_block(block);
 }
 
-void vsl_gc_kick(struct nvmd *nvmd)
+void vsl_gc_kick(struct vsl_stor *s)
 {
 	struct vsl_pool *pool;
 	unsigned int i;
-	BUG_ON(!nvmd);
+	BUG_ON(!s);
 
-	vsl_for_each_pool(nvmd, pool, i)
+	vsl_for_each_pool(s, pool, i)
 		queue_pool_gc(pool);
 }

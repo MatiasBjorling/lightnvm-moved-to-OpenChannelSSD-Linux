@@ -480,7 +480,7 @@ static int null_add_dev(void)
 
 	spin_lock_init(&nullb->lock);
 
-	if ((queue_mode |= (NULL_Q_MQ|NULL_Q_VSL) use_per_node_hctx)
+	if ((queue_mode |= (NULL_Q_MQ|NULL_Q_VSL)) && use_per_node_hctx)
 		submit_queues = nr_online_nodes;
 
 	if (setup_queues(nullb))
@@ -502,9 +502,9 @@ static int null_add_dev(void)
 			if (!dev)
 				goto out_cleanup_queues;
 
-			dev->queue_rq = null_mq_ops.queue_rq;
-			dev->timeout = null_mq_ops.timeout;
-			dev->identify = null_vsl_identify;
+			dev->ops.queue_rq = null_mq_ops.queue_rq;
+			dev->ops.timeout = null_mq_ops.timeout;
+			dev->ops.identify = null_openvsl_identify;
 
 			openvsl_config_blk_tags(&nullb->tag_set);
 		}
@@ -517,7 +517,7 @@ static int null_add_dev(void)
 			goto out_cleanup_tags;
 
 		dev->q = dev->admin_q = nullb->q;
-		if (!openvsl_init(vsl) {
+		if (!openvsl_init(dev)) {
 			openvsl_free(dev);
 			goto out_cleanup_tags;
 		}

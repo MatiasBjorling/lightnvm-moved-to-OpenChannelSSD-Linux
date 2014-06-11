@@ -5,7 +5,10 @@
 
 struct nv_queue {
 	struct nvd_target *target;
-	struct request_queue *blkq;
+
+	struct request_queue *q;
+	struct request_queue *admin_q;
+
 	struct blk_mq_ops blk_ops;
 
 	void *driver_data;

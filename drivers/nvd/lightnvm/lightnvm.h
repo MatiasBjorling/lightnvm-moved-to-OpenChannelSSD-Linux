@@ -24,6 +24,7 @@
 #include <linux/hashtable.h>
 #include <linux/percpu_ida.h>
 #include <linux/nvdev.h>
+#include <linux/blk-mq.h>
 
 #define NVM_MSG_PREFIX "lightnvm"
 #define LTOP_EMPTY -1

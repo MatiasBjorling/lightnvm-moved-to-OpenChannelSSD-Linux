@@ -45,10 +45,10 @@ static struct kmem_cache *_addr_cache;
 
 static int vsl_map_rq(struct openvsl_dev *dev, struct request *rq)
 {
-	struct nvmd *nvmd = nvq->target_private;
+	struct vsl_stor *s = nvq->target_private;
 	int ret = DM_MAPIO_SUBMITTED;
 
-	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= nvmd->nr_pages) {
+	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
 		DMERR("Illegal nvm address: %lu %ld", rq_data_dir(rq),
 						blk_rq_pos(rq) / NR_PHY_IN_LOG);
 		return ret;
@@ -61,31 +61,31 @@ static int vsl_map_rq(struct openvsl_dev *dev, struct request *rq)
 							blk_rq_sectors(rq));
 			return ret;
 		}
-		ret = nvmd->type->write_rq(nvmd, rq);
+		ret = s->type->write_rq(s, rq);
 	} else
-		ret = nvmd->type->read_rq(nvmd, rq);
+		ret = s->type->read_rq(s, rq);
 
 	return ret;
 }
 
-static int vsl_pool_init(struct nvmd *nvmd, struct dm_target *ti)
+static int vsl_pool_init(struct vsl_stor *s, struct dm_target *ti)
 {
 	struct vsl_pool *pool;
 	struct vsl_block *block;
 	struct vsl_ap *ap;
 	int i, j;
 
-	spin_lock_init(&nvmd->deferred_lock);
-	spin_lock_init(&nvmd->rev_lock);
-	INIT_WORK(&nvmd->deferred_ws, vsl_deferred_bio_submit);
-	bio_list_init(&nvmd->deferred_bios);
+	spin_lock_init(&s->deferred_lock);
+	spin_lock_init(&s->rev_lock);
+	INIT_WORK(&s->deferred_ws, vsl_deferred_bio_submit);
+	bio_list_init(&s->deferred_bios);
 
-	nvmd->pools = kzalloc(sizeof(struct vsl_pool) * nvmd->nr_pools,
+	s->pools = kzalloc(sizeof(struct vsl_pool) * s->nr_pools,
 								GFP_KERNEL);
-	if (!nvmd->pools)
+	if (!s->pools)
 		gnoto err_pool;
 
-	vsl_for_each_pool(nvmd, pool, i) {
+	vsl_for_each_pool(s, pool, i) {
 		spin_lock_init(&pool->lock);
 		spin_lock_init(&pool->waiting_lock);
 
@@ -99,9 +99,9 @@ static int vsl_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		INIT_LIST_HEAD(&pool->prio_list);
 
 		pool->id = i;
-		pool->nvmd = nvmd;
-		pool->phy_addr_start = i * nvmd->nr_blks_per_pool;
-		pool->phy_addr_end = (i + 1) * nvmd->nr_blks_per_pool - 1;
+		pool->s = s;
+		pool->phy_addr_start = i * s->nr_blks_per_pool;
+		pool->phy_addr_end = (i + 1) * s->nr_blks_per_pool - 1;
 		pool->nr_free_blocks = pool->nr_blocks =
 				pool->phy_addr_end - pool->phy_addr_start + 1;
 		bio_list_init(&pool->waiting_bios);
@@ -120,7 +120,7 @@ static int vsl_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			INIT_LIST_HEAD(&block->prio);
 
 			block->pool = pool;
-			block->id = (i * nvmd->nr_blks_per_pool) + j;
+			block->id = (i * s->nr_blks_per_pool) + j;
 
 			list_add_tail(&block->list, &pool->free_list);
 			INIT_WORK(&block->ws_gc, vsl_gc_block);
@@ -128,15 +128,15 @@ static int vsl_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		spin_unlock(&pool->lock);
 }
 
-	nvmd->nr_aps = nvmd->nr_aps_per_pool * nvmd->nr_pools;
-	nvmd->aps = kzalloc(sizeof(struct vsl_ap) * nvmd->nr_aps, GFP_KERNEL);
-	if (!nvmd->aps)
+	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;
+	s->aps = kzalloc(sizeof(struct vsl_ap) * s->nr_aps, GFP_KERNEL);
+	if (!s->aps)
 		goto err_blocks;
 
-	vsl_for_each_ap(nvmd, ap, i) {
+	vsl_for_each_ap(s, ap, i) {
 		spin_lock_init(&ap->lock);
-		ap->parent = nvmd;
-		ap->pool = &nvmd->pools[i / nvmd->nr_aps_per_pool];
+		ap->parent = s;
+		ap->pool = &s->pools[i / s->nr_aps_per_pool];
 
 		block = vsl_pool_get_block(ap->pool, 0);
 		vsl_set_ap_cur(ap, block);
@@ -144,58 +144,58 @@ static int vsl_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		block = vsl_pool_get_block(ap->pool, 1);
 		ap->gc_cur = block;
 
-		ap->t_read = nvmd->config.t_read;
-		ap->t_write = nvmd->config.t_write;
-		ap->t_erase = nvmd->config.t_erase;
+		ap->t_read = s->config.t_read;
+		ap->t_write = s->config.t_write;
+		ap->t_erase = s->config.t_erase;
 	}
 
 	/* we make room for each pool context. */
-	nvmd->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
-						nvmd->nr_pools);
-	if (!nvmd->krqd_wq) {
+	s->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
+						s->nr_pools);
+	if (!s->krqd_wq) {
 		DMERR("Couldn't start knvm-work");
 		goto err_blocks;
 	}
 
-	nvmd->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
-	if (!nvmd->kgc_wq) {
+	s->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
+	if (!s->kgc_wq) {
 		DMERR("Couldn't start knvm-gc");
 		goto err_wq;
 	}
 
 	return 0;
 err_wq:
-	destroy_workqueue(nvmd->krqd_wq);
+	destroy_workqueue(s->krqd_wq);
 err_blocks:
-	vsl_for_each_pool(nvmd, pool, i) {
+	vsl_for_each_pool(s, pool, i) {
 		if (!pool->blocks)
 			break;
 		kfree(pool->blocks);
 	}
-	kfree(nvmd->pools);
+	kfree(s->pools);
 err_pool:
 	pr_err("lightnvm: cannot allocate lightnvm data structures");
 	return -ENOMEM;
 }
 
-static int vsl_internal_init(struct openvsl_dev *dev, struct nvmd *nvmd)
+static int vsl_internal_init(struct openvsl_dev *dev, struct vsl_stor *s)
 {
 	int i;
 	unsigned int order;
 
-	nvmd->trans_map = vmalloc(sizeof(struct vsl_addr) * nvmd->nr_pages);
-	if (!nvmd->trans_map)
+	s->trans_map = vmalloc(sizeof(struct vsl_addr) * s->nr_pages);
+	if (!s->trans_map)
 		return -ENOMEM;
-	memset(nvmd->trans_map, 0, sizeof(struct vsl_addr) * nvmd->nr_pages);
+	memset(s->trans_map, 0, sizeof(struct vsl_addr) * s->nr_pages);
 
-	nvmd->rev_trans_map = vmalloc(sizeof(struct vsl_rev_addr)
-							* nvmd->nr_pages);
-	if (!nvmd->rev_trans_map)
+	s->rev_trans_map = vmalloc(sizeof(struct vsl_rev_addr)
+							* s->nr_pages);
+	if (!s->rev_trans_map)
 		goto err_rev_trans_map;
 
-	for (i = 0; i < nvmd->nr_pages; i++) {
-		strnuct vsl_addr *p = &nvmd->trans_map[i];
-		struct vsl_rev_addr *r = &nvmd->rev_trans_map[i];
+	for (i = 0; i < s->nr_pages; i++) {
+		strnuct vsl_addr *p = &s->trans_map[i];
+		struct vsl_rev_addr *r = &s->rev_trans_map[i];
 
 		p->addr = LTOP_EMPTY;
 
@@ -203,60 +203,60 @@ static int vsl_internal_init(struct openvsl_dev *dev, struct nvmd *nvmd)
 		r->trans_map = NULL;
 	}
 
-	nvmd->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
-	if (!nvmd->page_pool)
+	s->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
+	if (!s->page_pool)
 		goto err_dev_lookup;
 
-	nvmd->addr_pool = mempool_create_slab_pool(64, _addr_cache);
-	if (!nvmd->addr_pool)
+	s->addr_pool = mempool_create_slab_pool(64, _addr_cache);
+	if (!s->addr_pool)
 		goto err_page_pool;
 
-	order = ffs(nvmd->nr_host_pages_in_blk) - 1;
-	nvmd->block_page_pool = mempool_create_page_pool(nvmd->nr_aps, order);
-	if (!nvmd->block_page_pool)
+	order = ffs(s->nr_host_pages_in_blk) - 1;
+	s->block_page_pool = mempool_create_page_pool(s->nr_aps, order);
+	if (!s->block_page_pool)
 		goto err_addr_pool;
 
-	if (bdev_physical_block_size(nvmd->dev->bdev) > EXPOSED_PAGE_SIZE) {
+	if (bdev_physical_block_size(s->dev->bdev) > EXPOSED_PAGE_SIZE) {
 		pr_err("lightnvm: bad sector size.");
 		goto err_block_page_pool;
 	}
-	nvmd->sector_size = EXPOSED_PAGE_SIZE;
+	s->sector_size = EXPOSED_PAGE_SIZE;
 
 	/* inflight maintainence */
-	percpu_ida_init(&nvmd->free_inflight, VSL_INFLIGHT_TAGS);
+	percpu_ida_init(&s->free_inflight, VSL_INFLIGHT_TAGS);
 
 	for (i = 0; i < VSL_INFLIGHT_PARTITIONS; i++) {
-		spin_lock_init(&nvmd->inflight_map[i].lock);
-		INIT_LIST_HEAD(&nvmd->inflight_map[i].addrs);
+		spin_lock_init(&s->inflight_map[i].lock);
+		INIT_LIST_HEAD(&s->inflight_map[i].addrs);
 	}
 
 	/* simple round-robin strategy */
-	atomic_set(&nvmd->next_write_ap, -1);
+	atomic_set(&s->next_write_ap, -1);
 
-	nvmd->nvq = nvq;
-	nvq->target_data = nvmd;
+	s->nvq = nvq;
+	nvq->target_data = s;
 
 	/* Initialize pools. */
-	vsl_pool_init(nvmd, ti);
+	vsl_pool_init(s, ti);
 
-	if (nvmd->type->init && nvmd->type->init(nvmd))
+	if (s->type->init && s->type->init(s))
 		goto err_block_page_pool;
 
 	/* FIXME: Clean up pool init on failure. */
-	setup_timer(&nvmd->gc_timer, vsl_gc_cb, (unsigned long)nvmd);
-	mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(1000));
+	setup_timer(&s->gc_timer, vsl_gc_cb, (unsigned long)s);
+	mod_timer(&s->gc_timer, jiffies + msecs_to_jiffies(1000));
 
 	return 0;
 err_block_page_pool:
-	mempool_destroy(nvmd->block_page_pool);
+	mempool_destroy(s->block_page_pool);
 err_addr_pool:
-	mempool_destroy(nvmd->addr_pool);
+	mempool_destroy(s->addr_pool);
 err_page_pool:
-	mempool_destroy(nvmd->page_pool);
+	mempool_destroy(s->page_pool);
 err_dev_lookup:
-	vfree(nvmd->rev_trans_map);
+	vfree(s->rev_trans_map);
 err_rev_trans_map:
-	vfree(nvmd->trans_map);
+	vfree(s->trans_map);
 	return -ENOMEM;
 }
 
@@ -367,42 +367,43 @@ err_map:
 
 void openvsl_exit(struct openvsl_dev *dev)
 {
-	struct nvmd *nvmd = dev->nvmd;
+	struct vsl_stor *s = dev->stor;
 	struct vsl_pool *pool;
 	int i;
 
-	if (!nvmd)
+	if (!s)
 		return;
 
-	if (nvmd->type->exit)
-		nvmd->type->exit(nvmd);
+	if (s->type->exit)
+		s->type->exit(s);
 
-	del_timer(&nvmd->gc_timer);
+	del_timer(&s->gc_timer);
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */
-	vsl_for_each_pool(nvmd, pool, i)
+	vsl_for_each_pool(s, pool, i)
 		kfree(pool->blocks);
 
-	kfree(nvmd->pools);
-	kfree(nvmd->aps);
+	kfree(s->pools);
+	kfree(s->aps);
 
-	vfree(nvmd->trans_map);
-	vfree(nvmd->rev_trans_map);
+	vfree(s->trans_map);
+	vfree(s->rev_trans_map);
 
-	destroy_workqueue(nvmd->krqd_wq);
-	destroy_workqueue(nvmd->kgc_wq);
+	destroy_workqueue(s->krqd_wq);
+	destroy_workqueue(s->kgc_wq);
 
-	mempool_destroy(nvmd->page_pool);
-	mempool_destroy(nvmd->addr_pool);
+	mempool_destroy(s->page_pool);
+	mempool_destroy(s->addr_pool);
 
-	percpu_ida_destroy(&nvmd->free_inflight);
+	percpu_ida_destroy(&s->free_inflight);
 
-	dm_put_device(ti, nvmd->dev);
+	dm_put_device(ti, s->dev);
 
-	kfree(nvmd);
+	kfree(s);
+
+	kmem_cache_destroy(_addr_cache);
 
 	pr_info("openvsl: successfully unloaded");
-kmem_cache_destroy(_addr_cache);
 }
 
 MODULE_DESCRIPTION("OpenVSL");

@@ -27,7 +27,7 @@ struct openvsl_dev_ops {
 	queue_fq_fn		*queue_rq;
 	rq_timed_out_fn		*timeout;
 };
-						     
+
 struct openvsl_dev {
 	struct request_queue *q;
 	struct request_queue *admin_q;

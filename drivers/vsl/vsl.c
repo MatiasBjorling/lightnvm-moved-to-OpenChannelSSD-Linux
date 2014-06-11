@@ -421,11 +421,11 @@ static struct nvd_target lightnvm_target = {
 	.end_rq		= nvm_end_rq,
 };
 
-static int __init lightnvm_init(void)
+static int __init vsl_init(void)
 {
 	int ret = -ENOMEM;
 
-	_addr_cache = kmem_cache_create("lightnvm_addr_cache",
+	_addr_cache = kmem_cache_create("vsl_addr_cache",
 				sizeof(struct nvm_addr), 0, 0, NULL);
 	if (!_addr_cache)
 		goto err_pbc;
@@ -451,9 +451,9 @@ static void __exit lightnvm_exit(void)
 	kmem_cache_destroy(_addr_cache);
 }
 
-module_init(lightnvm_init);
-module_exit(lightnvm_exit);
+module_init(vsl_init);
+module_exit(vsl_exit);
 
-MODULE_DESCRIPTION("openvsl nvd target");
+MODULE_DESCRIPTION("OpenVSL");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");
 MODULE_LICENSE("GPL");

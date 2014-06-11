@@ -244,8 +244,6 @@ typedef struct nvm_addr *(*nvm_lookup_ltop_fn)(struct nvmd *, sector_t);
 typedef int (*nvm_write_rq_fn)(struct nvmd *, struct rq_end_io_fn *);
 typedef int (*nvm_read_rq_fn)(struct nvmd *, struct rq *);
 typedef void (*nvm_alloc_phys_addr_fn)(struct nvmd *, struct nvm_block *);
-typedef void (*nvm_defer_rq_fn)(struct nvmd *, struct rq *, void *);
-typedef void (*nvm_rq_wait_add_fn)(struct rq_list *, struct rq *, void *);
 typedef int (*nvm_ioctl_fn)(struct nvmd *,
 					unsigned int cmd, unsigned long arg);
 typedef int (*nvm_init_fn)(struct nvmd *);
@@ -273,8 +271,6 @@ struct nvm_target_type {
 
 	/* engine specific overrides */
 	nvm_alloc_phys_addr_fn alloc_phys_addr;
-	nvm_defer_rq_fn defer_rq;
-	nvm_rq_wait_add_fn rq_wait_add;
 
 	/* module specific init/teardown */
 	nvm_init_fn init;

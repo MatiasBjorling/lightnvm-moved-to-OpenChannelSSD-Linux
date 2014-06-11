@@ -43,7 +43,7 @@
 
 static struct kmem_cache *_addr_cache;
 
-static int nvm_map_rq(struct nv_queue *nvq, struct request *rq)
+static int nvm_map_rq(struct openvsl_dev *dev, struct request *rq)
 {
 	struct nvmd *nvmd = nvq->target_private;
 	int ret = DM_MAPIO_SUBMITTED;
@@ -53,9 +53,6 @@ static int nvm_map_rq(struct nv_queue *nvq, struct request *rq)
 						blk_rq_pos(rq) / NR_PHY_IN_LOG);
 		return ret;
 	};
-
-	/* TODO: What to do? */
-	/*bio->bi_bdev = nvmd->dev->bdev;*/
 
 	/* limited currently to 4k write IOs */
 	if (rq_data_dir(rq) == WRITE) {
@@ -268,20 +265,6 @@ err_rev_trans_map:
 #define NVM_NUM_BLOCKS 256
 #define NVM_NUM_PAGES 256
 
-static void nvm_dtr(struct openvsl_dev *dev)
-{
-}
-
-static int nvm_none_write_rq(struct nvmd *nvmd, struct request *rq)
-{
-	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
-
-	nvm_lock_addr(nvmd, l_addr);
-	nvm_write_rq(nvmd, rq, 0, NULL, NULL, nvmd->trans_map, 1);
-
-	return BLk_MQ_RQ_QUEUE_OK;
-}
-
 /* none target type, round robin, page-based FTL, and cost-based GC */
 static struct nvm_target_type nvm_target_rrpc = {
 	.name			= "rrpc",
@@ -290,8 +273,6 @@ static struct nvm_target_type nvm_target_rrpc = {
 	.map_ltop	= nvm_map_ltop_rr,
 	.write_rq	= nvm_none_write_rq,
 	.read_rq	= nvm_read_rq,
-	.defer_rq	= nvm_defer_rq,
-	.rq_wait_add	= nvm_rq_wait_add,
 };
 
 struct openvsl_dev *openvsl_alloc()

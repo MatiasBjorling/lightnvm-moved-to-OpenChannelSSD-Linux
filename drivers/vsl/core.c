@@ -581,8 +581,3 @@ int nvm_write_rq(struct nvmd *nvmd,
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-void nvm_rq_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
-{
-	bio_list_add(bl, bio);
-}
-

@@ -1,52 +1,52 @@
 #include "vsl.h"
 
 /* requires lock on the translation map used */
-void invalidate_block_page(struct nvmd *nvmd, struct vsl_addr *p)
+void invalidate_block_page(struct vsl_stor *s, struct vsl_addr *p)
 {
 	unsigned int page_offset;
 	struct vsl_block *block = p->block;
 
-	page_offset = p->addr % nvmd->nr_host_pages_in_blk;
+	page_offset = p->addr % s->nr_host_pages_in_blk;
 	spin_lock(&block->lock);
 	WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 	block->nr_invalid_pages++;
 	spin_unlock(&block->lock);
 }
 
-void vsl_update_map(struct nvmd *nvmd, sector_t l_addr, struct vsl_addr *p,
+void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 					int is_gc, struct vsl_addr *trans_map)
 {
 	struct vsl_addr *gp;
 	struct vsl_rev_addr *rev;
 
-	BUG_ON(l_addr >= nvmd->nr_pages);
-	BUG_ON(p->addr >= nvmd->nr_pages);
+	BUG_ON(l_addr >= s->nr_pages);
+	BUG_ON(p->addr >= s->nr_pages);
 
 	gp = &trans_map[l_addr];
-	spin_lock(&nvmd->rev_lock);
+	spin_lock(&s->rev_lock);
 	if (gp->block) {
-		invalidate_block_page(nvmd, gp);
-		nvmd->rev_trans_map[gp->addr].addr = LTOP_POISON;
+		invalidate_block_page(s, gp);
+		s->rev_trans_map[gp->addr].addr = LTOP_POISON;
 	}
 
 	gp->addr = p->addr;
 	gp->block = p->block;
 
-	rev = &nvmd->rev_trans_map[p->addr];
+	rev = &s->rev_trans_map[p->addr];
 	rev->addr = l_addr;
 	rev->trans_map = trans_map;
-	spin_unlock(&nvmd->rev_lock);
+	spin_unlock(&s->rev_lock);
 }
 
 /* requires pool->lock taken */
 inline void vsl_reset_block(struct vsl_block *block)
 {
-	struct nvmd *nvmd = block->pool->nvmd;
+	struct vsl_stor *s = block->pool->s;
 
 	BUG_ON(!block);
 
 	spin_lock(&block->lock);
-	bitmap_zero(block->invalid_pages, nvmd->nr_host_pages_in_blk);
+	bitmap_zero(block->invalid_pages, s->nr_host_pages_in_blk);
 	block->ap = NULL;
 	block->next_page = 0;
 	block->next_offset = 0;
@@ -68,7 +68,7 @@ inline void vsl_reset_block(struct vsl_block *block)
  */
 struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 {
-	struct nvmd *nvmd = pool->nvmd;
+	struct vsl_stor *s = pool->s;
 	struct vsl_block *block = NULL;
 
 	BUG_ON(!pool);
@@ -82,7 +82,7 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 		return NULL;
 	}
 
-	while (!is_gc && pool->nr_free_blocks < nvmd->nr_aps) {
+	while (!is_gc && pool->nr_free_blocks < s->nr_aps) {
 		spin_unlock(&pool->lock);
 		return NULL;
 	}
@@ -96,7 +96,7 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 
 	vsl_reset_block(block);
 
-	block->data = mempool_alloc(nvmd->block_page_pool, GFP_ATOMIC);
+	block->data = mempool_alloc(s->block_page_pool, GFP_ATOMIC);
 	BUG_ON(!block->data);
 
 	return block;
@@ -121,12 +121,12 @@ void vsl_pool_put_block(struct vsl_block *block)
 static sector_t __vsl_alloc_phys_addr(struct vsl_block *block,
 							vsl_page_special_fn ps)
 {
-	struct nvmd *nvmd;
+	struct vsl_stor *s;
 	sector_t addr = LTOP_EMPTY;
 
 	BUG_ON(!block);
 
-	nvmd = block->pool->nvmd;
+	s = block->pool->s;
 
 	spin_lock(&block->lock);
 
@@ -137,7 +137,7 @@ static sector_t __vsl_alloc_phys_addr(struct vsl_block *block,
 	 * the offset to the address, instead of requesting a new page
 	 * from the physical block */
 	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
-		if (ps && !ps(nvmd, block->next_page + 1))
+		if (ps && !ps(s, block->next_page + 1))
 			goto out;
 
 		block->next_offset = 0;
@@ -149,8 +149,8 @@ static sector_t __vsl_alloc_phys_addr(struct vsl_block *block,
 			block->next_offset;
 	block->next_offset++;
 
-	if (nvmd->type->alloc_phys_addr)
-		nvmd->type->alloc_phys_addr(nvmd, block);
+	if (s->type->alloc_phys_addr)
+		s->type->alloc_phys_addr(s, block);
 
 out:
 	spin_unlock(&block->lock);
@@ -187,13 +187,13 @@ void vsl_set_ap_cur(struct vsl_ap *ap, struct vsl_block *block)
 /* requires ap->lock held */
 struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *ap, int is_gc)
 {
-	struct nvmd *nvmd = ap->parent;
+	struct vsl_stor *s = ap->parent;
 	struct vsl_block *p_block;
 	struct vsl_pool *pool;
 	struct vsl_addr *p;
 	sector_t p_addr;
 
-	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
+	p = mempool_alloc(s->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
 
@@ -231,7 +231,7 @@ struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *ap, int is_gc)
 
 finished:
 	if (p_addr == LTOP_EMPTY) {
-		mempool_free(p, nvmd->addr_pool);
+		mempool_free(p, s->addr_pool);
 		return NULL;
 	}
 
@@ -250,14 +250,14 @@ void vsl_erase_block(struct vsl_block *block)
 	/* Send erase command to device. */
 }
 
-struct vsl_addr *vsl_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
+struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *s, sector_t l_addr,
 				     struct vsl_addr *map, void *private)
 {
 	struct vsl_addr *gp, *p;
 
-	BUG_ON(!(l_addr >= 0 && l_addr < nvmd->nr_pages));
+	BUG_ON(!(l_addr >= 0 && l_addr < s->nr_pages));
 
-	p = mempool_alloc(nvmd->addr_pool, GFP_ATOMIC);
+	p = mempool_alloc(s->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
 
@@ -279,16 +279,16 @@ struct vsl_addr *vsl_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
 
 	return p;
 err:
-	mempool_free(p, nvmd->addr_pool);
+	mempool_free(p, s->addr_pool);
 	return NULL;
 
 }
 
 /* lookup the primary translation table. If there isn't an associated block to
  * the addr. We assume that there is no data and doesn't take a ref */
-struct vsl_addr *vsl_lookup_ltop(struct nvmd *nvmd, sector_t l_addr)
+struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *s, sector_t l_addr)
 {
-	return vsl_lookup_ltop_map(nvmd, l_addr, nvmd->trans_map, NULL);
+	return vsl_lookup_ltop_map(s, l_addr, s->trans_map, NULL);
 }
 
 /* Simple round-robin Logical to physical address translation.
@@ -297,9 +297,9 @@ struct vsl_addr *vsl_lookup_ltop(struct nvmd *nvmd, sector_t l_addr)
  * the next write to the disk.
  *
  * Returns vsl_addr with the physical address and block. Remember to return to
- * nvmd->addr_cache when request is finished.
+ * s->addr_cache when request is finished.
  */
-struct vsl_addr *vsl_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
+struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 				 struct vsl_addr *trans_map, void *private)
 {
 	struct vsl_ap *ap;
@@ -308,23 +308,23 @@ struct vsl_addr *vsl_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 
 
 	if (!is_gc) {
-		ap = get_next_ap(nvmd);
+		ap = get_next_ap(s);
 	} else {
 		/* during GC, we don't care about RR, instead we want to make
 		 * sure that we maintain evenness between the block pools. */
 		unsigned int i;
 		struct vsl_pool *pool, *max_free;
 
-		max_free = &nvmd->pools[0];
+		max_free = &s->pools[0];
 		/* prevent GC-ing pool from devouring pages of a pool with
 		 * little free blocks. We don't take the lock as we only need an
 		 * estimate. */
-		vsl_for_each_pool(nvmd, pool, i) {
+		vsl_for_each_pool(s, pool, i) {
 			if (pool->nr_free_blocks > max_free->nr_free_blocks)
 				max_free = pool;
 		}
 
-		ap = &nvmd->aps[max_free->id];
+		ap = &s->aps[max_free->id];
 	}
 
 	spin_lock(&ap->lock);
@@ -332,7 +332,7 @@ struct vsl_addr *vsl_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 	spin_unlock(&ap->lock);
 
 	if (p)
-		vsl_update_map(nvmd, l_addr, p, is_gc, trans_map);
+		vsl_update_map(s, l_addr, p, is_gc, trans_map);
 
 	return p;
 }
@@ -340,7 +340,7 @@ struct vsl_addr *vsl_map_ltop_rr(struct nvmd *nvmd, sector_t l_addr, int is_gc,
 static void vsl_endio(struct request *rq, int err)
 {
 	struct per_rq_data *pb;
-	struct nvmd *nvmd;
+	struct vsl_stor *s;
 	struct vsl_ap *ap;
 	struct vsl_pool *pool;
 	struct vsl_addr *p;
@@ -353,16 +353,16 @@ static void vsl_endio(struct request *rq, int err)
 	p = pb->addr;
 	block = p->block;
 	ap = pb->ap;
-	nvmd = ap->parent;
+	s = ap->parent;
 	pool = ap->pool;
 
-	vsl_unlock_addr(nvmd, pb->l_addr);
+	vsl_unlock_addr(s, pb->l_addr);
 
 	if (rq_data_dir(rq) == WRITE) {
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
-		if (data_cnt == nvmd->nr_host_pages_in_blk) {
-			mempool_free(block->data, nvmd->block_page_pool);
+		if (data_cnt == s->nr_host_pages_in_blk) {
+			mempool_free(block->data, s->block_page_pool);
 			block->data = NULL;
 
 			spin_lock(&pool->lock);
@@ -377,10 +377,10 @@ static void vsl_endio(struct request *rq, int err)
 	}
 
 
-	if (nvmd->type->endio)
-		nvmd->type->endio(nvmd, rq, pb, &dev_wait);
+	if (s->type->endio)
+		s->type->endio(s, rq, pb, &dev_wait);
 
-	if (!(nvmd->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
+	if (!(s->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
 wait_longer:
 		getnstimeofday(&end_tv);
 		diff_tv = timespec_sub(end_tv, pb->start_tv);
@@ -394,7 +394,7 @@ wait_longer:
 		}
 	}
 
-	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		/* we need this. updating pool current only by waiting_bios
 		 * worker leaves a windows where current is bio thats was
 		 * already ended */
@@ -402,7 +402,7 @@ wait_longer:
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
 
-		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
+		queue_work(s->kbiod_wq, &pool->waiting_ws);
 	}
 
 	/* Finish up */
@@ -422,9 +422,9 @@ wait_longer:
 			goto free_pb;
 	}
 
-	mempool_free(pb->addr, nvmd->addr_pool);
+	mempool_free(pb->addr, s->addr_pool);
 free_pb:
-	free_pbd(nvmd, pb);
+	free_pbd(s, pb);
 }
 
 static void vsl_end_write_rq(struct request *rq, int err)
@@ -443,18 +443,18 @@ static void vsl_rq_zero_end(struct request *rq)
 }
 
 /* remember to lock l_add before calling vsl_submit_rq */
-void vsl_submit_rq(struct nvmd *nvmd, struct vsl_addr *p, sector_t l_addr,
+void vsl_submit_rq(struct vsl_stor *s, struct vsl_addr *p, sector_t l_addr,
 			int rw, struct bio *bio,
 			struct bio *orig_bio,
 			struct completion *sync,
 			struct vsl_addr *trans_map)
 {
 	struct vsl_block *block = p->block;
-	struct vsl_ap *ap = block_to_ap(nvmd, block);
+	struct vsl_ap *ap = block_to_ap(s, block);
 	struct vsl_pool *pool = ap->pool;
 	struct per_rq_data *pb;
 
-	pb = get_per_rq_data(nvmd->nvq, rq);
+	pb = get_per_rq_data(s->nvq, rq);
 	pb->ap = ap;
 	pb->addr = p;
 	pb->l_addr = l_addr;
@@ -471,9 +471,9 @@ void vsl_submit_rq(struct nvmd *nvmd, struct vsl_addr *p, sector_t l_addr,
 	 * no lock for accounting. */
 	ap->io_accesses[rq_data_dir(rq)]++;
 
-/*	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+/*	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		spin_lock(&pool->waiting_lock);
-		nvmd->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
+		s->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
 
 		if (atomic_inc_return(&pool->is_active) != 1) {
 			atomic_dec(&pool->is_active);
@@ -491,7 +491,7 @@ void vsl_submit_rq(struct nvmd *nvmd, struct vsl_addr *p, sector_t l_addr,
 		}
 
 		/* we're the only bio waiting. queue relevant worker*/ /*
-		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
+		queue_work(s->kbiod_wq, &pool->waiting_ws);
 		spin_unlock(&pool->waiting_lock);
 		return;
 	}*/ 
@@ -499,20 +499,20 @@ void vsl_submit_rq(struct nvmd *nvmd, struct vsl_addr *p, sector_t l_addr,
 	submit_bio(bio->bi_rw, bio);
 }
 
-int vsl_read_rq(struct nvmd *nvmd, struct request *rq)
+int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 {
 	struct vsl_addr *p;
 	sector_t l_addr;
 
 	l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
-	vsl_lock_addr(nvmd, l_addr);
+	vsl_lock_addr(s, l_addr);
 
-	p = nvmd->type->lookup_ltop(nvmd, l_addr);
+	p = s->type->lookup_ltop(s, l_addr);
 
 	if (!p) {
-		vsl_unlock_addr(nvmd, l_addr);
-		vsl_gc_kick(nvmd);
+		vsl_unlock_addr(s, l_addr);
+		vsl_gc_kick(s);
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
@@ -522,23 +522,23 @@ int vsl_read_rq(struct nvmd *nvmd, struct request *rq)
 	if (!p->block) {
 		rq->sector = 0;
 		vsl_rq_zero_end(rq);
-		mempool_free(p, nvmd->addr_pool);
-		vsl_unlock_addr(nvmd, l_addr);
+		mempool_free(p, s->addr_pool);
+		vsl_unlock_addr(s, l_addr);
 		goto finished;
 	}
 
-	vsl_submit_rq(nvmd, p, l_addr, READ, bio, NULL, NULL, nvmd->trans_map);
+	vsl_submit_rq(s, p, l_addr, READ, bio, NULL, NULL, s->trans_map);
 finished:
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-struct bio *vsl_write_init_bio(struct nvmd *nvmd, struct request *rq,
+struct bio *vsl_write_init_bio(struct vsl_stor *s, struct request *rq,
 						struct vsl_addr *p)
 {
 	struct request *rq;
 	int i, size;
 
-	rq = blk_mq_alloc_request(nvmd->q);
+	rq = blk_mq_alloc_request(s->q);
 	if (!rq)
 		return BLK_MQ_RQ_QUEUE_ERROR;
 
@@ -553,7 +553,7 @@ struct bio *vsl_write_init_bio(struct nvmd *nvmd, struct request *rq,
 }
 
 /* Assumes that l_addr is locked with vsl_lock_addr() */
-int __vsl_write_rq(struct nvmd *nvmd,
+int __vsl_write_rq(struct vsl_stor *s,
 		  struct request *rq, int is_gc,
 		  void *private, struct completion *sync,
 		  struct vsl_addr *trans_map, unsigned int complete_bio)
@@ -562,21 +562,21 @@ int __vsl_write_rq(struct nvmd *nvmd,
 	struct bio *issue_bio;
 	sector_t l_addr = blk_rq_sectors(rq) / NR_PHY_IN_LOG;
 
-	p = nvmd->type->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
+	p = s->type->map_ltop(s, l_addr, is_gc, trans_map, private);
 	if (!p) {
 		BUG_ON(is_gc);
-		vsl_unlock_addr(nvmd, l_addr);
-		vsl_gc_kick(nvmd);
+		vsl_unlock_addr(s, l_addr);
+		vsl_gc_kick(s);
 
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
-	issue_bio = vsl_write_init_bio(nvmd, bio, p);
+	issue_bio = vsl_write_init_bio(s, bio, p);
 	if (complete_bio)
-		vsl_submit_rq(nvmd, p, l_addr, WRITE, issue_bio, bio, sync,
+		vsl_submit_rq(s, p, l_addr, WRITE, issue_bio, bio, sync,
 								trans_map);
 	else
-		vsl_submit_rq(nvmd, p, l_addri WRITE, issue_bio, NULL, sync,
+		vsl_submit_rq(s, p, l_addri WRITE, issue_bio, NULL, sync,
 								trans_map);
 
 	return BLK_MQ_RQ_QUEUE_OK;

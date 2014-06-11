@@ -330,6 +330,9 @@ int openvsl_init(struct openvsl_dev *dev)
 	unsigned int tmp;
 	char dummy;
 
+	if (!dev->ops->identify || !dev->ops->queue_rq || !dev->ops->timeout)
+		return -EINVAL;
+
 	_addr_cache = kmem_cache_create("vsl_addr_cache",
 				sizeof(struct vsl_addr), 0, 0, NULL);
 	if (!_addr_cache)
@@ -400,6 +403,7 @@ int openvsl_init(struct openvsl_dev *dev)
 	pr_info("openvsl: allocated %lu physical pages (%lu KB)",
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
 
+	dev->stor = s;
 	return 0;
 err_map:
 	kfree(s);

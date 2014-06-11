@@ -1,0 +1,19 @@
+#
+# Open Virtual Storage Layer (OpenVSL) configuration
+#
+
+menuconfig VSL
+	bool "Open Virtual Storage Layer (OpenVSL) support"
+	depends on BLK_DEV
+	default y
+	---help---
+	  Say Y here to get to enable OpenVSL devices to be recognized.
+
+	  OpenVSL implements some internals of SSDs within the host.
+	  Devices are required to support OpenVSL, and allow it to managed by
+	  ghost. OpenVSL is used together with a "bare" firmware, that
+	  exposes direct access to the underlying non-volatile memory.
+
+	  If you say N, all options in this submenu will be skipped and disabled;
+	  only do this if you know what you are doing.
+

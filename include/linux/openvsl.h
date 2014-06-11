@@ -1,6 +1,7 @@
 #ifndef OPENVSL_H
 #define OPENVSL_H
 
+#include <linux/types.h>
 #include <linux/blk-mq.h>
 
 enum VSL_RSP_VAL {
@@ -21,10 +22,10 @@ enum VSL_NVM_TYPE {
 };
 
 struct openvsl_id {
-	uint16	ver_id;
-	uint8	nvm_type;
-	uint16	nchannels;
-	uint8	reserved[11];
+	u16	ver_id;
+	u8	nvm_type;
+	u16	nchannels;
+	u8	reserved[11];
 };
 
 struct openvsl_id_chnl {
@@ -42,10 +43,16 @@ struct openvsl_id_chnl {
 	u8	reserved[4034];
 };
 
-typedef struct vsl_id_fn (vsl_id_fn)(struct vsl_dev *dev);
-typedef struct vsl_id_chnl_fn (vsl_id_channel_fn)(struct vsl_dev *dev, int chnl_num);
-typedef struct vsl_get_features_fn (vsl_get_features)(struct vsl_dev *dev);
-typedef int vsl_set_rsp (vsl_set_rsp)(struct vsl_dev *dev, u8 feat, enum VSL_RSP_VAL val);
+struct openvsl_get_features {
+	int todo;
+};
+
+struct openvsl_dev;
+
+typedef struct openvsl_id (vsl_id_fn)(struct openvsl_dev *dev);
+typedef struct openvsl_id_chnl (vsl_id_chnl_fn)(struct openvsl_dev *dev, int chnl_num);
+typedef struct openvsl_get_features (vsl_get_features_fn)(struct openvsl_dev *dev);
+typedef int (vsl_set_rsp_fn)(struct openvsl_dev *dev, u8 feat, unsigned int val);
 
 struct openvsl_dev_ops {
 	vsl_id_fn		*identify;
@@ -54,7 +61,7 @@ struct openvsl_dev_ops {
 	vsl_set_rsp_fn		*set_responsibility;
 
 	/* Requests */
-	queue_fq_fn		*queue_rq;
+	queue_rq_fn		*queue_rq;
 	rq_timed_out_fn		*timeout;
 };
 
@@ -68,11 +75,11 @@ struct openvsl_dev {
 };
 
 /* OpenVSL configuration */
-int openvsl_config_blk_reg(struct blk_mq_reg *reg);
+int openvsl_config_blk_tags(struct blk_mq_tag_set *);
 
-int openvsl_init(struct openvsl_dev *dev);
-void openvsl_exit(struct openvl_dev *dev)
-struct openvsl_dev *openvsl_alloc();
-void openvsl_free(struct openvsl_dev *dev);
+int openvsl_init(struct openvsl_dev *);
+void openvsl_exit(struct openvsl_dev *);
+struct openvsl_dev *openvsl_alloc(void);
+void openvsl_free(struct openvsl_dev *);
 
 #endif

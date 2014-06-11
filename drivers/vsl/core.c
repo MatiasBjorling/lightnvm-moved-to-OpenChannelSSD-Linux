@@ -1,4 +1,4 @@
-#include "lightnvm.h"
+#include "vsl.h"
 
 /* requires lock on the translation map used */
 void invalidate_block_page(struct nvmd *nvmd, struct nvm_addr *p)

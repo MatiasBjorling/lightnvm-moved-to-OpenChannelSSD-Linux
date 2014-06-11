@@ -4,8 +4,8 @@
  * This file is released under the GPL.
  */
 
-#ifndef LIGHTNVM_H_
-#define LIGHTNVM_H_
+#ifndef VSL_H_
+#define VSL_H_
 
 #include <linux/blkdev.h>
 #include <linux/list.h>
@@ -23,18 +23,18 @@
 #include <linux/completion.h>
 #include <linux/hashtable.h>
 #include <linux/percpu_ida.h>
-#include <linux/nvdev.h>
+#include <linux/openvsl.h>
 #include <linux/blk-mq.h>
 
-#define NVM_MSG_PREFIX "lightnvm"
+#define VSL_MSG_PREFIX "vsl"
 #define LTOP_EMPTY -1
 #define LTOP_POISON 0xD3ADB33F
 
-#define LIGHTNVM_IOC_MAGIC 'O'
-#define LIGHTNVM_IOCTL_ID _IO(LIGHTNVM_IOC_MAGIC, 0x40)
+#define VSL_IOC_MAGIC 'O'
+#define VSL_IOCTL_ID _IO(VSL_IOC_MAGIC, 0x40)
 
 /*
- * For now we hardcode some of the configuration for the LightNVM device that we
+ * For now we hardcode some of the configuration for the OpenVSL device that we
  * have. In the future this should be made configurable.
  *
  * Configuration:
@@ -59,14 +59,14 @@
 
 /* We partition the namespace of translation map into these pieces for tracking
  * in-flight addresses. */
-#define NVM_INFLIGHT_PARTITIONS 8
-#define NVM_INFLIGHT_TAGS 256
+#define VSL_INFLIGHT_PARTITIONS 8
+#define VSL_INFLIGHT_TAGS 256
 
-#define NVM_WRITE_SUCCESS  0
-#define NVM_WRITE_DEFERRED 1
-#define NVM_WRITE_GC_ABORT 2
+#define VSL_WRITE_SUCCESS  0
+#define VSL_WRITE_DEFERRED 1
+#define VSL_WRITE_GC_ABORT 2
 
-#define NVM_OPT_MISC_OFFSET 15
+#define VSL_OPT_MISC_OFFSET 15
 
 enum ltop_flags {
 	/* Update primary mapping (and init secondary mapping as a result) */
@@ -79,24 +79,24 @@ enum ltop_flags {
 
 enum target_flags {
 	/* No hints applied */
-	NVM_OPT_ENGINE_NONE		= 0 <<  0,
+	VSL_OPT_ENGINE_NONE		= 0 <<  0,
 	/* Swap aware hints. Detected from block request type */
-	NVM_OPT_ENGINE_SWAP		= 1 <<  0,
+	VSL_OPT_ENGINE_SWAP		= 1 <<  0,
 	/* IOCTL aware hints. Applications may submit direct hints */
-	NVM_OPT_ENGINE_IOCTL	= 1 <<  1,
+	VSL_OPT_ENGINE_IOCTL	= 1 <<  1,
 	/* Latency aware hints. Detected from file type or directly from app */
-	NVM_OPT_ENGINE_LATENCY	= 1 <<  2,
+	VSL_OPT_ENGINE_LATENCY	= 1 <<  2,
 	/* Pack aware hints. Detected from file type or directly from app */
-	NVM_OPT_ENGINE_PACK	= 1 <<  3,
+	VSL_OPT_ENGINE_PACK	= 1 <<  3,
 
 	/* Control accesses to append points in the host. Enable this for
 	 * devices that doesn't have an internal queue that only lets one
 	 * command run at a time within an append point */
-	NVM_OPT_POOL_SERIALIZE	= 1 << NVM_OPT_MISC_OFFSET,
+	VSL_OPT_POOL_SERIALIZE	= 1 << VSL_OPT_MISC_OFFSET,
 	/* Use fast/slow page access pattern */
-	NVM_OPT_FAST_SLOW_PAGES	= 1 << (NVM_OPT_MISC_OFFSET+1),
+	VSL_OPT_FAST_SLOW_PAGES	= 1 << (VSL_OPT_MISC_OFFSET+1),
 	/* Disable dev waits */
-	NVM_OPT_NO_WAITS	= 1 << (NVM_OPT_MISC_OFFSET+2),
+	VSL_OPT_NO_WAITS	= 1 << (VSL_OPT_MISC_OFFSET+2),
 };
 
 /* Pool descriptions */
@@ -347,8 +347,8 @@ struct nvmd {
 	 * overhead of cachelines being used. Keep it low for better cache
 	 * utilization. */
 	struct percpu_ida free_inflight;
-	struct nvm_inflight inflight_map[NVM_INFLIGHT_PARTITIONS];
-	struct nvm_inflight_addr inflight_addrs[NVM_INFLIGHT_TAGS];
+	struct nvm_inflight inflight_map[VSL_INFLIGHT_PARTITIONS];
+	struct nvm_inflight_addr inflight_addrs[VSL_INFLIGHT_TAGS];
 
 	/* nvm module specific data */
 	void *private;
@@ -423,7 +423,7 @@ void nvm_submit_rq(struct nvmd *, struct nvm_addr *, sector_t, int rw,
 		struct nvm_addr *trans_map);
 void nvm_defer_write_rq(struct nvmd *nvmd, struct request *rq, void *private);
 
-/*   NVM device related */
+/*   VSL device related */
 void nvm_block_release(struct kref *);
 
 /*   Block maintanence */
@@ -498,7 +498,7 @@ static inline struct per_rq_data *get_per_rq_data(struct nvqueue *nvq, struct re
 static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,
 								sector_t l_addr)
 {
-	return &nvmd->inflight_map[l_addr % NVM_INFLIGHT_PARTITIONS];
+	return &nvmd->inflight_map[l_addr % VSL_INFLIGHT_PARTITIONS];
 }
 
 static inline void __nvm_lock_addr(struct nvmd *nvmd, sector_t l_addr, int spin)
@@ -587,5 +587,5 @@ static inline void show_all_pools(struct nvmd *nvmd)
 		show_pool(pool);
 }
 
-#endif /* LIGHTNVM_H_ */
+#endif /* VSL_H_ */
 

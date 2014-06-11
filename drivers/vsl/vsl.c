@@ -17,7 +17,9 @@
  *   nvm_block lists.
  */
 
-#include "lightnvm.h"
+#include <linux/openvsl.h>
+#include <linux/blk-mq.h>
+#include "vsl.h"
 
 /* Defaults
  * Number of append points per pool. We assume that accesses within a pool is
@@ -179,7 +181,7 @@ err_pool:
 	return -ENOMEM;
 }
 
-static int nvm_init(struct nv_queue *nvq, struct nvmd *nvmd)
+static int vsl_internal_init(struct openvsl_dev *dev, struct nvmd *nvmd)
 {
 	int i;
 	unsigned int order;
@@ -266,22 +268,64 @@ err_rev_trans_map:
 #define NVM_NUM_BLOCKS 256
 #define NVM_NUM_PAGES 256
 
-static int nvm_probe(struct nv_queue *nvq)
+static void nvm_dtr(struct openvsl_dev *dev)
+{
+}
+
+static int nvm_none_write_rq(struct nvmd *nvmd, struct request *rq)
+{
+	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
+
+	nvm_lock_addr(nvmd, l_addr);
+	nvm_write_rq(nvmd, rq, 0, NULL, NULL, nvmd->trans_map, 1);
+
+	return BLk_MQ_RQ_QUEUE_OK;
+}
+
+/* none target type, round robin, page-based FTL, and cost-based GC */
+static struct nvm_target_type nvm_target_rrpc = {
+	.name			= "rrpc",
+	.version		= {1, 0, 0},
+	.lookup_ltop	= nvm_lookup_ltop,
+	.map_ltop	= nvm_map_ltop_rr,
+	.write_rq	= nvm_none_write_rq,
+	.read_rq	= nvm_read_rq,
+	.defer_rq	= nvm_defer_rq,
+	.rq_wait_add	= nvm_rq_wait_add,
+};
+
+struct openvsl_dev *openvsl_alloc()
+{
+	return kmalloc(sizeof(struct openvsl_dev), GFP_KERNEL);
+}
+
+void openvsl_free(struct openvsl_dev *dev)
+{
+	kfree(vsl);
+}
+
+int openvsl_init(struct openvsl_dev *dev)
 {
 	struct nvmd *nvmd;
 	unsigned int tmp;
 	char dummy;
 
+	_addr_cache = kmem_cache_create("vsl_addr_cache",
+				sizeof(struct nvm_addr), 0, 0, NULL);
+	if (!_addr_cache)
+		return -ENOMEM;
+	}
+
 	nvmd = kzalloc(sizeof(*nvmd), GFP_KERNEL);
 	if (!nvmd) {
-		pr_err("lightnvm: Insufficient memory");
+		kmem_cache_destroy(_addr_cache);
 		return -ENOMEM;
 	}
 
 	/* hardcode initialization values until user-space util is avail. */
 	nvmd->type = find_nvm_target_type(NVM_TARGET_TYPE);
 	if (!nvmd->type) {
-		pr_err("lightnvm: %s doesn't exist.", NVM_TARGET_TYPE;
+		pr_err("vsl: %s doesn't exist.", NVM_TARGET_TYPE;
 		goto err_map;
 	}
 
@@ -310,28 +354,28 @@ static int nvm_probe(struct nv_queue *nvq)
 		return -EINVAL;
 	}
 
-	if (nvm_init(ti, nvmd) < 0) {
-		pr_err("lightnvm: cannot initialize lightnvm structure");
+	if (vsl_internal_init(ti, nvmd) < 0) {
+		pr_err("lightnvm: cannot initialize openvsl structure");
 		goto err_map;
 	}
 
-	pr_info("lightnvm: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
+	pr_info("openvsl: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
 		nvmd->nr_pools,
 		nvmd->nr_blks_per_pool,
 		nvmd->nr_pages_per_blk,
 		nvmd->nr_aps,
 		nvmd->nr_aps_per_pool);
-	pr_info("lightnvm: timings: %u/%u/%u",
+	pr_info("openvsl: timings: %u/%u/%u",
 			nvmd->config.t_read,
 			nvmd->config.t_write,
 			nvmd->config.t_erase);
-	pr_info("lightnvm: target sector size=%d", nvmd->sector_size);
-	pr_info("lightnvm: disk logical sector size=%d",
+	pr_info("openvsl: target sector size=%d", nvmd->sector_size);
+	pr_info("openvsl: disk logical sector size=%d",
 		bdev_logical_block_size(nvmd->dev->bdev));
-	pr_info("lightnvm: disk physical sector size=%d",
+	pr_info("openvsl: disk physical sector size=%d",
 		bdev_physical_block_size(nvmd->dev->bdev));
-	pr_info("lightnvm: disk flash page size=%d", FLASH_PAGE_SIZE);
-	pr_info("lightnvm: allocated %lu physical pages (%lu KB)",
+	pr_info("openvsl: disk flash page size=%d", FLASH_PAGE_SIZE);
+	pr_info("openvsl: allocated %lu physical pages (%lu KB)",
 		nvmd->nr_pages, nvmd->nr_pages * nvmd->sector_size / 1024);
 
 	return 0;
@@ -340,19 +384,9 @@ err_map:
 	return -ENOMEM;
 }
 
-/*
- * Accepts an LightNVM-backed block-device. The LightNVM device should run the
- * corresponding physical firmware that exports the flash as physical without
- * any mapping and garbage collection as it will be taken care of.
- */
-static int nvm_ctr(struct nv_queue *nvq)
+void openvsl_exit(struct openvsl_dev *dev)
 {
-	return nvm_probe(nvq);
-}
-
-static void nvm_dtr(struct nvd_queue *nvq)
-{
-	struct nvmd *nvmd = nvq->target_data;;
+	struct nvmd *nvmd = dev->nvmd;
 	struct nvm_pool *pool;
 	int i;
 
@@ -387,72 +421,8 @@ static void nvm_dtr(struct nvd_queue *nvq)
 	kfree(nvmd);
 
 	pr_info("openvsl: successfully unloaded");
+kmem_cache_destroy(_addr_cache);
 }
-
-static int nvm_none_write_rq(struct nvmd *nvmd, struct request *rq)
-{
-	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
-
-	nvm_lock_addr(nvmd, l_addr);
-	nvm_write_rq(nvmd, rq, 0, NULL, NULL, nvmd->trans_map, 1);
-
-	return BLk_MQ_RQ_QUEUE_OK;
-}
-
-/* none target type, round robin, page-based FTL, and cost-based GC */
-static struct nvm_target_type nvm_target_none = {
-	.name			= "rrpc",
-	.version		= {1, 0, 0},
-	.lookup_ltop	= nvm_lookup_ltop,
-	.map_ltop	= nvm_map_ltop_rr,
-	.write_rq	= nvm_none_write_rq,
-	.read_rq	= nvm_read_rq,
-	.defer_rq	= nvm_defer_rq,
-	.rq_wait_add	= nvm_rq_wait_add,
-};
-
-static struct nvd_target lightnvm_target = {
-	.name		= "lightnvm",
-	.version	= {1, 0, 0},
-	.per_rq_size	= sizeof(struct per_rq_data),
-	.ctr		= nvm_ctr,
-	.dtr		= nvm_dtr,
-	.remap		= nvm_map_rq,
-	.end_rq		= nvm_end_rq,
-};
-
-static int __init vsl_init(void)
-{
-	int ret = -ENOMEM;
-
-	_addr_cache = kmem_cache_create("vsl_addr_cache",
-				sizeof(struct nvm_addr), 0, 0, NULL);
-	if (!_addr_cache)
-		goto err_pbc;
-
-	nvm_register_target(&lightnvm_target_none);
-
-	ret = nvd_register_target(&lightnvm_target);
-	if (ret) {
-		pr_err("openvsl: couldn't register lightnvm target.");
-		goto err_adp;
-	}
-
-	return ret;
-err_adp:
-	kmem_cache_destroy(_addr_cache);
-err_pbc:
-	return ret;
-}
-
-static void __exit lightnvm_exit(void)
-{
-	nvd_register_target(&lightnvm_target);
-	kmem_cache_destroy(_addr_cache);
-}
-
-module_init(vsl_init);
-module_exit(vsl_exit);
 
 MODULE_DESCRIPTION("OpenVSL");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");

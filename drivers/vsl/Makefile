@@ -1,5 +1,5 @@
 #
-# Makefile for the remapping device drivers support.
+# Makefile for OpenVSL.
 #
 
-obj-$(CONFIG_VSL)		+= vsl.o core.o gc.o
+obj-$(CONFIG_OPENVSL)		+= vsl.o core.o gc.o

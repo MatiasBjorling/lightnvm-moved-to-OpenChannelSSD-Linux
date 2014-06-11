@@ -17,8 +17,10 @@
  *   vsl_block lists.
  */
 
-#include <linux/openvsl.h>
 #include <linux/blk-mq.h>
+#include <linux/list.h>
+#include <linux/sem.h>
+#include <linux/openvsl.h>
 #include "vsl.h"
 
 /* Defaults
@@ -43,6 +45,42 @@
 
 static struct kmem_cache *_addr_cache;
 
+static LIST_HEAD(_targets);
+static DECLARE_RWSEM(_lock);
+
+inline struct vsl_target_type *find_vsl_target_type(const char *name)
+{
+	struct vsl_target_type *t;
+
+	list_for_each_entry(t, &_targets, list)
+		if (!strcmp(name, t->name))
+			return t;
+
+	return NULL;
+}
+
+int vsl_register_target(struct vsl_target_type *t)
+{
+	int ret = 0;
+
+	down_write(&_lock);
+	if (find_vsl_target_type(t->name))
+		ret = -EEXIST;
+	else
+		list_add(&t->list, &_targets);
+	up_write(&_lock);
+	return ret;
+}
+
+void vsl_unregister_target(struct vsl_target_type *t)
+{
+	if (!t)
+		return;
+
+	down_write(&_lock);
+	list_del(&t->list);
+	up_write(&_lock);
+}
 static int vsl_map_rq(struct openvsl_dev *dev, struct request *rq)
 {
 	struct vsl_stor *s = nvq->target_private;
@@ -83,7 +121,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct dm_target *ti)
 	s->pools = kzalloc(sizeof(struct vsl_pool) * s->nr_pools,
 								GFP_KERNEL);
 	if (!s->pools)
-		gnoto err_pool;
+		goto err_pool;
 
 	vsl_for_each_pool(s, pool, i) {
 		spin_lock_init(&pool->lock);
@@ -178,7 +216,7 @@ err_pool:
 	return -ENOMEM;
 }
 
-static int vsl_internal_init(struct openvsl_dev *dev, struct vsl_stor *s)
+static int vsl_stor_init(struct openvsl_dev *dev, struct vsl_stor *s)
 {
 	int i;
 	unsigned int order;
@@ -260,7 +298,7 @@ err_rev_trans_map:
 	return -ENOMEM;
 }
 
-#define VSL_TARGET_TYPE noop
+#define VSL_TARGET_TYPE rrpc
 #define VSL_NUM_POOLS 8
 #define VSL_NUM_BLOCKS 256
 #define VSL_NUM_PAGES 256
@@ -296,6 +334,8 @@ int openvsl_init(struct openvsl_dev *dev)
 	if (!_addr_cache)
 		return -ENOMEM;
 	}
+
+	vsl_register_target(&vsl_target_rrpc);
 
 	s = kzalloc(sizeof(struct vsl_stor), GFP_KERNEL);
 	if (!s) {
@@ -335,8 +375,8 @@ int openvsl_init(struct openvsl_dev *dev)
 		return -EINVAL;
 	}
 
-	if (vsl_internal_init(ti, s) < 0) {
-		pr_err("lightnvm: cannot initialize openvsl structure");
+	if (vsl_stor_init(ti, s) < 0) {
+		pr_err("openvsl: cannot initialize openvsl structure");
 		goto err_map;
 	}
 

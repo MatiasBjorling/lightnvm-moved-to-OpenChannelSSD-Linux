@@ -81,6 +81,7 @@ void vsl_unregister_target(struct vsl_target_type *t)
 	list_del(&t->list);
 	up_write(&_lock);
 }
+
 static int vsl_map_rq(struct openvsl_dev *dev, struct request *rq)
 {
 	struct vsl_stor *s = nvq->target_private;

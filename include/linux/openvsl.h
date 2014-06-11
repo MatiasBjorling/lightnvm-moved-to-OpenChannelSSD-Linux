@@ -31,7 +31,6 @@ struct openvsl_dev_ops {
 struct openvsl_dev {
 	struct request_queue *q;
 	struct request_queue *admin_q;
-	void *priv; /* TODO: What is this for? */
 
 	struct openvsl_dev_ops ops;
 

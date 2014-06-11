@@ -10,6 +10,8 @@ struct nv_queue {
 
 	void *driver_data;
 	void *target_data;
+
+	unsigned int per_rq_offset;
 };
 
 typedef int (nvd_remap_fn)(struct nvd_map *map);
@@ -35,7 +37,7 @@ struct nvd_target {
 	/*
 	 * Complete a remapped request
 	 */
-	nvd_complete_rq_fn		*complete_rq;
+	nvd_complete_rq_fn	*complete_rq;
 
 	/*
 	 * Probe information from a device.

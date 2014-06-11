@@ -84,7 +84,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 	nvmd->pools = kzalloc(sizeof(struct nvm_pool) * nvmd->nr_pools,
 								GFP_KERNEL);
 	if (!nvmd->pools)
-		goto err_pool;
+		gnoto err_pool;
 
 	nvm_for_each_pool(nvmd, pool, i) {
 		spin_lock_init(&pool->lock);
@@ -195,7 +195,7 @@ static int nvm_init(struct nv_queue *nvq, struct nvmd *nvmd)
 		goto err_rev_trans_map;
 
 	for (i = 0; i < nvmd->nr_pages; i++) {
-		struct nvm_addr *p = &nvmd->trans_map[i];
+		strnuct nvm_addr *p = &nvmd->trans_map[i];
 		struct nvm_rev_addr *r = &nvmd->rev_trans_map[i];
 
 		p->addr = LTOP_EMPTY;
@@ -290,7 +290,7 @@ static int nvm_probe(struct nv_queue *nvq)
 	nvmd->nr_pages_per_blk = NVM_NUM_PAGES;
 
 	/* Optional */
-	nvmd->nr_aps_per_pool 0= APS_PER_POOL;
+	nvmd->nr_aps_per_pool = APS_PER_POOL;
 	/* nvmd->config.flags = NVM_OPT_* */
 	nvmd->config.gc_time = GC_TIME;
 	nvmd->config.t_read = TIMING_READ;
@@ -316,23 +316,23 @@ static int nvm_probe(struct nv_queue *nvq)
 	}
 
 	pr_info("lightnvm: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
-	       nvmd->nr_pools,
-	       nvmd->nr_blks_per_pool,
-	       nvmd->nr_pages_per_blk,
-	       nvmd->nr_aps,
-	       nvmd->nr_aps_per_pool);
+		nvmd->nr_pools,
+		nvmd->nr_blks_per_pool,
+		nvmd->nr_pages_per_blk,
+		nvmd->nr_aps,
+		nvmd->nr_aps_per_pool);
 	pr_info("lightnvm: timings: %u/%u/%u",
 			nvmd->config.t_read,
 			nvmd->config.t_write,
 			nvmd->config.t_erase);
 	pr_info("lightnvm: target sector size=%d", nvmd->sector_size);
 	pr_info("lightnvm: disk logical sector size=%d",
-	       bdev_logical_block_size(nvmd->dev->bdev));
+		bdev_logical_block_size(nvmd->dev->bdev));
 	pr_info("lightnvm: disk physical sector size=%d",
-	       bdev_physical_block_size(nvmd->dev->bdev));
+		bdev_physical_block_size(nvmd->dev->bdev));
 	pr_info("lightnvm: disk flash page size=%d", FLASH_PAGE_SIZE);
 	pr_info("lightnvm: allocated %lu physical pages (%lu KB)",
-	       nvmd->nr_pages, nvmd->nr_pages * nvmd->sector_size / 1024);
+		nvmd->nr_pages, nvmd->nr_pages * nvmd->sector_size / 1024);
 
 	return 0;
 err_map:
@@ -364,11 +364,6 @@ static void nvm_dtr(struct nvd_queue *nvq)
 
 	del_timer(&nvmd->gc_timer);
 
-	nvm_for_each_pool(nvmd, pool, i) {
-		while (bio_list_peek(&pool->waiting_bios))
-			flush_scheduled_work();
-	}
-
 	/* TODO: remember outstanding block refs, waiting to be erased... */
 	nvm_for_each_pool(nvmd, pool, i)
 		kfree(pool->blocks);
@@ -391,7 +386,7 @@ static void nvm_dtr(struct nvd_queue *nvq)
 
 	kfree(nvmd);
 
-	DMINFO("successfully unloaded");
+	pr_info("openvsl: successfully unloaded");
 }
 
 static int nvm_none_write_rq(struct nvmd *nvmd, struct request *rq)
@@ -401,12 +396,12 @@ static int nvm_none_write_rq(struct nvmd *nvmd, struct request *rq)
 	nvm_lock_addr(nvmd, l_addr);
 	nvm_write_rq(nvmd, rq, 0, NULL, NULL, nvmd->trans_map, 1);
 
-	return DM_MAPIO_SUBMITTED;
+	return BLk_MQ_RQ_QUEUE_OK;
 }
 
 /* none target type, round robin, page-based FTL, and cost-based GC */
 static struct nvm_target_type nvm_target_none = {
-	.name			= "none",
+	.name			= "rrpc",
 	.version		= {1, 0, 0},
 	.lookup_ltop	= nvm_lookup_ltop,
 	.map_ltop	= nvm_map_ltop_rr,
@@ -439,7 +434,7 @@ static int __init lightnvm_init(void)
 
 	ret = nvd_register_target(&lightnvm_target);
 	if (ret) {
-		pr_err("nvd: couldn't register lightnvm target.");
+		pr_err("openvsl: couldn't register lightnvm target.");
 		goto err_adp;
 	}
 
@@ -459,6 +454,6 @@ static void __exit lightnvm_exit(void)
 module_init(lightnvm_init);
 module_exit(lightnvm_exit);
 
-MODULE_DESCRIPTION("LightNVM NVD target");
+MODULE_DESCRIPTION("openvsl nvd target");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");
 MODULE_LICENSE("GPL");

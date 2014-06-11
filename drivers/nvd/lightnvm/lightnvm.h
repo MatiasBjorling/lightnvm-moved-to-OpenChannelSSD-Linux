@@ -363,10 +363,10 @@ struct per_rq_data {
 	sector_t l_addr;
 
 	/* Hook up for our overwritten bio fields */
-	bio_end_io_t *bi_end_io;
-	void *bi_private;
+	rq_end_io_fn *end_io;
+	void *end_io_data;
 	struct completion *event;
-	struct bio *orig_bio;
+	struct request *orig_rq;
 	unsigned int sync;
 	unsigned int ref_put;
 	struct nvm_addr *trans_map;
@@ -489,9 +489,9 @@ static inline int physical_to_slot(struct nvmd *n, sector_t phys)
 		NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
-static inline struct per_rq_data *get_per_rq_data(struct request *rq)
+static inline struct per_rq_data *get_per_rq_data(struct nvqueue *nvq, struct request *rq)
 {
-	return blk_mq_rq_to_pdu(rq);
+	return (void *)blk_mq_rq_to_pdu(rq) + nvq->per_rq_offset;
 }
 
 static inline struct nvm_inflight *nvm_hash_addr_to_inflight(struct nvmd *nvmd,

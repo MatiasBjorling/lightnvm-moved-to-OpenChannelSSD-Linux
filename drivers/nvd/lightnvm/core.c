@@ -1,60 +1,5 @@
 #include "lightnvm.h"
 
-/* deferred bios are used when no available nvm pages. Allowing GC to execute
- * and resubmit bios */
-void nvm_defer_rq(struct nvmd *nvmd, struct bio *bio, void *private)
-{
-	spin_lock(&nvmd->deferred_lock);
-	bio_list_add(&nvmd->deferred_bios, bio);
-	spin_unlock(&nvmd->deferred_lock);
-}
-
-void nvm_deferred_bio_submit(struct work_struct *work)
-{
-	struct nvmd *nvmd = container_of(work, struct nvmd, deferred_ws);
-	struct bio *bio;
-
-	spin_lock(&nvmd->deferred_lock);
-	bio = bio_list_get(&nvmd->deferred_bios);
-	spin_unlock(&nvmd->deferred_lock);
-
-	while (bio) {
-		struct bio *next = bio->bi_next;
-		bio->bi_next = NULL;
-		if (bio_data_dir(bio) == WRITE)
-			nvmd->type->write_bio(nvmd, bio);
-		else
-			nvmd->type->read_bio(nvmd, bio);
-		bio = next;
-	}
-}
-
-/* delayed bios are used for making pool accesses sequential */
-void nvm_delayed_bio_submit(struct work_struct *work)
-{
-	struct nvm_pool *pool = container_of(work, struct nvm_pool, waiting_ws);
-	struct bio *bio;
-	struct per_rq_data *pb;
-
-	spin_lock(&pool->waiting_lock);
-	bio = bio_list_pop(&pool->waiting_bios);
-
-	pool->cur_bio = bio;
-	if (!bio) {
-		atomic_dec(&pool->is_active);
-		spin_unlock(&pool->waiting_lock);
-		return;
-	}
-
-	spin_unlock(&pool->waiting_lock);
-
-	/* setup timings to track end timings accordently */
-	pb = bio->bi_private;
-	getnstimeofday(&pb->start_tv);
-
-	submit_bio(bio->bi_rw, bio);
-}
-
 /* requires lock on the translation map used */
 void invalidate_block_page(struct nvmd *nvmd, struct nvm_addr *p)
 {
@@ -131,7 +76,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc)
 	spin_lock(&pool->lock);
 
 	if (list_empty(&pool->free_list)) {
-		DMERR_LIMIT("Pool have no free pages available");
+		pr_err_ratelimited("Pool have no free pages available");
 		spin_unlock(&pool->lock);
 		show_pool(pool);
 		return NULL;
@@ -303,12 +248,6 @@ finished:
 void nvm_erase_block(struct nvm_block *block)
 {
 	/* Send erase command to device. */
-}
-
-static void nvm_rq_zero_end(struct request *rq)
-{
-	/* TODO: fill rq with zeroes */
-	blk_mq_complete_request(rq);
 }
 
 struct nvm_addr *nvm_lookup_ltop_map(struct nvmd *nvmd, sector_t l_addr,
@@ -488,7 +427,7 @@ free_pb:
 	free_pbd(nvmd, pb);
 }
 
-static void nvm_end_write_bio(struct bio *bio, int err)
+static void nvm_end_write_rq(struct request *rq, int err)
 {
 	/* FIXME: Implement error handling of writes */
 	nvm_endio(bio, err);
@@ -497,6 +436,68 @@ static void nvm_end_write_bio(struct bio *bio, int err)
 	bio_put(bio);
 }
 
+static void nvm_rq_zero_end(struct request *rq)
+{
+	/* TODO: fill rq with zeroes */
+	blk_mq_complete_request(rq);
+}
+
+/* remember to lock l_add before calling nvm_submit_rq */
+void nvm_submit_rq(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
+			int rw, struct bio *bio,
+			struct bio *orig_bio,
+			struct completion *sync,
+			struct nvm_addr *trans_map)
+{
+	struct nvm_block *block = p->block;
+	struct nvm_ap *ap = block_to_ap(nvmd, block);
+	struct nvm_pool *pool = ap->pool;
+	struct per_rq_data *pb;
+
+	pb = get_per_rq_data(nvmd->nvq, rq);
+	pb->ap = ap;
+	pb->addr = p;
+	pb->l_addr = l_addr;
+	pb->event = sync;
+	pb->orig_bio = orig_bio;
+	pb->trans_map = trans_map;
+
+	if (blk_rq_dir(rq) == WRITE)
+		bio->bi_end_io = nvm_end_write_bio;
+	else
+		bio->bi_end_io = nvm_end_read_bio;
+
+	/* We allow counting to be semi-accurate as theres
+	 * no lock for accounting. */
+	ap->io_accesses[rq_data_dir(rq)]++;
+
+/*	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
+		spin_lock(&pool->waiting_lock);
+		nvmd->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
+
+		if (atomic_inc_return(&pool->is_active) != 1) {
+			atomic_dec(&pool->is_active);
+			spin_unlock(&pool->waiting_lock);
+			return;
+		}
+
+		bio = bio_list_peek(&pool->waiting_bios);
+
+		/* we're not the only bio waiting */ /*
+		if (!bio) {
+			atomic_dec(&pool->is_active);
+			spin_unlock(&pool->waiting_lock);
+			return;
+		}
+
+		/* we're the only bio waiting. queue relevant worker*/ /*
+		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
+		spin_unlock(&pool->waiting_lock);
+		return;
+	}*/ 
+
+	submit_bio(bio->bi_rw, bio);
+}
 int nvm_read_rq(struct nvmd *nvmd, struct request *rq)
 {
 	struct nvm_addr *p;
@@ -514,50 +515,33 @@ int nvm_read_rq(struct nvmd *nvmd, struct request *rq)
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
-	bio->bi_sector = p->addr * NR_PHY_IN_LOG +
-					(bio->bi_sector % NR_PHY_IN_LOG);
+	rq->sector = p->addr * NR_PHY_IN_LOG +
+					(blk_rq_sectors(rq) % NR_PHY_IN_LOG);
 
 	if (!p->block) {
-		bio->bi_sector = 0;
+		rq->sector = 0;
 		nvm_rq_zero_end(rq);
 		mempool_free(p, nvmd->addr_pool);
 		nvm_unlock_addr(nvmd, l_addr);
 		goto finished;
 	}
 
-	nvm_submit_bio(nvmd, p, l_addr, READ, bio, NULL, NULL, nvmd->trans_map);
+	nvm_submit_rq(nvmd, p, l_addr, READ, bio, NULL, NULL, nvmd->trans_map);
 finished:
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-int nvm_bv_copy(struct nvm_addr *p, struct bio_vec *bv)
-{
-	struct nvmd *nvmd = p->block->pool->nvmd;
-	struct nvm_block *block = p->block;
-	unsigned int idx;
-	void *src_p, *dst_p;
-
-	idx = p->addr % nvmd->nr_host_pages_in_blk;
-	src_p = kmap_atomic(bv->bv_page);
-	dst_p = kmap_atomic(&block->data[idx]);
-	memcpy(dst_p, src_p, bv->bv_len);
-
-	kunmap_atomic(dst_p);
-	kunmap_atomic(src_p);
-
-	return atomic_inc_return(&block->data_size);
-}
-
-struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
+struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct request *rq,
 						struct nvm_addr *p)
 {
-	struct bio *issue_bio;
+	struct request *rq;
 	int i, size;
 
-	/* FIXME: check for failure */
-	issue_bio = bio_alloc(GFP_NOIO, NR_HOST_PAGES_IN_FLASH_PAGE);
-	issue_bio->bi_bdev = nvmd->dev->bdev;
-	issue_bio->bi_sector = p->addr * NR_PHY_IN_LOG;
+	rq = blk_mq_alloc_request(nvmd->q);
+	if (!rq)
+		return BLK_MQ_RQ_QUEUE_ERROR;
+
+	rq->sector = p->addr * NR_PHY_IN_LOG;
 
 	size = nvm_bv_copy(p, bio_iovec(bio));
 	for (i = 0; i < NR_HOST_PAGES_IN_FLASH_PAGE; i++) {
@@ -568,14 +552,14 @@ struct bio *nvm_write_init_bio(struct nvmd *nvmd, struct bio *bio,
 }
 
 /* Assumes that l_addr is locked with nvm_lock_addr() */
-int nvm_write_bio(struct nvmd *nvmd,
-		  struct bio *bio, int is_gc,
+int nvm_write_rq(struct nvmd *nvmd,
+		  struct request *rq, int is_gc,
 		  void *private, struct completion *sync,
 		  struct nvm_addr *trans_map, unsigned int complete_bio)
 {
 	struct nvm_addr *p;
 	struct bio *issue_bio;
-	sector_t l_addr = bio->bi_sector / NR_PHY_IN_LOG;
+	sector_t l_addr = blk_rq_sectors(rq) / NR_PHY_IN_LOG;
 
 	p = nvmd->type->map_ltop(nvmd, l_addr, is_gc, trans_map, private);
 	if (!p) {
@@ -583,18 +567,18 @@ int nvm_write_bio(struct nvmd *nvmd,
 		nvm_unlock_addr(nvmd, l_addr);
 		nvm_gc_kick(nvmd);
 
-		return NVM_WRITE_DEFERRED;
+		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
 	issue_bio = nvm_write_init_bio(nvmd, bio, p);
 	if (complete_bio)
-		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, bio, sync,
+		nvm_submit_rq(nvmd, p, l_addr, WRITE, issue_bio, bio, sync,
 								trans_map);
 	else
-		nvm_submit_bio(nvmd, p, l_addr, WRITE, issue_bio, NULL, sync,
+		nvm_submit_rq(nvmd, p, l_addr, WRITE, issue_bio, NULL, sync,
 								trans_map);
 
-	return NVM_WRITE_SUCCESS;
+	return BLK_MQ_RQ_QUEUE_OK;
 }
 
 void nvm_rq_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
@@ -602,64 +586,3 @@ void nvm_rq_wait_add(struct bio_list *bl, struct bio *bio, void *p_private)
 	bio_list_add(bl, bio);
 }
 
-/* remember to lock l_addr before calling nvm_submit_bio */
-void nvm_submit_bio(struct nvmd *nvmd, struct nvm_addr *p, sector_t l_addr,
-			int rw, struct bio *bio,
-			struct bio *orig_bio,
-			struct completion *sync,
-			struct nvm_addr *trans_map)
-{
-	struct nvm_block *block = p->block;
-	struct nvm_ap *ap = block_to_ap(nvmd, block);
-	struct nvm_pool *pool = ap->pool;
-	struct per_rq_data *pb;
-
-	pb = alloc_init_pbd(nvmd, bio);
-	pb->ap = ap;
-	pb->addr = p;
-	pb->l_addr = l_addr;
-	pb->event = sync;
-	pb->orig_bio = orig_bio;
-	pb->trans_map = trans_map;
-
-	/* is set prematurely because we need it if bio is defered */
-	bio->bi_rw |= rw;
-	if (sync)
-		bio->bi_rw |= REQ_SYNC;
-
-	if (rw == WRITE)
-		bio->bi_end_io = nvm_end_write_bio;
-	else
-		bio->bi_end_io = nvm_end_read_bio;
-
-	/* We allow counting to be semi-accurate as theres
-	 * no lock for accounting. */
-	ap->io_accesses[bio_data_dir(bio)]++;
-
-	if (nvmd->config.flags & NVM_OPT_POOL_SERIALIZE) {
-		spin_lock(&pool->waiting_lock);
-		nvmd->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
-
-		if (atomic_inc_return(&pool->is_active) != 1) {
-			atomic_dec(&pool->is_active);
-			spin_unlock(&pool->waiting_lock);
-			return;
-		}
-
-		bio = bio_list_peek(&pool->waiting_bios);
-
-		/* we're not the only bio waiting */
-		if (!bio) {
-			atomic_dec(&pool->is_active);
-			spin_unlock(&pool->waiting_lock);
-			return;
-		}
-
-		/* we're the only bio waiting. queue relevant worker*/
-		queue_work(nvmd->kbiod_wq, &pool->waiting_ws);
-		spin_unlock(&pool->waiting_lock);
-		return;
-	}
-
-	submit_bio(bio->bi_rw, bio);
-}

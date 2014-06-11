@@ -168,7 +168,7 @@ struct vsl_pool {
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
 	struct vsl_block *blocks;
-	struct nvmd *nvmd;
+	struct vsl_stor *s;
 
 	/* Postpone issuing I/O if append point is active */
 	atomic_t is_active;
@@ -196,7 +196,7 @@ struct vsl_pool {
  */
 struct vsl_ap {
 	spinlock_t lock;
-	struct nvmd *parent;
+	struct vsl_stor *parent;
 	struct vsl_pool *pool;
 	struct vsl_block *cur;
 	struct vsl_block *gc_cur;
@@ -234,24 +234,24 @@ struct vsl_inflight {
 	struct list_head addrs;
 };
 
-struct nvmd;
+struct vsl_stor;
 struct per_rq_data;
 
 /* overridable functionality */
-typedef struct vsl_addr *(*vsl_map_ltop_fn)(struct nvmd *, sector_t, int,
+typedef struct vsl_addr *(*vsl_map_ltop_fn)(struct vsl_stor *, sector_t, int,
 						struct vsl_addr *, void *);
-typedef struct vsl_addr *(*vsl_lookup_ltop_fn)(struct nvmd *, sector_t);
-typedef int (*vsl_write_rq_fn)(struct nvmd *, struct request *);
-typedef int (*vsl_read_rq_fn)(struct nvmd *, struct request *);
-typedef void (*vsl_alloc_phys_addr_fn)(struct nvmd *, struct vsl_block *);
-typedef int (*vsl_ioctl_fn)(struct nvmd *,
+typedef struct vsl_addr *(*vsl_lookup_ltop_fn)(struct vsl_stor *, sector_t);
+typedef int (*vsl_write_rq_fn)(struct vsl_stor *, struct request *);
+typedef int (*vsl_read_rq_fn)(struct vsl_stor *, struct request *);
+typedef void (*vsl_alloc_phys_addr_fn)(struct vsl_stor *, struct vsl_block *);
+typedef int (*vsl_ioctl_fn)(struct vsl_stor *,
 					unsigned int cmd, unsigned long arg);
-typedef int (*vsl_init_fn)(struct nvmd *);
-typedef void (*vsl_exit_fn)(struct nvmd *);
-typedef void (*vsl_endio_fn)(struct nvmd *, struct rq *,
+typedef int (*vsl_init_fn)(struct vsl_stor *);
+typedef void (*vsl_exit_fn)(struct vsl_stor *);
+typedef void (*vsl_endio_fn)(struct vsl_stor *, struct rq *,
 				struct per_rq_data *, unsigned long *delay);
 
-typedef int (*vsl_page_special_fn)(struct nvmd *, unsigned int);
+typedef int (*vsl_page_special_fn)(struct vsl_stor *, unsigned int);
 
 struct vsl_target_type {
 	const char *name;

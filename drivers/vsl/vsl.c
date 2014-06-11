@@ -11,10 +11,10 @@
  * Optimization possibilities
  * - Move ap_next_write into a conconcurrency friendly data structure. Could be
  *   handled by more intelligent map_ltop function.
- * - Implement per-cpu nvm_block data structure ownership. Removes need
+ * - Implement per-cpu vsl_block data structure ownership. Removes need
  *   for taking lock on block next_write_id function. I.e. page allocation
  *   becomes nearly lockless, with occasionally movement of blocks on
- *   nvm_block lists.
+ *   vsl_block lists.
  */
 
 #include <linux/openvsl.h>
@@ -43,7 +43,7 @@
 
 static struct kmem_cache *_addr_cache;
 
-static int nvm_map_rq(struct openvsl_dev *dev, struct request *rq)
+static int vsl_map_rq(struct openvsl_dev *dev, struct request *rq)
 {
 	struct nvmd *nvmd = nvq->target_private;
 	int ret = DM_MAPIO_SUBMITTED;
@@ -68,31 +68,31 @@ static int nvm_map_rq(struct openvsl_dev *dev, struct request *rq)
 	return ret;
 }
 
-static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
+static int vsl_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 {
-	struct nvm_pool *pool;
-	struct nvm_block *block;
-	struct nvm_ap *ap;
+	struct vsl_pool *pool;
+	struct vsl_block *block;
+	struct vsl_ap *ap;
 	int i, j;
 
 	spin_lock_init(&nvmd->deferred_lock);
 	spin_lock_init(&nvmd->rev_lock);
-	INIT_WORK(&nvmd->deferred_ws, nvm_deferred_bio_submit);
+	INIT_WORK(&nvmd->deferred_ws, vsl_deferred_bio_submit);
 	bio_list_init(&nvmd->deferred_bios);
 
-	nvmd->pools = kzalloc(sizeof(struct nvm_pool) * nvmd->nr_pools,
+	nvmd->pools = kzalloc(sizeof(struct vsl_pool) * nvmd->nr_pools,
 								GFP_KERNEL);
 	if (!nvmd->pools)
 		gnoto err_pool;
 
-	nvm_for_each_pool(nvmd, pool, i) {
+	vsl_for_each_pool(nvmd, pool, i) {
 		spin_lock_init(&pool->lock);
 		spin_lock_init(&pool->waiting_lock);
 
 		init_completion(&pool->gc_finished);
 
-		INIT_WORK(&pool->gc_ws, nvm_gc_collect);
-		INIT_WORK(&pool->waiting_ws, nvm_delayed_bio_submit);
+		INIT_WORK(&pool->gc_ws, vsl_gc_collect);
+		INIT_WORK(&pool->waiting_ws, vsl_delayed_bio_submit);
 
 		INIT_LIST_HEAD(&pool->free_list);
 		INIT_LIST_HEAD(&pool->used_list);
@@ -107,7 +107,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 		bio_list_init(&pool->waiting_bios);
 		atomic_set(&pool->is_active, 0);
 
-		pool->blocks = kzalloc(sizeof(struct nvm_block) *
+		pool->blocks = kzalloc(sizeof(struct vsl_block) *
 						pool->nr_blocks, GFP_KERNEL);
 		if (!pool->blocks)
 			goto err_blocks;
@@ -123,25 +123,25 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 			block->id = (i * nvmd->nr_blks_per_pool) + j;
 
 			list_add_tail(&block->list, &pool->free_list);
-			INIT_WORK(&block->ws_gc, nvm_gc_block);
+			INIT_WORK(&block->ws_gc, vsl_gc_block);
 		}
 		spin_unlock(&pool->lock);
 }
 
 	nvmd->nr_aps = nvmd->nr_aps_per_pool * nvmd->nr_pools;
-	nvmd->aps = kzalloc(sizeof(struct nvm_ap) * nvmd->nr_aps, GFP_KERNEL);
+	nvmd->aps = kzalloc(sizeof(struct vsl_ap) * nvmd->nr_aps, GFP_KERNEL);
 	if (!nvmd->aps)
 		goto err_blocks;
 
-	nvm_for_each_ap(nvmd, ap, i) {
+	vsl_for_each_ap(nvmd, ap, i) {
 		spin_lock_init(&ap->lock);
 		ap->parent = nvmd;
 		ap->pool = &nvmd->pools[i / nvmd->nr_aps_per_pool];
 
-		block = nvm_pool_get_block(ap->pool, 0);
-		nvm_set_ap_cur(ap, block);
+		block = vsl_pool_get_block(ap->pool, 0);
+		vsl_set_ap_cur(ap, block);
 		/* Emergency gc block */
-		block = nvm_pool_get_block(ap->pool, 1);
+		block = vsl_pool_get_block(ap->pool, 1);
 		ap->gc_cur = block;
 
 		ap->t_read = nvmd->config.t_read;
@@ -167,7 +167,7 @@ static int nvm_pool_init(struct nvmd *nvmd, struct dm_target *ti)
 err_wq:
 	destroy_workqueue(nvmd->krqd_wq);
 err_blocks:
-	nvm_for_each_pool(nvmd, pool, i) {
+	vsl_for_each_pool(nvmd, pool, i) {
 		if (!pool->blocks)
 			break;
 		kfree(pool->blocks);
@@ -183,19 +183,19 @@ static int vsl_internal_init(struct openvsl_dev *dev, struct nvmd *nvmd)
 	int i;
 	unsigned int order;
 
-	nvmd->trans_map = vmalloc(sizeof(struct nvm_addr) * nvmd->nr_pages);
+	nvmd->trans_map = vmalloc(sizeof(struct vsl_addr) * nvmd->nr_pages);
 	if (!nvmd->trans_map)
 		return -ENOMEM;
-	memset(nvmd->trans_map, 0, sizeof(struct nvm_addr) * nvmd->nr_pages);
+	memset(nvmd->trans_map, 0, sizeof(struct vsl_addr) * nvmd->nr_pages);
 
-	nvmd->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr)
+	nvmd->rev_trans_map = vmalloc(sizeof(struct vsl_rev_addr)
 							* nvmd->nr_pages);
 	if (!nvmd->rev_trans_map)
 		goto err_rev_trans_map;
 
 	for (i = 0; i < nvmd->nr_pages; i++) {
-		strnuct nvm_addr *p = &nvmd->trans_map[i];
-		struct nvm_rev_addr *r = &nvmd->rev_trans_map[i];
+		strnuct vsl_addr *p = &nvmd->trans_map[i];
+		struct vsl_rev_addr *r = &nvmd->rev_trans_map[i];
 
 		p->addr = LTOP_EMPTY;
 
@@ -223,9 +223,9 @@ static int vsl_internal_init(struct openvsl_dev *dev, struct nvmd *nvmd)
 	nvmd->sector_size = EXPOSED_PAGE_SIZE;
 
 	/* inflight maintainence */
-	percpu_ida_init(&nvmd->free_inflight, NVM_INFLIGHT_TAGS);
+	percpu_ida_init(&nvmd->free_inflight, VSL_INFLIGHT_TAGS);
 
-	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
+	for (i = 0; i < VSL_INFLIGHT_PARTITIONS; i++) {
 		spin_lock_init(&nvmd->inflight_map[i].lock);
 		INIT_LIST_HEAD(&nvmd->inflight_map[i].addrs);
 	}
@@ -237,13 +237,13 @@ static int vsl_internal_init(struct openvsl_dev *dev, struct nvmd *nvmd)
 	nvq->target_data = nvmd;
 
 	/* Initialize pools. */
-	nvm_pool_init(nvmd, ti);
+	vsl_pool_init(nvmd, ti);
 
 	if (nvmd->type->init && nvmd->type->init(nvmd))
 		goto err_block_page_pool;
 
 	/* FIXME: Clean up pool init on failure. */
-	setup_timer(&nvmd->gc_timer, nvm_gc_cb, (unsigned long)nvmd);
+	setup_timer(&nvmd->gc_timer, vsl_gc_cb, (unsigned long)nvmd);
 	mod_timer(&nvmd->gc_timer, jiffies + msecs_to_jiffies(1000));
 
 	return 0;
@@ -260,19 +260,19 @@ err_rev_trans_map:
 	return -ENOMEM;
 }
 
-#define NVM_TARGET_TYPE noop
-#define NVM_NUM_POOLS 8
-#define NVM_NUM_BLOCKS 256
-#define NVM_NUM_PAGES 256
+#define VSL_TARGET_TYPE noop
+#define VSL_NUM_POOLS 8
+#define VSL_NUM_BLOCKS 256
+#define VSL_NUM_PAGES 256
 
 /* none target type, round robin, page-based FTL, and cost-based GC */
-static struct nvm_target_type nvm_target_rrpc = {
+static struct vsl_target_type vsl_target_rrpc = {
 	.name			= "rrpc",
 	.version		= {1, 0, 0},
-	.lookup_ltop	= nvm_lookup_ltop,
-	.map_ltop	= nvm_map_ltop_rr,
-	.write_rq	= nvm_none_write_rq,
-	.read_rq	= nvm_read_rq,
+	.lookup_ltop	= vsl_lookup_ltop,
+	.map_ltop	= vsl_map_ltop_rr,
+	.write_rq	= vsl_none_write_rq,
+	.read_rq	= vsl_read_rq,
 };
 
 struct openvsl_dev *openvsl_alloc()
@@ -287,88 +287,88 @@ void openvsl_free(struct openvsl_dev *dev)
 
 int openvsl_init(struct openvsl_dev *dev)
 {
-	struct nvmd *nvmd;
+	struct vsl_stor *s;
 	unsigned int tmp;
 	char dummy;
 
 	_addr_cache = kmem_cache_create("vsl_addr_cache",
-				sizeof(struct nvm_addr), 0, 0, NULL);
+				sizeof(struct vsl_addr), 0, 0, NULL);
 	if (!_addr_cache)
 		return -ENOMEM;
 	}
 
-	nvmd = kzalloc(sizeof(*nvmd), GFP_KERNEL);
-	if (!nvmd) {
+	s = kzalloc(sizeof(struct vsl_stor), GFP_KERNEL);
+	if (!s) {
 		kmem_cache_destroy(_addr_cache);
 		return -ENOMEM;
 	}
 
 	/* hardcode initialization values until user-space util is avail. */
-	nvmd->type = find_nvm_target_type(NVM_TARGET_TYPE);
-	if (!nvmd->type) {
-		pr_err("vsl: %s doesn't exist.", NVM_TARGET_TYPE;
+	s->type = find_vsl_target_type(VSL_TARGET_TYPE);
+	if (!s->type) {
+		pr_err("vsl: %s doesn't exist.", VSL_TARGET_TYPE;
 		goto err_map;
 	}
 
-	nvmd->nr_pools = NVM_NUM_POOLS;
-	nvmd->nr_blks_per_pool = NVM_NUM_BLOCKS;
-	nvmd->nr_pages_per_blk = NVM_NUM_PAGES;
+	s->nr_pools = VSL_NUM_POOLS;
+	s->nr_blks_per_pool = VSL_NUM_BLOCKS;
+	s->nr_pages_per_blk = VSL_NUM_PAGES;
 
 	/* Optional */
-	nvmd->nr_aps_per_pool = APS_PER_POOL;
-	/* nvmd->config.flags = NVM_OPT_* */
-	nvmd->config.gc_time = GC_TIME;
-	nvmd->config.t_read = TIMING_READ;
-	nvmd->config.t_write = TIMING_WRITE;
-	nvmd->config.t_erase = TIMING_ERASE;
+	s->nr_aps_per_pool = APS_PER_POOL;
+	/* s->config.flags = VSL_OPT_* */
+	s->config.gc_time = GC_TIME;
+	s->config.t_read = TIMING_READ;
+	s->config.t_write = TIMING_WRITE;
+	s->config.t_erase = TIMING_ERASE;
 
 	/* Constants */
-	nvmd->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE
-						* nvmd->nr_pages_per_blk;
-	nvmd->nr_pages = nvmd->nr_pools * nvmd->nr_blks_per_pool
-						* nvmd->nr_host_pages_in_blk;
+	s->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE
+						* s->nr_pages_per_blk;
+	s->nr_pages = s->nr_pools * s->nr_blks_per_pool
+						* s->nr_host_pages_in_blk;
 
 	/* Invalid pages in block bitmap is preallocated. */
-	if (nvmd->nr_host_pages_in_blk >
+	if (s->nr_host_pages_in_blk >
 				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
 		pr_err("lightnvm: Num. pages per block too high";
 		return -EINVAL;
 	}
 
-	if (vsl_internal_init(ti, nvmd) < 0) {
+	if (vsl_internal_init(ti, s) < 0) {
 		pr_err("lightnvm: cannot initialize openvsl structure");
 		goto err_map;
 	}
 
 	pr_info("openvsl: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
-		nvmd->nr_pools,
-		nvmd->nr_blks_per_pool,
-		nvmd->nr_pages_per_blk,
-		nvmd->nr_aps,
-		nvmd->nr_aps_per_pool);
+		s->nr_pools,
+		s->nr_blks_per_pool,
+		s->nr_pages_per_blk,
+		s->nr_aps,
+		s->nr_aps_per_pool);
 	pr_info("openvsl: timings: %u/%u/%u",
-			nvmd->config.t_read,
-			nvmd->config.t_write,
-			nvmd->config.t_erase);
-	pr_info("openvsl: target sector size=%d", nvmd->sector_size);
+			s->config.t_read,
+			s->config.t_write,
+			s->config.t_erase);
+	pr_info("openvsl: target sector size=%d", s->sector_size);
 	pr_info("openvsl: disk logical sector size=%d",
-		bdev_logical_block_size(nvmd->dev->bdev));
+		bdev_logical_block_size(s->dev->bdev));
 	pr_info("openvsl: disk physical sector size=%d",
-		bdev_physical_block_size(nvmd->dev->bdev));
+		bdev_physical_block_size(s->dev->bdev));
 	pr_info("openvsl: disk flash page size=%d", FLASH_PAGE_SIZE);
 	pr_info("openvsl: allocated %lu physical pages (%lu KB)",
-		nvmd->nr_pages, nvmd->nr_pages * nvmd->sector_size / 1024);
+		s->nr_pages, s->nr_pages * s->sector_size / 1024);
 
 	return 0;
 err_map:
-	kfree(nvmd);
+	kfree(s);
 	return -ENOMEM;
 }
 
 void openvsl_exit(struct openvsl_dev *dev)
 {
 	struct nvmd *nvmd = dev->nvmd;
-	struct nvm_pool *pool;
+	struct vsl_pool *pool;
 	int i;
 
 	if (!nvmd)
@@ -380,7 +380,7 @@ void openvsl_exit(struct openvsl_dev *dev)
 	del_timer(&nvmd->gc_timer);
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */
-	nvm_for_each_pool(nvmd, pool, i)
+	vsl_for_each_pool(nvmd, pool, i)
 		kfree(pool->blocks);
 
 	kfree(nvmd->pools);

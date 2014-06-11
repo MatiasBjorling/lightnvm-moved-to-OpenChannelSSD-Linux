@@ -31,21 +31,19 @@ struct openvsl_dev_ops {
 struct openvsl_dev {
 	struct request_queue *q;
 	struct request_queue *admin_q;
-	void *priv;
+	void *priv; /* TODO: What is this for? */
 
 	struct openvsl_dev_ops ops;
+
+	void *stor;
 };
 
 /* OpenVSL configuration */
-int openvsl_rq_data_size();
 int openvsl_config_blk_reg(struct blk_mq_reg *reg);
 
 int openvsl_init(struct openvsl_dev *dev);
 void openvsl_exit(struct openvl_dev *dev)
 struct openvsl_dev *openvsl_alloc();
 void openvsl_free(struct openvsl_dev *dev);
-
-/* Request logic */
-
 
 #endif

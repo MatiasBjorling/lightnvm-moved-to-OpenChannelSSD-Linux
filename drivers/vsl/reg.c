@@ -1,13 +1,13 @@
 #include <linux/list.h>
 #include <linux/sem.h>
-#include "lightnvm.h"
+#include "vsl.h"
 
 static LIST_HEAD(_targets);
 static DECLARE_RWSEM(_lock);
 
-inline struct nvm_target_type *find_nvm_target_type(const char *name)
+inline struct vsl_target_type *find_vsl_target_type(const char *name)
 {
-	struct nvm_target_type *t;
+	struct vsl_target_type *t;
 
 	list_for_each_entry(t, &_targets, list)
 		if (!strcmp(name, t->name))
@@ -16,12 +16,12 @@ inline struct nvm_target_type *find_nvm_target_type(const char *name)
 	return NULL;
 }
 
-int nvm_register_target(struct nvm_target_type *t)
+int vsl_register_target(struct vsl_target_type *t)
 {
 	int ret = 0;
 
 	down_write(&_lock);
-	if (find_nvm_target_type(t->name))
+	if (find_vsl_target_type(t->name))
 		ret = -EEXIST;
 	else
 		list_add(&t->list, &_targets);
@@ -29,7 +29,7 @@ int nvm_register_target(struct nvm_target_type *t)
 	return ret;
 }
 
-void nvm_unregister_target(struct nvm_target_type *t)
+void vsl_unregister_target(struct vsl_target_type *t)
 {
 	if (!t)
 		return;

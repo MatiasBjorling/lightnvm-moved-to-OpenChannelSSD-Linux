@@ -584,5 +584,5 @@ int __vsl_write_rq(struct vsl_stor *s,
 
 int vsl_write_rq(struct vsl_stor *s, struct request *rq)
 {
-
+	return __vsl_write_rq(s, rq, 0, NULL, NULL, s->trans, 1);
 }

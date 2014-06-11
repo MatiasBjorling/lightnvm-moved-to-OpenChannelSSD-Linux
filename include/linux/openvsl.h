@@ -1,7 +1,7 @@
 #ifndef OPENVSL_H
 #define OPENVSL_H
 
-#include <linux/blk-mq>
+#include <linux/blk-mq.h>
 
 enum VSL_RSP_VAL {
 	VSL_RSP_OFF	= 0,

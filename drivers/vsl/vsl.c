@@ -99,6 +99,11 @@ static int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 		return s->type->read_rq(s, rq);
 }
 
+void vsl_end_io(struct request *rq, int error)
+{
+	blk_mq_end_io(rq, error);
+}
+
 static int vsl_pool_init(struct vsl_stor *s, struct openvsl_dev *dev)
 {
 	struct vsl_pool *pool;

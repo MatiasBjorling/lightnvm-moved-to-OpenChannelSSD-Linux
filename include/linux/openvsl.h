@@ -44,14 +44,14 @@ enum vsl_status_codes {
 	VSL_NO_COMPLETE		= 0xffff,
 };
 
-struct openvsl_id {
+struct vsl_id {
 	u16	ver_id;
 	u8	nvm_type;
 	u16	nchannels;
 	u8	reserved[11];
 };
 
-struct openvsl_id_chnl {
+struct vsl_id_chnl {
 	u64	queue_size;
 	u64	gran_read;
 	u64	gran_write;
@@ -68,19 +68,19 @@ struct openvsl_id_chnl {
 	u8	reserved[4034];
 };
 
-struct openvsl_get_features {
+struct vsl_get_features {
 	u64	rsp[4];
 	u64	ext[4];
 };
 
-struct openvsl_dev;
+struct vsl_dev;
 
-typedef struct openvsl_id (vsl_id_fn)(struct openvsl_dev *dev);
-typedef struct openvsl_id_chnl (vsl_id_chnl_fn)(struct openvsl_dev *dev, int chnl_num);
-typedef struct openvsl_get_features (vsl_get_features_fn)(struct openvsl_dev *dev);
-typedef int (vsl_set_rsp_fn)(struct openvsl_dev *dev, int rsp, unsigned int val);
+typedef struct vsl_id (vsl_id_fn)(struct vsl_dev *dev);
+typedef struct vsl_id_chnl (vsl_id_chnl_fn)(struct vsl_dev *dev, int chnl_num);
+typedef struct vsl_get_features (vsl_get_features_fn)(struct vsl_dev *dev);
+typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, int rsp, unsigned int val);
 
-struct openvsl_dev_ops {
+struct vsl_dev_ops {
 	vsl_id_fn		*identify;
 	vsl_id_chnl_fn		*identify_channel;
 	vsl_get_features_fn 	*get_features;
@@ -91,11 +91,11 @@ struct openvsl_dev_ops {
 	rq_timed_out_fn		*timeout;
 };
 
-struct openvsl_dev {
+struct vsl_dev {
 	struct request_queue *q;
 	struct request_queue *admin_q;
 
-	struct openvsl_dev_ops ops;
+	struct vsl_dev_ops ops;
 
 	unsigned int per_rq_offset;
 
@@ -103,11 +103,13 @@ struct openvsl_dev {
 };
 
 /* OpenVSL configuration */
-int openvsl_config_blk_tags(struct blk_mq_tag_set *);
+int vsl_config_blk_tags(struct blk_mq_tag_set *);
 
-int openvsl_init(struct openvsl_dev *);
-void openvsl_exit(struct openvsl_dev *);
-struct openvsl_dev *openvsl_alloc(void);
-void openvsl_free(struct openvsl_dev *);
+int vsl_init(struct vsl_dev *);
+void vsl_exit(struct vsl_dev *);
+struct vsl_dev *vsl_alloc(void);
+void vsl_free(struct vsl_dev *);
 
+/* OpenVSL Requests */
+vsl_end_io(struct request *, int);
 #endif

@@ -248,7 +248,7 @@ typedef int (*vsl_ioctl_fn)(struct vsl_stor *,
 					unsigned int cmd, unsigned long arg);
 typedef int (*vsl_init_fn)(struct vsl_stor *);
 typedef void (*vsl_exit_fn)(struct vsl_stor *);
-typedef void (*vsl_endio_fn)(struct vsl_stor *, struct rq *,
+typedef void (*vsl_endio_fn)(struct vsl_stor *, struct request *,
 				struct per_rq_data *, unsigned long *delay);
 
 typedef int (*vsl_page_special_fn)(struct vsl_stor *, unsigned int);
@@ -351,6 +351,8 @@ struct vsl_stor {
 
 	/* User configuration */
 	struct vsl_config config;
+
+	unsigned int per_rq_offset;
 };
 
 struct per_rq_data {
@@ -448,25 +450,25 @@ static inline struct vsl_ap *get_next_ap(struct vsl_stor *s)
 
 static inline int block_is_full(struct vsl_block *block)
 {
-	struct vsl_stor *s = block->pool->stor;
+	struct vsl_stor *s = block->pool->s;
 	return (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
-			block->next_offset == stor->nr_host_pages_in_blk;
+			block->next_offset == s->nr_host_pages_in_blk;
 }
 
 static inline sector_t block_to_addr(struct vsl_block *block)
 {
 	struct vsl_stor *s;
 	BUG_ON(!block);
-	stor = block->pool->stor;
-	return block->id * stor->nr_host_pages_in_blk;
+	s = block->pool->s;
+	return block->id * s->nr_host_pages_in_blk;
 }
 
-static inline struct vsl_pool *paddr_to_pool(struct stor *s, sector_t p_addr)
+static inline struct vsl_pool *paddr_to_pool(struct vsl_stor *s, sector_t p_addr)
 {
 	return &s->pools[p_addr / (s->nr_pages / s->nr_pools)];
 }
 
-static inline struct vsl_ap *block_to_ap(struct stor *s, struct vsl_block *b)
+static inline struct vsl_ap *block_to_ap(struct vsl_stor *s, struct vsl_block *b)
 {
 	unsigned int ap_idx, div, mod;
 
@@ -474,7 +476,7 @@ static inline struct vsl_ap *block_to_ap(struct stor *s, struct vsl_block *b)
 	mod = b->id % s->nr_blks_per_pool;
 	ap_idx = div + (mod / (s->nr_blks_per_pool / s->nr_aps_per_pool));
 
-	return &n->aps[ap_idx];
+	return &s->aps[ap_idx];
 }
 
 static inline int physical_to_slot(struct vsl_stor *s, sector_t phys)

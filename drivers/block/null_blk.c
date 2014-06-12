@@ -247,6 +247,7 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 			break;
 		case NULL_Q_VSL:
 			vsl_complete_request(cmd->rq);
+			break;
 		case NULL_Q_RQ:
 			blk_complete_request(cmd->rq);
 			break;

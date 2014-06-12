@@ -34,7 +34,7 @@ struct nullb {
 	struct request_queue *q;
 	struct gendisk *disk;
 	struct blk_mq_tag_set tag_set;
-	struct vsl_dev *vsldev;
+	struct vsl_dev *vsl_dev;
 	struct hrtimer timer;
 	unsigned int queue_depth;
 	spinlock_t lock;
@@ -557,6 +557,7 @@ static int null_add_dev(void)
 			vsl_free(dev);
 			goto out_cleanup_tags;
 		}
+		nullb->vsl_dev = dev;
 	} else if (queue_mode == NULL_Q_BIO) {
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
 		if (!nullb->q)

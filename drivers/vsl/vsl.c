@@ -104,6 +104,11 @@ void vsl_end_io(struct request *rq, int error)
 	blk_mq_end_io(rq, error);
 }
 
+void vsl_complete_request(struct request *rq)
+{
+	blk_mq_complete_request(rq);
+}
+
 static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 {
 	struct vsl_pool *pool;

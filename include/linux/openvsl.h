@@ -78,9 +78,9 @@ struct vsl_dev;
 typedef struct vsl_id (vsl_id_fn)(struct vsl_dev *dev);
 typedef struct vsl_id_chnl (vsl_id_chnl_fn)(struct vsl_dev *dev, int chnl_num);
 typedef struct vsl_get_features (vsl_get_features_fn)(struct vsl_dev *dev);
-typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, int rsp, unsigned int val);
-
-typedef int (vsl_queue_rq_fn)(struct blk_mq_hw_ctx *, void *, struct request *);
+typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, u8 rsp, u8 val);
+typedef int (vsl_queue_rq_fn)(struct vsl_dev *, void *, struct request *);
+typedef int (vsl_init_hctx_fn)(struct vsl_dev *, void *, unsigned int);
 
 struct vsl_dev_ops {
 	vsl_id_fn		*identify;
@@ -89,15 +89,15 @@ struct vsl_dev_ops {
 	vsl_set_rsp_fn		*set_responsibility;
 
 	/* Requests */
-	vsl_queue_rq_fn		*queue_rq;
-	rq_timed_out_fn		*timeout;
+	vsl_queue_rq_fn		*vsl_queue_rq;
+	vsl_init_hctx_fn	*vsl_init_hctx;
 };
 
 struct vsl_dev {
 	struct request_queue *q;
 	struct request_queue *admin_q;
 
-	struct vsl_dev_ops ops;
+	struct vsl_dev_ops *ops;
 
 	unsigned int per_rq_offset;
 
@@ -114,6 +114,8 @@ struct vsl_dev *vsl_alloc(void);
 void vsl_free(struct vsl_dev *);
 
 /* OpenVSL Requests */
+int vsl_queue_rq(struct blk_mq_hw_ctx *, struct request *);
+int vsl_init_hctx(struct blk_mq_hw_ctx *, void *, unsigned int);
 void vsl_end_io(struct request *, int);
 void vsl_complete_request(struct request *);
 #endif

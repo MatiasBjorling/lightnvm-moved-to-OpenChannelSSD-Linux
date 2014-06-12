@@ -99,12 +99,12 @@ int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 		return s->type->read_rq(s, rq);
 }
 
-void vsl_init_hctx(struct blk_mq_hw_ctx *hctx, void data, unsigned int index)
+int vsl_init_hctx(struct blk_mq_hw_ctx *hctx, void *data, unsigned int index)
 {
 	struct vsl_dev *dev = data;
-	hctx->driver_data = dev;
 
-	return dev->ops.init_hctx(dev, dev->driver_data, index);
+	hctx->driver_data = dev;
+	return dev->ops->init_hctx(dev, dev->driver_data, index);
 }
 
 void vsl_end_io(struct request *rq, int error)

@@ -459,10 +459,13 @@ err_queue:
 	return ret;
 }
 
-struct openvsl_identify null_openvsl_identify(struct openvsl_dev *dev)
+struct openvsl_id null_openvsl_identify(struct openvsl_dev *dev)
 {
-	/* TODO fill in */
-	return NULL;
+	struct openvsl_id i;
+	i.ver_id = 0x1;
+	i.nvm_type = VSL_NVMT_BLK;
+	i.nchannels = 1;
+	return i;
 }
 
 static int null_add_dev(void)

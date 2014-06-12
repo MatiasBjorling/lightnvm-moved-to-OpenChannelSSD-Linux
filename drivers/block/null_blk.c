@@ -584,6 +584,7 @@ static int null_add_dev(void)
 
 			dev->ops = &null_vsl_dev_ops;
 			dev->driver_data = nullb;
+			dev->per_rq_offset = nullb->tag_set.cmd_size;
 
 			vsl_config_cmd_size(&nullb->tag_set);
 		}

@@ -213,7 +213,7 @@ struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *ap, int is_gc)
 					ap->gc_cur->ap = ap;
 					if (!p_block) {
 						show_all_pools(ap->parent);
-						DMERR("No more blocks");
+						pr_err("vsl: no more blocks");
 						goto finished;
 					} else {
 						p_addr =
@@ -304,7 +304,7 @@ struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 {
 	struct vsl_ap *ap;
 	struct vsl_addr *p;
-	int i = 0;
+	int i;
 
 
 	if (!is_gc) {

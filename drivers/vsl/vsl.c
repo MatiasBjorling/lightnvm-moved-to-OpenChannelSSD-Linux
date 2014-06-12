@@ -82,9 +82,9 @@ void vsl_unregister_target(struct vsl_target_type *t)
 	up_write(&_lock);
 }
 
-static int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
+int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 {
-	struct vsl_stor *s = hctx->private;
+	struct vsl_stor *s = blk_mq_rq_to_pdu(rq);
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
 		pr_err("Illegal vsl address: %ld",
@@ -99,6 +99,14 @@ static int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 		return s->type->read_rq(s, rq);
 }
 
+void vsl_init_hctx(struct blk_mq_hw_ctx *hctx, void data, unsigned int index)
+{
+	struct vsl_dev *dev = data;
+	hctx->driver_data = dev;
+
+	return dev->ops.init_hctx(dev, dev->driver_data, index);
+}
+
 void vsl_end_io(struct request *rq, int error)
 {
 	blk_mq_end_io(rq, error);
@@ -107,6 +115,11 @@ void vsl_end_io(struct request *rq, int error)
 void vsl_complete_request(struct request *rq)
 {
 	blk_mq_complete_request(rq);
+}
+
+void vsl_config_cmd_size(struct blk_mq_tag_set *tagset)
+{
+	tagset->cmd_size += sizeof(struct per_rq_data);
 }
 
 static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
@@ -274,7 +287,7 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 	/* simple round-robin strategy */
 	atomic_set(&s->next_write_ap, -1);
 
-	s->dev = dev;
+	s->dev = (void *)dev;
 	dev->stor = s;
 
 	/* Initialize pools. */
@@ -446,12 +459,6 @@ void vsl_exit(struct vsl_dev *dev)
 	kmem_cache_destroy(_addr_cache);
 
 	pr_info("vsl: successfully unloaded");
-}
-
-int vsl_config_blk_tags(struct blk_mq_tag_set *tagset)
-{
-	tagset->cmd_size += sizeof(struct per_rq_data);
-	tagset->ops.queue_rq = vsl_queue_rq;
 }
 
 MODULE_DESCRIPTION("OpenVSL");

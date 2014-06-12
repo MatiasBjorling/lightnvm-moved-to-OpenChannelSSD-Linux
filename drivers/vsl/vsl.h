@@ -486,10 +486,9 @@ static inline int physical_to_slot(struct vsl_stor *s, sector_t phys)
 		NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
-static inline struct per_rq_data *get_per_rq_data(struct openvsl_dev *dev,
-							struct request *rq)
+static inline struct per_rq_data *get_per_rq_data(struct request *rq)
 {
-	return (void *)blk_mq_rq_to_pdu(rq) + dev->per_rq_offset;
+	return (void *)blk_mq_rq_to_pdu(rq) + sizeof(struct per_rq_offset);
 }
 
 static inline struct vsl_inflight *vsl_hash_addr_to_inflight(struct vsl_stor *s,

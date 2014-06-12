@@ -80,6 +80,8 @@ typedef struct vsl_id_chnl (vsl_id_chnl_fn)(struct vsl_dev *dev, int chnl_num);
 typedef struct vsl_get_features (vsl_get_features_fn)(struct vsl_dev *dev);
 typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, int rsp, unsigned int val);
 
+typedef int (vsl_queue_rq_fn)(struct blk_mq_hw_ctx *, void *, struct request *);
+
 struct vsl_dev_ops {
 	vsl_id_fn		*identify;
 	vsl_id_chnl_fn		*identify_channel;
@@ -87,7 +89,7 @@ struct vsl_dev_ops {
 	vsl_set_rsp_fn		*set_responsibility;
 
 	/* Requests */
-	queue_rq_fn		*queue_rq;
+	vsl_queue_rq_fn		*queue_rq;
 	rq_timed_out_fn		*timeout;
 };
 
@@ -99,11 +101,12 @@ struct vsl_dev {
 
 	unsigned int per_rq_offset;
 
+	void *driver_data;
 	void *stor;
 };
 
 /* OpenVSL configuration */
-int vsl_config_blk_tags(struct blk_mq_tag_set *);
+void vsl_config_cmd_size(struct blk_mq_tag_set *);
 
 int vsl_init(struct vsl_dev *);
 void vsl_exit(struct vsl_dev *);

@@ -319,6 +319,46 @@ static void null_request_fn(struct request_queue *q)
 	}
 }
 
+static struct vsl_id null_vsl_id(struct vsl_dev *dev)
+{
+	struct vsl_id i;
+	i.ver_id = 0x1;
+	i.nvm_type = VSL_NVMT_BLK;
+	i.nchannels = 1;
+	return i;
+}
+
+static struct vsl_id_chnl null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num)
+{
+	struct vsl_id_chnl ic;
+	ic.queue_size = hw_queue_depth;
+	ic.gran_read = bs;
+	ic.gran_write = bs;
+	ic.gran_erase = bs;
+	ic.oob_size = 0;
+	ic.t_r = ic.t_sqr = completion_nsec;
+	ic.t_w = ic.t_sqw = completion_nsec;
+	ic.t_e = completion_nsec;
+	ic.io_sched = VSL_IOSCHED_CHANNEL;
+	ic.laddr_begin = 0;
+	ic.laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;
+	return ic;
+}
+
+static struct vsl_get_features null_vsl_get_features(struct vsl_dev *dev)
+{
+	struct vsl_get_features gf;
+	gf.rsp[0] = (1 << VSL_RSP_L2P);
+	gf.rsp[0] |= (1 << VSL_RSP_P2L);
+	gf.rsp[0] |= (1 << VSL_RSP_GC);
+	return gf;
+}
+
+static int null_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
+{
+	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
+}
+
 static int null_vsl_queue_rq(struct vsl_dev *dev, void *pdu, struct request *rq)
 {
 	struct nullb_cmd *cmd = pdu;
@@ -377,17 +417,17 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 	return 0;
 }
 
-struct struct vsl_ops null_vsl_ops = {
+static struct vsl_dev_ops null_vsl_dev_ops = {
 	.identify		= null_vsl_id,
 	.identify_channel	= null_vsl_id_chnl,
 	.get_features		= null_vsl_get_features,
-	.set_reponsibility	= null_vsl_set_rsp,
+	.set_responsibility	= null_vsl_set_rsp,
 
-	.queue_rq		= null_vsl_queue_rq,
-	.init_hctx		= null_vsl_init_hctx,
+	.vsl_queue_rq		= null_vsl_queue_rq,
+	.vsl_init_hctx		= null_vsl_init_hctx,
 };
 
-static struct blk_mq_ops null_blk_vsl_ops = {
+static struct blk_mq_ops null_vsl_blk_ops = {
 	.queue_rq	= vsl_queue_rq,
 	.map_queue	= blk_mq_map_queue,
 	.init_hctx	= vsl_init_hctx,
@@ -505,46 +545,6 @@ err_queue:
 	return ret;
 }
 
-static struct vsl_id null_vsl_id(struct vsl_dev *dev)
-{
-	struct vsl_id i;
-	i.ver_id = 0x1;
-	i.nvm_type = VSL_NVMT_BLK;
-	i.nchannels = 1;
-	return i;
-}
-
-static struct vsl_id_chnl null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num)
-{
-	struct vsl_id_chnl ic;
-	ic.queue_size = hw_queue_depth;
-	ic.gran_read = bs;
-	ic.gran_write = bs;
-	ic.gran_erase = bs;
-	ic.oob_size = 0;
-	ic.t_r = ic.t_sqr = completion_nsec;
-	ic.t_w = ic.t_sqw = completion_nsec;
-	ic.t_e = completion_nsec;
-	ic.io_sched = VSL_IOSCHED_CHANNEL;
-	ic.laddr_begin = 0;
-	ic.laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;
-	return ic;
-}
-
-static struct vsl_get_features null_vsl_get_features(struct vsl_dev *dev)
-{
-	struct vsl_get_features gf;
-	gf.rsp[0] = (1 << VSL_RSP_L2P);
-	gf.rsp[0] |= (1 << VSL_RSP_P2L);
-	gf.rsp[0] |= (1 << VSL_RSP_GC);
-	return gf;
-}
-
-static int null_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
-{
-	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
-}
-
 static int null_add_dev(void)
 {
 	struct gendisk *disk;
@@ -579,10 +579,10 @@ static int null_add_dev(void)
 			if (!dev)
 				goto out_cleanup_queues;
 
-			nullb->tag_set.ops = &null_blk_vsl_ops;
+			nullb->tag_set.ops = &null_vsl_blk_ops;
 			nullb->tag_set.driver_data = dev;
 
-			dev->ops = &null_vsl_ops;
+			dev->ops = &null_vsl_dev_ops;
 			dev->driver_data = nullb;
 
 			vsl_config_cmd_size(&nullb->tag_set);

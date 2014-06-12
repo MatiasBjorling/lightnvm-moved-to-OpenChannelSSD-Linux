@@ -82,29 +82,24 @@ void vsl_unregister_target(struct vsl_target_type *t)
 	up_write(&_lock);
 }
 
-static int vsl_queue_rq(struct openvsl_dev *dev, struct request *rq)
+static int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 {
-	struct vsl_stor *s = dev->stor;
+	struct vsl_stor *s = hctx->private;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
-		DMERR("Illegal vsl address: %lu %ld", rq_data_dir(rq),
+		pr_err("Illegal vsl address: %ld",
 						blk_rq_pos(rq) / NR_PHY_IN_LOG);
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
 
 	/* limited currently to 4k write IOs */
 	if (rq_data_dir(rq) == WRITE) {
-		if (blk_rq_sectors(rq) != NR_PHY_IN_LOG) {
-			DMERR("Write sectors size not supported (%u)",
-							blk_rq_sectors(rq));
-			return BLK_MQ_RQ_QUEUE_ERROR;
-		}
 		return s->type->write_rq(s, rq);
 	} else
 		return s->type->read_rq(s, rq);
 }
 
-static int vsl_pool_init(struct vsl_stor *s, struct dm_target *ti)
+static int vsl_pool_init(struct vsl_stor *s, struct openvsl_dev *dev)
 {
 	struct vsl_pool *pool;
 	struct vsl_block *block;
@@ -189,13 +184,13 @@ static int vsl_pool_init(struct vsl_stor *s, struct dm_target *ti)
 	s->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
 						s->nr_pools);
 	if (!s->krqd_wq) {
-		DMERR("Couldn't start knvm-work");
+		pr_err("Couldn't start knvm-work");
 		goto err_blocks;
 	}
 
 	s->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
 	if (!s->kgc_wq) {
-		DMERR("Couldn't start knvm-gc");
+		pr_err("Couldn't start knvm-gc");
 		goto err_wq;
 	}
 
@@ -230,7 +225,7 @@ static int vsl_stor_init(struct openvsl_dev *dev, struct vsl_stor *s)
 		goto err_rev_trans_map;
 
 	for (i = 0; i < s->nr_pages; i++) {
-		strnuct vsl_addr *p = &s->trans_map[i];
+		struct vsl_addr *p = &s->trans_map[i];
 		struct vsl_rev_addr *r = &s->rev_trans_map[i];
 
 		p->addr = LTOP_EMPTY;
@@ -252,10 +247,10 @@ static int vsl_stor_init(struct openvsl_dev *dev, struct vsl_stor *s)
 	if (!s->block_page_pool)
 		goto err_addr_pool;
 
-	if (bdev_physical_block_size(s->dev->bdev) > EXPOSED_PAGE_SIZE) {
+	/*if (bdev_physical_block_size(s->dev->bdev) > EXPOSED_PAGE_SIZE) {
 		pr_err("lightnvm: bad sector size.");
 		goto err_block_page_pool;
-	}
+	}*/
 	s->sector_size = EXPOSED_PAGE_SIZE;
 
 	/* inflight maintainence */
@@ -269,11 +264,11 @@ static int vsl_stor_init(struct openvsl_dev *dev, struct vsl_stor *s)
 	/* simple round-robin strategy */
 	atomic_set(&s->next_write_ap, -1);
 
-	s->nvq = nvq;
-	nvq->target_data = s;
+	s->dev = dev;
+	dev->stor = s;
 
 	/* Initialize pools. */
-	vsl_pool_init(s, ti);
+	vsl_pool_init(s, dev);
 
 	if (s->type->init && s->type->init(s))
 		goto err_block_page_pool;
@@ -296,7 +291,7 @@ err_rev_trans_map:
 	return -ENOMEM;
 }
 
-#define VSL_TARGET_TYPE rrpc
+#define VSL_TARGET_TYPE "rrpc"
 #define VSL_NUM_POOLS 8
 #define VSL_NUM_BLOCKS 256
 #define VSL_NUM_PAGES 256
@@ -318,23 +313,20 @@ struct openvsl_dev *openvsl_alloc()
 
 void openvsl_free(struct openvsl_dev *dev)
 {
-	kfree(vsl);
+	kfree(dev);
 }
 
 int openvsl_init(struct openvsl_dev *dev)
 {
 	struct vsl_stor *s;
-	unsigned int tmp;
-	char dummy;
 
-	if (!dev->ops->identify || !dev->ops->queue_rq || !dev->ops->timeout)
+	if (!dev->ops.identify || !dev->ops.queue_rq || !dev->ops.timeout)
 		return -EINVAL;
 
 	_addr_cache = kmem_cache_create("vsl_addr_cache",
 				sizeof(struct vsl_addr), 0, 0, NULL);
 	if (!_addr_cache)
 		return -ENOMEM;
-	}
 
 	vsl_register_target(&vsl_target_rrpc);
 
@@ -345,9 +337,9 @@ int openvsl_init(struct openvsl_dev *dev)
 	}
 
 	/* hardcode initialization values until user-space util is avail. */
-	s->type = find_vsl_target_type(VSL_TARGET_TYPE);
+	s->type = &vsl_target_rrpc;
 	if (!s->type) {
-		pr_err("vsl: %s doesn't exist.", VSL_TARGET_TYPE;
+		pr_err("vsl: %s doesn't exist.", VSL_TARGET_TYPE);
 		goto err_map;
 	}
 
@@ -372,11 +364,11 @@ int openvsl_init(struct openvsl_dev *dev)
 	/* Invalid pages in block bitmap is preallocated. */
 	if (s->nr_host_pages_in_blk >
 				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
-		pr_err("lightnvm: Num. pages per block too high";
+		pr_err("lightnvm: Num. pages per block too high");
 		return -EINVAL;
 	}
 
-	if (vsl_stor_init(ti, s) < 0) {
+	if (vsl_stor_init(dev, s) < 0) {
 		pr_err("openvsl: cannot initialize openvsl structure");
 		goto err_map;
 	}
@@ -392,10 +384,10 @@ int openvsl_init(struct openvsl_dev *dev)
 			s->config.t_write,
 			s->config.t_erase);
 	pr_info("openvsl: target sector size=%d", s->sector_size);
-	pr_info("openvsl: disk logical sector size=%d",
+	/*pr_info("openvsl: disk logical sector size=%d",
 		bdev_logical_block_size(s->dev->bdev));
 	pr_info("openvsl: disk physical sector size=%d",
-		bdev_physical_block_size(s->dev->bdev));
+		bdev_physical_block_size(s->dev->bdev));*/
 	pr_info("openvsl: disk flash page size=%d", FLASH_PAGE_SIZE);
 	pr_info("openvsl: allocated %lu physical pages (%lu KB)",
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
@@ -439,8 +431,6 @@ void openvsl_exit(struct openvsl_dev *dev)
 
 	percpu_ida_destroy(&s->free_inflight);
 
-	dm_put_device(ti, s->dev);
-
 	kfree(s);
 
 	kmem_cache_destroy(_addr_cache);
@@ -450,7 +440,7 @@ void openvsl_exit(struct openvsl_dev *dev)
 
 int openvsl_config_blk_tags(struct blk_mq_tag_set *tagset)
 {
-	tagset->cmd_size += sizeof(per_rq_data);
+	tagset->cmd_size += sizeof(struct per_rq_data);
 	tagset->ops.queue_rq = vsl_queue_rq;
 }
 

@@ -282,7 +282,7 @@ struct vsl_target_type {
 
 /* Main structure */
 struct vsl_stor {
-	struct nvd_queue *nvq;
+	struct openvsl_dev *dev;
 	uint32_t sector_size;
 
 	struct vsl_target_type *type;
@@ -405,9 +405,10 @@ struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *, sector_t l_addr);
 struct vsl_addr *vsl_get_trans_map(struct vsl_stor *, void *private);
 struct request *vsl_write_init_rq(struct vsl_stor *, struct request *, struct vsl_addr *);
 /* FIXME: Shorten */
-int vsl_write_rq(struct vsl_stor *, struct request *rq, int is_gc, void *private,
+int __vsl_write_rq(struct vsl_stor *, struct request *rq, int is_gc, void *private,
 		struct completion *sync, struct vsl_addr *trans_map,
 		unsigned int complete_rq);
+int vsl_write_rq(struct vsl_stor *, struct request *rq);
 int vsl_read_rq(struct vsl_stor *, struct request *rq);
 /* FIXME: Shorten */
 void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,

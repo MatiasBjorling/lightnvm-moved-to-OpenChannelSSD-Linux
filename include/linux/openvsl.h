@@ -3,21 +3,37 @@
 
 #include <linux/blk-mq>
 
-struct openvsl_identify {
-	/* TODO fill in */
+enum VSL_RSP {
+	OFF	= 0,
+	ON	= 1,
 };
 
-typedef struct openvsl_identify (openvsl_identify_fn)(struct openvsl_dev *dev);
+struct openvsl_identify {
+	
+};
 
+typedef struct vsl_id_fn (vsl_id_fn)(struct vsl_dev *dev);
+typedef struct vsl_id_chnl_fn (vsl_id_channel_fn)(struct vsl_dev *dev, int chnl_num);
+typedef struct vsl_get_features_fn (vsl_get_features)(struct vsl_dev *dev);
+typedef int vsl_set_rsp (vsl_set_rsp)(struct vsl_dev *dev, uint8 feat, int val);
+
+struct openvsl_dev_ops {
+	vsl_id_fn		*identify;
+	vsl_id_chnl_fn		*identify_channel;
+	vsl_get_features_fn 	*get_features;
+	vsl_set_rsp_fn		*set_responsibility;
+
+	/* Requests */
+	queue_fq_fn		*queue_rq;
+	rq_timed_out_fn		*timeout;
+};
+						     
 struct openvsl_dev {
 	struct request_queue *q;
 	struct request_queue *admin_q;
+	void *priv;
 
-	openvsl_identify_fn	*identify;
-
-	/* Requests */
-	queue_rq_fn		*queue_rq;
-	rq_timed_out_fn		*timeout;
+	struct openvsl_dev_ops ops;
 };
 
 /* OpenVSL configuration */

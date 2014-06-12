@@ -79,6 +79,8 @@ struct openvsl_dev {
 
 	struct openvsl_dev_ops ops;
 
+	unsigned int per_rq_offset;
+
 	void *stor;
 };
 

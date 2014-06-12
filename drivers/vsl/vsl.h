@@ -494,16 +494,16 @@ static inline struct per_rq_data *get_per_rq_data(struct openvsl_dev *dev,
 static inline struct vsl_inflight *vsl_hash_addr_to_inflight(struct vsl_stor *s,
 								sector_t l_addr)
 {
-	return &stor->inflight_map[l_addr % VSL_INFLIGHT_PARTITIONS];
+	return &s->inflight_map[l_addr % VSL_INFLIGHT_PARTITIONS];
 }
 
 static inline void __vsl_lock_addr(struct vsl_stor *s, sector_t l_addr, int spin)
 {
-	struct vsl_inflight *inflight = vsl_hash_addr_to_inflight(stor, l_addr);
+	struct vsl_inflight *inflight = vsl_hash_addr_to_inflight(s, l_addr);
 	struct vsl_inflight_addr *a;
-	int tag = percpu_ida_alloc(&stor->free_inflight, __GFP_WAIT);
+	int tag = percpu_ida_alloc(&s->free_inflight, __GFP_WAIT);
 
-	BUG_ON(l_addr >= stor->nr_pages);
+	BUG_ON(l_addr >= s->nr_pages);
 
 retry:
 	spin_lock(&inflight->lock);
@@ -520,7 +520,7 @@ retry:
 		}
 	}
 
-	a = &stor->inflight_addrs[tag];
+	a = &s->inflight_addrs[tag];
 
 	a->l_addr = l_addr;
 	a->tag = tag;
@@ -531,13 +531,13 @@ retry:
 
 static inline void vsl_lock_addr(struct vsl_stor *s, sector_t l_addr)
 {
-	__vsl_lock_addr(stor, l_addr, 0);
+	__vsl_lock_addr(s, l_addr, 0);
 }
 
 static inline void vsl_unlock_addr(struct vsl_stor *s, sector_t l_addr)
 {
 	struct vsl_inflight *inflight =
-			vsl_hash_addr_to_inflight(stor, l_addr);
+			vsl_hash_addr_to_inflight(s, l_addr);
 	struct vsl_inflight_addr *a = NULL;
 
 	spin_lock(&inflight->lock);
@@ -554,7 +554,7 @@ static inline void vsl_unlock_addr(struct vsl_stor *s, sector_t l_addr)
 
 	list_del_init(&a->list);
 	spin_unlock(&inflight->lock);
-	percpu_ida_free(&stor->free_inflight, a->tag);
+	percpu_ida_free(&s->free_inflight, a->tag);
 }
 
 static inline void show_pool(struct vsl_pool *pool)
@@ -579,7 +579,7 @@ static inline void show_all_pools(struct vsl_stor *s)
 	struct vsl_pool *pool;
 	unsigned int i;
 
-	vsl_for_each_pool(stor, pool, i)
+	vsl_for_each_pool(s, pool, i)
 		show_pool(pool);
 }
 

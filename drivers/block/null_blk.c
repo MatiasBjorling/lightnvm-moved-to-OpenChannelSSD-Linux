@@ -533,7 +533,7 @@ static int null_add_dev(void)
 			dev->ops.identify = null_openvsl_id;
 			dev->ops.identify_channel = null_openvsl_id_chnl;
 			dev->ops.get_features = null_openvsl_get_features;
-
+			dev->per_rq_offset = nullb->tag_set.cmd_size;
 			openvsl_config_blk_tags(&nullb->tag_set);
 		}
 

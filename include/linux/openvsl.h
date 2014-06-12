@@ -15,6 +15,11 @@ enum VSL_RSP {
 	VSL_RSP_ECC	= 0x03,
 };
 
+enum VSL_NVM_TYPE {
+	VSL_NVMT_BLK	= 0,
+	VSL_NVMT_B	= 1,
+};
+
 struct openvsl_id {
 	uint16	ver_id;
 	uint8	nvm_type;

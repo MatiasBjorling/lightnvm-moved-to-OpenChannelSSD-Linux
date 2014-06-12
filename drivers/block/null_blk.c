@@ -319,13 +319,12 @@ static void null_request_fn(struct request_queue *q)
 	}
 }
 
-static int null_queue_vsl(struct blk_mq_hw_ctx *hctx, void *pdu,
-							struct request *rq)
+static int null_vsl_queue_rq(struct vsl_dev *dev, void *pdu, struct request *rq)
 {
 	struct nullb_cmd *cmd = pdu;
 
 	cmd->rq = rq;
-	cmd->nq = hctx->driver_data;
+	cmd->nq = dev->driver_data;
 
 	null_handle_cmd(cmd);
 	return BLK_MQ_RQ_QUEUE_OK;
@@ -351,6 +350,20 @@ static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
 	nq->queue_depth = nullb->queue_depth;
 }
 
+static int null_vsl_init_hctx(struct vsl_dev *dev, void *data,
+			  unsigned int index)
+{
+	struct nullb *nullb = data;
+	struct nullb_queue *nq = &nullb->queues[index];
+
+	dev->driver_data = nq;
+	null_init_queue(nullb, nq);
+	nullb->nr_queues++;
+
+	return 0;
+
+}
+
 static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 			  unsigned int index)
 {
@@ -363,6 +376,23 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 
 	return 0;
 }
+
+struct struct vsl_ops null_vsl_ops = {
+	.identify		= null_vsl_id,
+	.identify_channel	= null_vsl_id_chnl,
+	.get_features		= null_vsl_get_features,
+	.set_reponsibility	= null_vsl_set_rsp,
+
+	.queue_rq		= null_vsl_queue_rq,
+	.init_hctx		= null_vsl_init_hctx,
+};
+
+static struct blk_mq_ops null_blk_vsl_ops = {
+	.queue_rq	= vsl_queue_rq,
+	.map_queue	= blk_mq_map_queue,
+	.init_hctx	= vsl_init_hctx,
+	.complete	= null_softirq_done_fn,
+};
 
 static struct blk_mq_ops null_mq_ops = {
 	.queue_rq       = null_queue_rq,
@@ -549,17 +579,13 @@ static int null_add_dev(void)
 			if (!dev)
 				goto out_cleanup_queues;
 
-			/* blk overwrites */
-			dev->ops.queue_rq = null_queue_vsl;
-			dev->ops.timeout = null_mq_ops.timeout;
+			nullb->tag_set.ops = &null_blk_vsl_ops;
+			nullb->tag_set.driver_data = dev;
 
-			/* openvsl setup */
-			dev->ops.identify = null_vsl_id;
-			dev->ops.identify_channel = null_vsl_id_chnl;
-			dev->ops.get_features = null_vsl_get_features;
-			dev->ops.set_responsibility = null_vsl_set_rsp;
+			dev->ops = &null_vsl_ops;
+			dev->driver_data = nullb;
 
-			vsl_config_blk_tags(&nullb->tag_set);
+			vsl_config_cmd_size(&nullb->tag_set);
 		}
 
 		if (blk_mq_alloc_tag_set(&nullb->tag_set))

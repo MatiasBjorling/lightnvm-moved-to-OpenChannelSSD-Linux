@@ -104,7 +104,7 @@ int vsl_init_hctx(struct blk_mq_hw_ctx *hctx, void *data, unsigned int index)
 	struct vsl_dev *dev = data;
 
 	hctx->driver_data = dev;
-	return dev->ops->init_hctx(dev, dev->driver_data, index);
+	return dev->ops->vsl_init_hctx(dev, dev->driver_data, index);
 }
 
 void vsl_end_io(struct request *rq, int error)
@@ -343,7 +343,7 @@ int vsl_init(struct vsl_dev *dev)
 {
 	struct vsl_stor *s;
 
-	if (!dev->ops.identify || !dev->ops.queue_rq || !dev->ops.timeout)
+	if (!dev->ops->identify || !dev->ops->vsl_queue_rq)
 		return -EINVAL;
 
 	_addr_cache = kmem_cache_create("vsl_addr_cache",

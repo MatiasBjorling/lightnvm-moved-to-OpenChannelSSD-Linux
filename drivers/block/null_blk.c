@@ -243,9 +243,10 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 	case NULL_IRQ_SOFTIRQ:
 		switch (queue_mode)  {
 		case NULL_Q_MQ:
-		case NULL_Q_VSL:
 			blk_mq_complete_request(cmd->rq);
 			break;
+		case NULL_Q_VSL:
+			vsl_complete_request(cmd->rq);
 		case NULL_Q_RQ:
 			blk_complete_request(cmd->rq);
 			break;
@@ -315,6 +316,18 @@ static void null_request_fn(struct request_queue *q)
 		null_handle_cmd(cmd);
 		spin_lock_irq(q->queue_lock);
 	}
+}
+
+static int null_queue_vsl(struct blk_mq_hw_ctx *hctx, void *pdu,
+							struct request *rq)
+{
+	struct nullb_cmd *cmd = pdu;
+
+	cmd->rq = rq;
+	cmd->nq = hctx->driver_data;
+
+	null_handle_cmd(cmd);
+	return BLK_MQ_RQ_QUEUE_OK;
 }
 
 static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
@@ -535,13 +548,16 @@ static int null_add_dev(void)
 			if (!dev)
 				goto out_cleanup_queues;
 
-			dev->ops.queue_rq = null_mq_ops.queue_rq;
+			/* blk overwrites */
+			dev->ops.queue_rq = null_queue_vsl;
 			dev->ops.timeout = null_mq_ops.timeout;
+
+			/* openvsl setup */
 			dev->ops.identify = null_vsl_id;
 			dev->ops.identify_channel = null_vsl_id_chnl;
 			dev->ops.get_features = null_vsl_get_features;
 			dev->ops.set_responsibility = null_vsl_set_rsp;
-			dev->per_rq_offset = nullb->tag_set.cmd_size;
+
 			vsl_config_blk_tags(&nullb->tag_set);
 		}
 

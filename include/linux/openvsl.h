@@ -111,5 +111,6 @@ struct vsl_dev *vsl_alloc(void);
 void vsl_free(struct vsl_dev *);
 
 /* OpenVSL Requests */
-vsl_end_io(struct request *, int);
+void vsl_end_io(struct request *, int);
+void vsl_complete_request(struct request *);
 #endif

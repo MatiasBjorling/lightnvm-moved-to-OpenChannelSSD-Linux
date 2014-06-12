@@ -34,7 +34,7 @@ struct nullb {
 	struct request_queue *q;
 	struct gendisk *disk;
 	struct blk_mq_tag_set tag_set;
-	struct openvsl_dev *vsldev;
+	struct vsl_dev *vsldev;
 	struct hrtimer timer;
 	unsigned int queue_depth;
 	spinlock_t lock;
@@ -180,8 +180,10 @@ static void end_cmd(struct nullb_cmd *cmd)
 {
 	switch (queue_mode)  {
 	case NULL_Q_MQ:
-	case NULL_Q_VSL:
 		blk_mq_end_io(cmd->rq, 0);
+		return;
+	case NULL_Q_VSL:
+		vsl_end_io(cmd->rq, 0);
 		return;
 	case NULL_Q_RQ:
 		INIT_LIST_HEAD(&cmd->rq->queuelist);
@@ -459,18 +461,18 @@ err_queue:
 	return ret;
 }
 
-static struct openvsl_id null_openvsl_id(struct openvsl_dev *dev)
+static struct vsl_id null_vsl_id(struct vsl_dev *dev)
 {
-	struct openvsl_id i;
+	struct vsl_id i;
 	i.ver_id = 0x1;
 	i.nvm_type = VSL_NVMT_BLK;
 	i.nchannels = 1;
 	return i;
 }
 
-static struct openvsl_id_chnl null_openvsl_id_chnl(struct openvsl_dev *dev, int chnl_num)
+static struct vsl_id_chnl null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num)
 {
-	struct openvsl_id_chnl ic;
+	struct vsl_id_chnl ic;
 	ic.queue_size = hw_queue_depth;
 	ic.gran_read = bs;
 	ic.gran_write = bs;
@@ -485,16 +487,16 @@ static struct openvsl_id_chnl null_openvsl_id_chnl(struct openvsl_dev *dev, int 
 	return ic;
 }
 
-static struct openvsl_get_features null_openvsl_get_features(struct openvsl_dev *dev)
+static struct vsl_get_features null_vsl_get_features(struct vsl_dev *dev)
 {
-	struct openvsl_get_features gf;
+	struct vsl_get_features gf;
 	gf.rsp[0] = (1 << VSL_RSP_L2P);
 	gf.rsp[0] |= (1 << VSL_RSP_P2L);
 	gf.rsp[0] |= (1 << VSL_RSP_GC);
 	return gf;
 }
 
-static int null_openvsl_set_rsp(struct openvsl_dev *dev, u8 rsp, u8 val)
+static int null_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
 {
 	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
 }
@@ -518,7 +520,7 @@ static int null_add_dev(void)
 		goto out_free_nullb;
 
 	if (queue_mode == (NULL_Q_MQ|NULL_Q_VSL)) {
-		struct openvsl_dev *dev;
+		struct vsl_dev *dev;
 
 		nullb->tag_set.ops = &null_mq_ops;
 		nullb->tag_set.nr_hw_queues = submit_queues;
@@ -529,18 +531,18 @@ static int null_add_dev(void)
 		nullb->tag_set.driver_data = nullb;
 
 		if (queue_mode == NULL_Q_VSL) {
-			dev = openvsl_alloc();
+			dev = vsl_alloc();
 			if (!dev)
 				goto out_cleanup_queues;
 
 			dev->ops.queue_rq = null_mq_ops.queue_rq;
 			dev->ops.timeout = null_mq_ops.timeout;
-			dev->ops.identify = null_openvsl_id;
-			dev->ops.identify_channel = null_openvsl_id_chnl;
-			dev->ops.get_features = null_openvsl_get_features;
-			dev->ops.set_responsibility = null_openvsl_set_rsp;
+			dev->ops.identify = null_vsl_id;
+			dev->ops.identify_channel = null_vsl_id_chnl;
+			dev->ops.get_features = null_vsl_get_features;
+			dev->ops.set_responsibility = null_vsl_set_rsp;
 			dev->per_rq_offset = nullb->tag_set.cmd_size;
-			openvsl_config_blk_tags(&nullb->tag_set);
+			vsl_config_blk_tags(&nullb->tag_set);
 		}
 
 		if (blk_mq_alloc_tag_set(&nullb->tag_set))
@@ -551,8 +553,8 @@ static int null_add_dev(void)
 			goto out_cleanup_tags;
 
 		dev->q = dev->admin_q = nullb->q;
-		if (!openvsl_init(dev)) {
-			openvsl_free(dev);
+		if (!vsl_init(dev)) {
+			vsl_free(dev);
 			goto out_cleanup_tags;
 		}
 	} else if (queue_mode == NULL_Q_BIO) {

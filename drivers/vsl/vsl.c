@@ -104,7 +104,7 @@ void vsl_end_io(struct request *rq, int error)
 	blk_mq_end_io(rq, error);
 }
 
-static int vsl_pool_init(struct vsl_stor *s, struct openvsl_dev *dev)
+static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 {
 	struct vsl_pool *pool;
 	struct vsl_block *block;
@@ -214,7 +214,7 @@ err_pool:
 	return -ENOMEM;
 }
 
-static int vsl_stor_init(struct openvsl_dev *dev, struct vsl_stor *s)
+static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 {
 	int i;
 	unsigned int order;
@@ -311,17 +311,17 @@ static struct vsl_target_type vsl_target_rrpc = {
 	.read_rq	= vsl_read_rq,
 };
 
-struct openvsl_dev *openvsl_alloc()
+struct vsl_dev *vsl_alloc()
 {
-	return kmalloc(sizeof(struct openvsl_dev), GFP_KERNEL);
+	return kmalloc(sizeof(struct vsl_dev), GFP_KERNEL);
 }
 
-void openvsl_free(struct openvsl_dev *dev)
+void vsl_free(struct vsl_dev *dev)
 {
 	kfree(dev);
 }
 
-int openvsl_init(struct openvsl_dev *dev)
+int vsl_init(struct vsl_dev *dev)
 {
 	struct vsl_stor *s;
 
@@ -374,27 +374,27 @@ int openvsl_init(struct openvsl_dev *dev)
 	}
 
 	if (vsl_stor_init(dev, s) < 0) {
-		pr_err("openvsl: cannot initialize openvsl structure");
+		pr_err("vsl: cannot initialize vsl structure");
 		goto err_map;
 	}
 
-	pr_info("openvsl: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
+	pr_info("vsl: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
 		s->nr_pools,
 		s->nr_blks_per_pool,
 		s->nr_pages_per_blk,
 		s->nr_aps,
 		s->nr_aps_per_pool);
-	pr_info("openvsl: timings: %u/%u/%u",
+	pr_info("vsl: timings: %u/%u/%u",
 			s->config.t_read,
 			s->config.t_write,
 			s->config.t_erase);
-	pr_info("openvsl: target sector size=%d", s->sector_size);
-	/*pr_info("openvsl: disk logical sector size=%d",
+	pr_info("vsl: target sector size=%d", s->sector_size);
+	/*pr_info("vsl: disk logical sector size=%d",
 		bdev_logical_block_size(s->dev->bdev));
-	pr_info("openvsl: disk physical sector size=%d",
+	pr_info("vsl: disk physical sector size=%d",
 		bdev_physical_block_size(s->dev->bdev));*/
-	pr_info("openvsl: disk flash page size=%d", FLASH_PAGE_SIZE);
-	pr_info("openvsl: allocated %lu physical pages (%lu KB)",
+	pr_info("vsl: disk flash page size=%d", FLASH_PAGE_SIZE);
+	pr_info("vsl: allocated %lu physical pages (%lu KB)",
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
 
 	dev->stor = s;
@@ -404,7 +404,7 @@ err_map:
 	return -ENOMEM;
 }
 
-void openvsl_exit(struct openvsl_dev *dev)
+void vsl_exit(struct vsl_dev *dev)
 {
 	struct vsl_stor *s = dev->stor;
 	struct vsl_pool *pool;
@@ -440,10 +440,10 @@ void openvsl_exit(struct openvsl_dev *dev)
 
 	kmem_cache_destroy(_addr_cache);
 
-	pr_info("openvsl: successfully unloaded");
+	pr_info("vsl: successfully unloaded");
 }
 
-int openvsl_config_blk_tags(struct blk_mq_tag_set *tagset)
+int vsl_config_blk_tags(struct blk_mq_tag_set *tagset)
 {
 	tagset->cmd_size += sizeof(struct per_rq_data);
 	tagset->ops.queue_rq = vsl_queue_rq;

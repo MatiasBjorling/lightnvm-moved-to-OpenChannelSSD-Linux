@@ -21,6 +21,11 @@ enum VSL_NVM_TYPE {
 	VSL_NVMT_B	= 1,
 };
 
+enum VSL_IOSCHED {
+	VSL_IOSCHED_CHANNEL	= 0,
+	VSL_IOSCHED_CHIP	= 1,
+};
+
 struct openvsl_id {
 	u16	ver_id;
 	u8	nvm_type;
@@ -46,7 +51,8 @@ struct openvsl_id_chnl {
 };
 
 struct openvsl_get_features {
-	int todo;
+	u64	rsp[4];
+	u64	ext[4];
 };
 
 struct openvsl_dev;

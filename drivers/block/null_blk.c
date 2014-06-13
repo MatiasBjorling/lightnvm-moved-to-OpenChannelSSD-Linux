@@ -459,13 +459,30 @@ err_queue:
 	return ret;
 }
 
-struct openvsl_id null_openvsl_identify(struct openvsl_dev *dev)
+struct openvsl_id null_openvsl_id(struct openvsl_dev *dev)
 {
 	struct openvsl_id i;
 	i.ver_id = 0x1;
 	i.nvm_type = VSL_NVMT_BLK;
 	i.nchannels = 1;
 	return i;
+}
+
+static struct openvsl_id_chnl null_openvsl_id_chnl(struct openvsl_dev *dev, int chnl_num)
+{
+	struct openvsl_id_chnl ic;
+	ic.queue_size = hw_queue_depth;
+	ic.gran_read = bs;
+	ic.gran_write = bs;
+	ic.gran_erase = bs;
+	ic.oob_size = 0;
+	ic.t_r = ic.t_sqr = completion_nsec;
+	ic.t_w = ic.t_sqw = completion_nsec;
+	ic.t_e = completion_nsec;
+	ic.io_sched = VSL_IOSCHED_CHANNEL;
+	ic.laddr_begin = 0;
+	ic.laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;
+	return ic;
 }
 
 static int null_add_dev(void)
@@ -504,7 +521,8 @@ static int null_add_dev(void)
 
 			dev->ops.queue_rq = null_mq_ops.queue_rq;
 			dev->ops.timeout = null_mq_ops.timeout;
-			dev->ops.identify = null_openvsl_identify;
+			dev->ops.identify = null_openvsl_id;
+			dev->ops.identify_channel = null_openvsl_id_chnl;
 
 			openvsl_config_blk_tags(&nullb->tag_set);
 		}

@@ -494,6 +494,11 @@ static struct openvsl_get_features null_openvsl_get_features(struct openvsl_dev 
 	return gf;
 }
 
+static int null_openvsl_set_rsp(struct openvsl_dev *dev, u8 rsp, u8 val)
+{
+	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
+}
+
 static int null_add_dev(void)
 {
 	struct gendisk *disk;
@@ -533,6 +538,7 @@ static int null_add_dev(void)
 			dev->ops.identify = null_openvsl_id;
 			dev->ops.identify_channel = null_openvsl_id_chnl;
 			dev->ops.get_features = null_openvsl_get_features;
+			dev->ops.set_responsibility = null_openvsl_set_rsp;
 			dev->per_rq_offset = nullb->tag_set.cmd_size;
 			openvsl_config_blk_tags(&nullb->tag_set);
 		}

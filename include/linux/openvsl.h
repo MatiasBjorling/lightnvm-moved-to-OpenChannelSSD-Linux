@@ -26,6 +26,24 @@ enum VSL_IOSCHED {
 	VSL_IOSCHED_CHIP	= 1,
 };
 
+enum vsl_status_codes {
+	VSL_SUCCESS		= 0x0000,
+	VSL_INVALID_OPCODE	= 0x0001,
+	VSL_INVALID_FIELD	= 0x0002,
+	VSL_INTERNAL_DEV_ERROR	= 0x0006,
+	VSL_INVALID_CHNLID	= 0x000b,
+	VSL_LBA_RANGE		= 0x0080,
+	VSL_MAX_QSIZE_EXCEEDED	= 0x0102,
+	VSL_RESERVED		= 0x0104,
+	VSL_CONFLICTING_ATTRS	= 0x0180,
+	VSL_RID_NOT_SAVEABLE	= 0x010d,
+	VSL_RID_NOT_CHANGEABLE	= 0x010e,
+	VSL_ACCESS_DENIED	= 0x0286,
+	VSL_MORE		= 0x2000,
+	VSL_DNR			= 0x4000,
+	VSL_NO_COMPLETE		= 0xffff,
+};
+
 struct openvsl_id {
 	u16	ver_id;
 	u8	nvm_type;
@@ -60,7 +78,7 @@ struct openvsl_dev;
 typedef struct openvsl_id (vsl_id_fn)(struct openvsl_dev *dev);
 typedef struct openvsl_id_chnl (vsl_id_chnl_fn)(struct openvsl_dev *dev, int chnl_num);
 typedef struct openvsl_get_features (vsl_get_features_fn)(struct openvsl_dev *dev);
-typedef int (vsl_set_rsp_fn)(struct openvsl_dev *dev, u8 feat, unsigned int val);
+typedef int (vsl_set_rsp_fn)(struct openvsl_dev *dev, int rsp, unsigned int val);
 
 struct openvsl_dev_ops {
 	vsl_id_fn		*identify;

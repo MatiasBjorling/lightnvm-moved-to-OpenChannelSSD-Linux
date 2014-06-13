@@ -30,7 +30,9 @@ struct openvsl_id {
 
 struct openvsl_id_chnl {
 	u64	queue_size;
-	u64	page_size;
+	u64	gran_read;
+	u64	gran_write;
+	u64	gran_erase;
 	u64	oob_size;
 	u32	t_r;
 	u32	t_sqr;

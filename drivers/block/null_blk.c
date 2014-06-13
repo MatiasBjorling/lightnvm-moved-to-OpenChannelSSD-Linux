@@ -459,7 +459,7 @@ err_queue:
 	return ret;
 }
 
-struct openvsl_id null_openvsl_id(struct openvsl_dev *dev)
+static struct openvsl_id null_openvsl_id(struct openvsl_dev *dev)
 {
 	struct openvsl_id i;
 	i.ver_id = 0x1;
@@ -483,6 +483,15 @@ static struct openvsl_id_chnl null_openvsl_id_chnl(struct openvsl_dev *dev, int 
 	ic.laddr_begin = 0;
 	ic.laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;
 	return ic;
+}
+
+static struct openvsl_get_features null_openvsl_get_features(struct openvsl_dev *dev)
+{
+	struct openvsl_get_features gf;
+	gf.rsp[0] = (1 << VSL_RSP_L2P);
+	gf.rsp[0] |= (1 << VSL_RSP_P2L);
+	gf.rsp[0] |= (1 << VSL_RSP_GC);
+	return gf;
 }
 
 static int null_add_dev(void)
@@ -523,6 +532,7 @@ static int null_add_dev(void)
 			dev->ops.timeout = null_mq_ops.timeout;
 			dev->ops.identify = null_openvsl_id;
 			dev->ops.identify_channel = null_openvsl_id_chnl;
+			dev->ops.get_features = null_openvsl_get_features;
 
 			openvsl_config_blk_tags(&nullb->tag_set);
 		}

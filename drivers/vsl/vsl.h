@@ -356,16 +356,14 @@ struct vsl_stor {
 };
 
 struct per_rq_data {
+	struct vsl_stor *dev;
 	struct vsl_ap *ap;
 	struct vsl_addr *addr;
 	struct timespec start_tv;
+
 	sector_t l_addr;
 
-	/* Hook up for our overwritten bio fields */
-	rq_end_io_fn *end_io;
-	void *end_io_data;
 	struct completion *event;
-	struct request *orig_rq;
 	unsigned int sync;
 	unsigned int ref_put;
 	struct vsl_addr *trans_map;
@@ -415,7 +413,7 @@ void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 					int is_gc, struct vsl_addr *trans_map);
 /* FIXME: Shorten */
 void vsl_submit_rq(struct vsl_stor *, struct vsl_addr *, sector_t, int rw,
-		struct request *, struct request *orig_rq, struct completion *sync,
+		struct request *, struct completion *sync,
 		struct vsl_addr *trans_map);
 void vsl_defer_write_rq(struct vsl_stor *s, struct request *rq, void *private);
 
@@ -425,6 +423,8 @@ void vsl_block_release(struct kref *);
 /*   Block maintanence */
 void vsl_pool_put_block(struct vsl_block *);
 void vsl_reset_block(struct vsl_block *);
+
+void vsl_endio(struct request *, int);
 
 /* gc.c */
 void vsl_block_erase(struct kref *);
@@ -490,7 +490,7 @@ static inline struct per_rq_data *get_per_rq_data(struct vsl_dev *dev,
 							struct request *rq)
 {
 	return (struct per_rq_data *)blk_mq_rq_to_pdu(rq)
-							+ dev->per_rq_offset;
+							+ dev->drv_cmd_size;
 }
 
 static inline struct vsl_inflight *vsl_hash_addr_to_inflight(struct vsl_stor *s,

@@ -304,8 +304,6 @@ struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 {
 	struct vsl_ap *ap;
 	struct vsl_addr *p;
-	int i;
-
 
 	if (!is_gc) {
 		ap = get_next_ap(s);
@@ -337,7 +335,7 @@ struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 	return p;
 }
 
-static void vsl_endio(struct request *rq, int err)
+void vsl_endio(struct request *rq, int err)
 {
 	struct per_rq_data *pb;
 	struct vsl_stor *s;
@@ -349,7 +347,8 @@ static void vsl_endio(struct request *rq, int err)
 	unsigned long diff, dev_wait, total_wait = 0;
 	unsigned int data_cnt;
 
-	pb = get_per_rq_data(rq);
+	/* s is null */
+	pb = get_per_rq_data(s, rq);
 	p = pb->addr;
 	block = p->block;
 	ap = pb->ap;
@@ -362,9 +361,6 @@ static void vsl_endio(struct request *rq, int err)
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
 		if (data_cnt == s->nr_host_pages_in_blk) {
-			mempool_free(block->data, s->block_page_pool);
-			block->data = NULL;
-
 			spin_lock(&pool->lock);
 			list_add_tail(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->lock);
@@ -376,11 +372,7 @@ static void vsl_endio(struct request *rq, int err)
 		dev_wait = ap->t_read;
 	}
 
-
-	if (s->type->endio)
-		s->type->endio(s, rq, pb, &dev_wait);
-
-	if (!(s->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
+/*	if (!(s->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
 wait_longer:
 		getnstimeofday(&end_tv);
 		diff_tv = timespec_sub(end_tv, pb->start_tv);
@@ -392,48 +384,34 @@ wait_longer:
 				udelay(5);
 			goto wait_longer;
 		}
-	}
-
+	}*/
+/*
 	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		/* we need this. updating pool current only by waiting_bios
 		 * worker leaves a windows where current is bio thats was
-		 * already ended */
+		 * already ended *//*
 		spin_lock(&pool->waiting_lock);
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
 
 		queue_work(s->kbiod_wq, &pool->waiting_ws);
 	}
-
-	/* Finish up */
-	exit_pbd(pb, rq);
-
-	if (bio->bi_end_io)
-		bio->bi_end_io(bio, err);
-
-	if (pb->orig_bio)
-		bio_endio(pb->orig_bio, err);
+*/
 
 	if (pb->event) {
 		complete(pb->event);
 		/* all submitted requests allocate their own addr,
 		 * except GC reads */
 		if (rq_data_dir(rq) == READ)
-			goto free_pb;
+			return;
 	}
 
 	mempool_free(pb->addr, s->addr_pool);
-free_pb:
-	free_pbd(s, pb);
 }
 
 static void vsl_end_write_rq(struct request *rq, int err)
 {
-	/* FIXME: Implement error handling of writes */
-	vsl_endio(bio, err);
-
-	/* separate bio is allocated on write. Remember to free it */
-	bio_put(bio);
+	vsl_endio(rq, err);
 }
 
 static void vsl_rq_zero_end(struct request *rq)
@@ -443,29 +421,24 @@ static void vsl_rq_zero_end(struct request *rq)
 }
 
 /* remember to lock l_add before calling vsl_submit_rq */
-void vsl_submit_rq(struct vsl_stor *s, struct vsl_addr *p, sector_t l_addr,
-			int rw, struct bio *bio,
-			struct bio *orig_bio,
+void vsl_submit_rq(struct vsl_stor *s,
+			struct request *rq,
+			struct vsl_addr *p, sector_t l_addr,
 			struct completion *sync,
 			struct vsl_addr *trans_map)
 {
+	struct vsl_dev *dev = s->dev;
 	struct vsl_block *block = p->block;
 	struct vsl_ap *ap = block_to_ap(s, block);
 	struct vsl_pool *pool = ap->pool;
 	struct per_rq_data *pb;
 
-	pb = get_per_rq_data(s->nvq, rq);
+	pb = get_per_rq_data(s->dev, rq);
 	pb->ap = ap;
 	pb->addr = p;
 	pb->l_addr = l_addr;
 	pb->event = sync;
-	pb->orig_bio = orig_bio;
 	pb->trans_map = trans_map;
-
-	if (blk_rq_dir(rq) == WRITE)
-		bio->bi_end_io = vsl_end_write_bio;
-	else
-		bio->bi_end_io = vsl_end_read_bio;
 
 	/* We allow counting to be semi-accurate as theres
 	 * no lock for accounting. */
@@ -494,9 +467,9 @@ void vsl_submit_rq(struct vsl_stor *s, struct vsl_addr *p, sector_t l_addr,
 		queue_work(s->kbiod_wq, &pool->waiting_ws);
 		spin_unlock(&pool->waiting_lock);
 		return;
-	}*/ 
+	}*/
 
-	submit_bio(bio->bi_rw, bio);
+	dev->ops->vsl_queue_rq(rq, dev->driver_data);
 }
 
 int vsl_read_rq(struct vsl_stor *s, struct request *rq)
@@ -509,7 +482,6 @@ int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 	vsl_lock_addr(s, l_addr);
 
 	p = s->type->lookup_ltop(s, l_addr);
-
 	if (!p) {
 		vsl_unlock_addr(s, l_addr);
 		vsl_gc_kick(s);
@@ -527,36 +499,16 @@ int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 		goto finished;
 	}
 
-	vsl_submit_rq(s, p, l_addr, READ, bio, NULL, NULL, s->trans_map);
+	vsl_submit_rq(s, rq, p, l_addr, READ, s->trans_map);
 finished:
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-struct bio *vsl_write_init_bio(struct vsl_stor *s, struct request *rq,
-						struct vsl_addr *p)
-{
-	struct request *rq;
-	int i, size;
-
-	rq = blk_mq_alloc_request(s->q);
-	if (!rq)
-		return BLK_MQ_RQ_QUEUE_ERROR;
-
-	rq->sector = p->addr * NR_PHY_IN_LOG;
-
-	size = vsl_bv_copy(p, bio_iovec(bio));
-	for (i = 0; i < NR_HOST_PAGES_IN_FLASH_PAGE; i++) {
-		unsigned int idx = size - NR_HOST_PAGES_IN_FLASH_PAGE + i;
-		bio_add_page(issue_bio, &p->block->data[idx], PAGE_SIZE, 0);
-	}
-	return issue_bio;
-}
-
 /* Assumes that l_addr is locked with vsl_lock_addr() */
 int __vsl_write_rq(struct vsl_stor *s,
-		  struct request *rq, int is_gc,
-		  void *private, struct completion *sync,
-		  struct vsl_addr *trans_map, unsigned int complete_bio)
+			struct request *rq, int is_gc,
+			void *private, struct completion *sync,
+			struct vsl_addr *trans_map)
 {
 	struct vsl_addr *p;
 	struct bio *issue_bio;
@@ -571,18 +523,14 @@ int __vsl_write_rq(struct vsl_stor *s,
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
-	issue_bio = vsl_write_init_bio(s, bio, p);
-	if (complete_bio)
-		vsl_submit_rq(s, p, l_addr, WRITE, issue_bio, bio, sync,
-								trans_map);
-	else
-		vsl_submit_rq(s, p, l_addri WRITE, issue_bio, NULL, sync,
-								trans_map);
+	rq->sector = p->addr * NR_PHY_IN_LOG;
+
+	vsl_submit_rq(s, rq, p, l_addr, sync, trans_map);
 
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
 int vsl_write_rq(struct vsl_stor *s, struct request *rq)
 {
-	return __vsl_write_rq(s, rq, 0, NULL, NULL, s->trans, 1);
+	return __vsl_write_rq(s, rq, 0, NULL, NULL, s->trans);
 }

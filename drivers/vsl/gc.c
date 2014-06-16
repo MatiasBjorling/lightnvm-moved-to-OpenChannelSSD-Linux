@@ -6,7 +6,7 @@
 static void queue_pool_gc(struct vsl_pool *pool)
 {
 	struct vsl_stor *s = pool->s;
-	queue_work(s->kbiod_wq, &pool->gc_ws);
+	queue_work(s->krqd_wq, &pool->gc_ws);
 }
 
 void vsl_gc_cb(unsigned long data)
@@ -60,9 +60,11 @@ static struct vsl_block *block_prio_find_max(struct vsl_pool *pool)
  * l to p and p to l mappings. */
 static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 {
+	struct request_queue *q = s->dev->q;
 	struct vsl_addr src;
 	struct vsl_rev_addr *rev;
 	struct bio *src_bio;
+	struct request *src_rq, *dst_rq;
 	struct page *page;
 	int slot;
 	DECLARE_COMPLETION(sync);
@@ -79,15 +81,20 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 
 		BUG_ON(src.addr >= s->nr_pages);
 
-		/* TODO: check for memory failure */
 		src_bio = bio_alloc(GFP_NOIO, 1);
-		src_bio->bi_bdev = s->dev->bdev;
-		src_bio->bi_sector = src.addr * NR_PHY_IN_LOG;
-
+		if (!src_bio)
+			pr_err("vsl: failed to alloc gc bio request");
+		src_bio->bi_iter.bi_sector = src.addr * NR_PHY_IN_LOG;
 		page = mempool_alloc(s->page_pool, GFP_NOIO);
 
 		/* TODO: may fail with EXP_PG_SIZE > PAGE_SIZE */
 		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
+
+		src_rq = blk_mq_alloc_request(q, READ, GFP_KERNEL, false);
+		if (!src_rq)
+			pr_err("vsl: failed to alloc gc request");
+
+		blk_init_request_from_bio(src_rq, bio);
 
 		/* We take the reverse lock here, and make sure that we only
 		 * release it when we have locked its logical address. If
@@ -113,9 +120,14 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		spin_unlock(&s->rev_lock);
 
 		init_completion(&sync);
-		vsl_submit_bio(s, &src, rev->addr, READ, src_bio, NULL,
+		vsl_submit_rq(s, &src_rq, src, rev->addr,
 							&sync, rev->trans_map);
 		wait_for_completion(&sync);
+
+		blk_put_request(src_rq);
+		dst_rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
+
+		blk_init_request_from_bio(dst_rq, bio);
 
 		/* ok, now fix the write and make sure that it haven't been
 		 * moved in the meantime. */
@@ -127,18 +139,19 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 			goto overwritten;
 		}
 
-		src_bio->bi_sector = rev->addr * NR_PHY_IN_LOG;
+		src_bio->bi_iter.bi_sector = rev->addr * NR_PHY_IN_LOG;
 
 		/* again, unlocked by vsl_endio */
 		__vsl_lock_addr(s, rev->addr, 1);
 		spin_unlock(&s->rev_lock);
 
+
 		init_completion(&sync);
-		vsl_write_bio(s, src_bio, 1, NULL, &sync,
-							rev->trans_map, 1);
+		vsl_write_rq(s, src_rq, 1, NULL, &sync, rev->trans_map);
 		wait_for_completion(&sync);
 
 overwritten:
+		blk_put_request(dst_rq);
 		bio_put(src_bio);
 		mempool_free(page, s->page_pool);
 	}
@@ -166,7 +179,7 @@ void vsl_gc_collect(struct work_struct *work)
 			spin_unlock(&pool->lock);
 			show_pool(pool);
 			spin_lock(&pool->lock);
-			DMERR("No invalid pages\n");
+			pr_err("No invalid pages");
 			break;
 		}
 
@@ -182,7 +195,7 @@ void vsl_gc_collect(struct work_struct *work)
 	spin_unlock(&pool->lock);
 	s->next_collect_pool++;
 
-	queue_work(s->kbiod_wq, &s->deferred_ws);
+	queue_work(s->krqd_wq, &s->deferred_ws);
 }
 
 void vsl_gc_block(struct work_struct *work)

@@ -84,7 +84,8 @@ void vsl_unregister_target(struct vsl_target_type *t)
 
 int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 {
-	struct vsl_stor *s = blk_mq_rq_to_pdu(rq);
+	struct vsl_dev *dev = hctx->driver_data;
+	struct vsl_stor *s = dev->stor;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
 		pr_err("Illegal vsl address: %ld",
@@ -92,10 +93,9 @@ int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
 
-	/* limited currently to 4k write IOs */
-	if (rq_data_dir(rq) == WRITE) {
+	if (rq_data_dir(rq) == WRITE)
 		return s->type->write_rq(s, rq);
-	} else
+	else
 		return s->type->read_rq(s, rq);
 }
 
@@ -107,9 +107,21 @@ int vsl_init_hctx(struct blk_mq_hw_ctx *hctx, void *data, unsigned int index)
 	return dev->ops->vsl_init_hctx(dev, dev->driver_data, index);
 }
 
+int vsl_init_request(void *data, struct request *rq, unsigned int hctx_idx,
+				unsigned int rq_idx, unsigned int numa_node)
+{
+	struct vsl_dev *dev = data;
+	struct per_rq_data *pdu = get_per_rq_data(dev, rq);
+
+	pdu->dev = dev->stor;
+
+	/* TODO: Allow underlying driver to hook in its own init_reques fn */
+	return 0;
+}
+
 void vsl_end_io(struct request *rq, int error)
 {
-	blk_mq_end_io(rq, error);
+	vsl_endio(rq, error);
 }
 
 void vsl_complete_request(struct request *rq)
@@ -117,8 +129,9 @@ void vsl_complete_request(struct request *rq)
 	blk_mq_complete_request(rq);
 }
 
-void vsl_config_cmd_size(struct blk_mq_tag_set *tagset)
+void vsl_config_cmd_size(struct vsl_dev *dev, struct blk_mq_tag_set *tagset)
 {
+	dev->drv_cmd_size = tagset->cmd_size;
 	tagset->cmd_size += sizeof(struct per_rq_data);
 }
 

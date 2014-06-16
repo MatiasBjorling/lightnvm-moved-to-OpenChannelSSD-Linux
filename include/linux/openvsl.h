@@ -81,6 +81,7 @@ typedef struct vsl_get_features (vsl_get_features_fn)(struct vsl_dev *dev);
 typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, u8 rsp, u8 val);
 typedef int (vsl_queue_rq_fn)(struct vsl_dev *, void *, struct request *);
 typedef int (vsl_init_hctx_fn)(struct vsl_dev *, void *, unsigned int);
+typedef int (vsl_erase_blk_fn)(struct vsl_dev *, sector_t);
 
 struct vsl_dev_ops {
 	vsl_id_fn		*identify;
@@ -91,6 +92,9 @@ struct vsl_dev_ops {
 	/* Requests */
 	vsl_queue_rq_fn		*vsl_queue_rq;
 	vsl_init_hctx_fn	*vsl_init_hctx;
+
+	/* LightNVM commands */
+	vsl_erase_blk_fn	*vsl_erase_blk;
 };
 
 struct vsl_dev {

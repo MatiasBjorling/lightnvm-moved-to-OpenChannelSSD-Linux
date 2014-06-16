@@ -359,12 +359,12 @@ static int null_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
 	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
 }
 
-static int null_vsl_queue_rq(struct vsl_dev *dev, void *pdu, struct request *rq)
+static int __null_queue_rq(struct request *rq, void *driver_data)
 {
-	struct nullb_cmd *cmd = pdu;
+	struct nullb_cmd *cmd = blk_mq_rq_to_pdu(rq);
 
 	cmd->rq = rq;
-	cmd->nq = dev->driver_data;
+	cmd->nq = driver_data;
 
 	null_handle_cmd(cmd);
 	return BLK_MQ_RQ_QUEUE_OK;
@@ -372,13 +372,7 @@ static int null_vsl_queue_rq(struct vsl_dev *dev, void *pdu, struct request *rq)
 
 static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 {
-	struct nullb_cmd *cmd = blk_mq_rq_to_pdu(rq);
-
-	cmd->rq = rq;
-	cmd->nq = hctx->driver_data;
-
-	null_handle_cmd(cmd);
-	return BLK_MQ_RQ_QUEUE_OK;
+	return __null_queue_rq(rq, hctx->driver_data);
 }
 
 static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
@@ -423,7 +417,7 @@ static struct vsl_dev_ops null_vsl_dev_ops = {
 	.get_features		= null_vsl_get_features,
 	.set_responsibility	= null_vsl_set_rsp,
 
-	.vsl_queue_rq		= null_vsl_queue_rq,
+	.vsl_queue_rq		= __null_queue_rq,
 	.vsl_init_hctx		= null_vsl_init_hctx,
 };
 
@@ -431,6 +425,7 @@ static struct blk_mq_ops null_vsl_blk_ops = {
 	.queue_rq	= vsl_queue_rq,
 	.map_queue	= blk_mq_map_queue,
 	.init_hctx	= vsl_init_hctx,
+	.init_request	= vsl_init_request,
 	.complete	= null_softirq_done_fn,
 };
 
@@ -584,9 +579,8 @@ static int null_add_dev(void)
 
 			dev->ops = &null_vsl_dev_ops;
 			dev->driver_data = nullb;
-			dev->per_rq_offset = nullb->tag_set.cmd_size;
 
-			vsl_config_cmd_size(&nullb->tag_set);
+			vsl_config_cmd_size(dev, &nullb->tag_set);
 		}
 
 		if (blk_mq_alloc_tag_set(&nullb->tag_set))

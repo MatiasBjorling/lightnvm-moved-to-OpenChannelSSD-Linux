@@ -180,7 +180,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 			INIT_WORK(&block->ws_gc, vsl_gc_block);
 		}
 		spin_unlock(&pool->lock);
-}
+	}
 
 	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;
 	s->aps = kzalloc(sizeof(struct vsl_ap) * s->nr_aps, GFP_KERNEL);
@@ -339,11 +339,30 @@ void vsl_free(struct vsl_dev *dev)
 	kfree(dev);
 }
 
+int vsl_queue_init(struct vsl_dev *dev)
+{
+	int nr_sectors_per_page = 8; /* 512 bytes */
+
+	if (queue_logical_block_size > (nr_sectors_per_page << 9)) {
+		pr_err("vsl: logical page size not supported by hardware");
+		return false;
+	}
+
+	/* limit requests to 4K */
+	blk_queue_logical_block_size(dev->q, nr_sectors_per_page << 9);
+	blk_queue_max_hw_sectors(dev->q, nr_sectors_per_page);
+
+	return true;
+}
+
 int vsl_init(struct vsl_dev *dev)
 {
 	struct vsl_stor *s;
 
 	if (!dev->ops->identify || !dev->ops->vsl_queue_rq)
+		return -EINVAL;
+
+	if (vsl_queue_init(dev))
 		return -EINVAL;
 
 	_addr_cache = kmem_cache_create("vsl_addr_cache",

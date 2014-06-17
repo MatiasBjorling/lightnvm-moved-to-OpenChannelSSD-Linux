@@ -444,7 +444,7 @@ static void null_del_dev(struct nullb *nullb)
 
 	del_gendisk(nullb->disk);
 	blk_cleanup_queue(nullb->q);
-	if (queue_mode == (NULL_Q_MQ|NULL_Q_VSL))
+	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL))
 		blk_mq_free_tag_set(&nullb->tag_set);
 	put_disk(nullb->disk);
 	kfree(nullb);
@@ -554,13 +554,13 @@ static int null_add_dev(void)
 
 	spin_lock_init(&nullb->lock);
 
-	if ((queue_mode |= (NULL_Q_MQ|NULL_Q_VSL)) && use_per_node_hctx)
+	if ((queue_mode & (NULL_Q_MQ|NULL_Q_VSL)) && use_per_node_hctx)
 		submit_queues = nr_online_nodes;
 
 	if (setup_queues(nullb))
 		goto out_free_nullb;
 
-	if (queue_mode == (NULL_Q_MQ|NULL_Q_VSL)) {
+	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL)) {
 		struct vsl_dev *dev;
 
 		nullb->tag_set.ops = &null_mq_ops;
@@ -667,7 +667,7 @@ static int __init null_init(void)
 		bs = PAGE_SIZE;
 	}
 
-	if (queue_mode |= (NULL_Q_MQ|NULL_Q_VSL) && use_per_node_hctx) {
+	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL) && use_per_node_hctx) {
 		if (submit_queues < nr_online_nodes) {
 			pr_warn("null_blk: submit_queues param is set to %u.",
 							nr_online_nodes);

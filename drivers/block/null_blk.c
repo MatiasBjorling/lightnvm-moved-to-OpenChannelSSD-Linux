@@ -69,7 +69,7 @@ enum {
 	NULL_Q_BIO		= 0,
 	NULL_Q_RQ		= 1,
 	NULL_Q_MQ		= 2,
-	NULL_Q_VSL		= 3,
+	NULL_Q_VSL		= 4,
 };
 
 static int submit_queues;
@@ -398,7 +398,6 @@ static int null_vsl_init_hctx(struct vsl_dev *dev, void *data,
 	nullb->nr_queues++;
 
 	return 0;
-
 }
 
 static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
@@ -445,7 +444,7 @@ static void null_del_dev(struct nullb *nullb)
 
 	del_gendisk(nullb->disk);
 	blk_cleanup_queue(nullb->q);
-	if (queue_mode == NULL_Q_MQ)
+	if (queue_mode == (NULL_Q_MQ|NULL_Q_VSL))
 		blk_mq_free_tag_set(&nullb->tag_set);
 	put_disk(nullb->disk);
 	kfree(nullb);
@@ -593,12 +592,14 @@ static int null_add_dev(void)
 		if (!nullb->q)
 			goto out_cleanup_tags;
 
-		dev->q = dev->admin_q = nullb->q;
-		if (!vsl_init(dev)) {
-			vsl_free(dev);
-			goto out_cleanup_tags;
+		if (queue_mode == NULL_Q_VSL) {
+			dev->q = dev->admin_q = nullb->q;
+			if (!vsl_init(dev)) {
+				vsl_free(dev);
+				goto out_cleanup_tags;
+			}
+			nullb->vsl_dev = dev;
 		}
-		nullb->vsl_dev = dev;
 	} else if (queue_mode == NULL_Q_BIO) {
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
 		if (!nullb->q)

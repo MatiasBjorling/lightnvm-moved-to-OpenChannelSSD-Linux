@@ -1,4 +1,6 @@
-# LightNVM: An open platform for open firmware SSDs
+# LightNVM: Lightning Fast Evaluation Platform for Non-Volatile Memories
+
+This branch is the version of lightnvm used for the NVMW paper. **If you look for the current work on open-channel firmware lightnvm, use the master branch for its current version.**
 
 LightNVM implements the internal logic of SSDs within the host system.
 

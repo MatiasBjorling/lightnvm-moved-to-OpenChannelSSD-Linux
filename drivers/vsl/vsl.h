@@ -414,7 +414,6 @@ void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 /* FIXME: Shorten */
 void vsl_submit_rq(struct vsl_stor *, struct request *, struct vsl_addr *,
 			sector_t, struct completion *, struct vsl_addr *);
-void vsl_defer_write_rq(struct vsl_stor *s, struct request *rq, void *private);
 
 /*   VSL device related */
 void vsl_block_release(struct kref *);

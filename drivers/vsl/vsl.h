@@ -403,18 +403,17 @@ struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *, sector_t l_addr);
 struct vsl_addr *vsl_get_trans_map(struct vsl_stor *, void *private);
 struct request *vsl_write_init_rq(struct vsl_stor *, struct request *, struct vsl_addr *);
 /* FIXME: Shorten */
-int __vsl_write_rq(struct vsl_stor *, struct request *rq, int is_gc, void *private,
-		struct completion *sync, struct vsl_addr *trans_map,
-		unsigned int complete_rq);
 int vsl_write_rq(struct vsl_stor *, struct request *rq);
+int __vsl_write_rq(struct vsl_stor *, struct request *, int, void *,
+			struct completion *, struct vsl_addr *);
 int vsl_read_rq(struct vsl_stor *, struct request *rq);
+
 /* FIXME: Shorten */
 void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 					int is_gc, struct vsl_addr *trans_map);
 /* FIXME: Shorten */
-void vsl_submit_rq(struct vsl_stor *, struct vsl_addr *, sector_t, int rw,
-		struct request *, struct completion *sync,
-		struct vsl_addr *trans_map);
+void vsl_submit_rq(struct vsl_stor *, struct request *, struct vsl_addr *,
+			sector_t, struct completion *, struct vsl_addr *);
 void vsl_defer_write_rq(struct vsl_stor *s, struct request *rq, void *private);
 
 /*   VSL device related */

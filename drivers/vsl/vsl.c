@@ -144,7 +144,6 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 
 	spin_lock_init(&s->deferred_lock);
 	spin_lock_init(&s->rev_lock);
-	INIT_WORK(&s->deferred_ws, vsl_deferred_bio_submit);
 	bio_list_init(&s->deferred_bios);
 
 	s->pools = kzalloc(sizeof(struct vsl_pool) * s->nr_pools,
@@ -159,7 +158,6 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		init_completion(&pool->gc_finished);
 
 		INIT_WORK(&pool->gc_ws, vsl_gc_collect);
-		INIT_WORK(&pool->waiting_ws, vsl_delayed_bio_submit);
 
 		INIT_LIST_HEAD(&pool->free_list);
 		INIT_LIST_HEAD(&pool->used_list);
@@ -356,7 +354,7 @@ int vsl_queue_init(struct vsl_dev *dev)
 {
 	int nr_sectors_per_page = 8; /* 512 bytes */
 
-	if (queue_logical_block_size > (nr_sectors_per_page << 9)) {
+	if (queue_logical_block_size(dev->q) > (nr_sectors_per_page << 9)) {
 		pr_err("vsl: logical page size not supported by hardware");
 		return false;
 	}

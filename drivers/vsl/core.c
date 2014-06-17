@@ -1,3 +1,4 @@
+#include <linux/openvsl.h>
 #include "vsl.h"
 
 /* requires lock on the translation map used */
@@ -488,11 +489,11 @@ int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
-	rq->sector = p->addr * NR_PHY_IN_LOG +
-					(blk_rq_sectors(rq) % NR_PHY_IN_LOG);
+	rq->__sector = p->addr * NR_PHY_IN_LOG +
+					(blk_rq_pos(rq) % NR_PHY_IN_LOG);
 
 	if (!p->block) {
-		rq->sector = 0;
+		rq->__sector = 0;
 		vsl_rq_zero_end(rq);
 		mempool_free(p, s->addr_pool);
 		vsl_unlock_addr(s, l_addr);
@@ -511,7 +512,6 @@ int __vsl_write_rq(struct vsl_stor *s,
 			struct vsl_addr *trans_map)
 {
 	struct vsl_addr *p;
-	struct bio *issue_bio;
 	sector_t l_addr = blk_rq_sectors(rq) / NR_PHY_IN_LOG;
 
 	p = s->type->map_ltop(s, l_addr, is_gc, trans_map, private);
@@ -523,7 +523,7 @@ int __vsl_write_rq(struct vsl_stor *s,
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
-	rq->sector = p->addr * NR_PHY_IN_LOG;
+	rq->__sector = p->addr * NR_PHY_IN_LOG;
 
 	vsl_submit_rq(s, rq, p, l_addr, sync, trans_map);
 
@@ -532,5 +532,5 @@ int __vsl_write_rq(struct vsl_stor *s,
 
 int vsl_write_rq(struct vsl_stor *s, struct request *rq)
 {
-	return __vsl_write_rq(s, rq, 0, NULL, NULL, s->trans);
+	return __vsl_write_rq(s, rq, 0, NULL, NULL, s->trans_map);
 }

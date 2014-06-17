@@ -1,3 +1,4 @@
+#include <linux/openvsl.h>
 #include "vsl.h"
 
 /* Run only GC if less than 1/X blocks are free */
@@ -60,7 +61,8 @@ static struct vsl_block *block_prio_find_max(struct vsl_pool *pool)
  * l to p and p to l mappings. */
 static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 {
-	struct request_queue *q = s->dev->q;
+	struct vsl_dev *dev = s->dev;
+	struct request_queue *q = dev->q;
 	struct vsl_addr src;
 	struct vsl_rev_addr *rev;
 	struct bio *src_bio;
@@ -94,7 +96,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		if (!src_rq)
 			pr_err("vsl: failed to alloc gc request");
 
-		blk_init_request_from_bio(src_rq, bio);
+		blk_init_request_from_bio(src_rq, src_bio);
 
 		/* We take the reverse lock here, and make sure that we only
 		 * release it when we have locked its logical address. If
@@ -120,14 +122,14 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		spin_unlock(&s->rev_lock);
 
 		init_completion(&sync);
-		vsl_submit_rq(s, &src_rq, src, rev->addr,
+		vsl_submit_rq(s, src_rq, &src, rev->addr,
 							&sync, rev->trans_map);
 		wait_for_completion(&sync);
 
 		blk_put_request(src_rq);
 		dst_rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
 
-		blk_init_request_from_bio(dst_rq, bio);
+		blk_init_request_from_bio(dst_rq, src_bio);
 
 		/* ok, now fix the write and make sure that it haven't been
 		 * moved in the meantime. */
@@ -147,7 +149,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 
 
 		init_completion(&sync);
-		vsl_write_rq(s, src_rq, 1, NULL, &sync, rev->trans_map);
+		__vsl_write_rq(s, src_rq, 1, NULL, &sync, rev->trans_map);
 		wait_for_completion(&sync);
 
 overwritten:

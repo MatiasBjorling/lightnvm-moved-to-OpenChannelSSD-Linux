@@ -11,6 +11,7 @@
 #include <linux/hrtimer.h>
 
 struct nullb_cmd {
+	struct vsl_dev *vsl_dev;
 	struct list_head list;
 	struct llist_node ll_list;
 	struct call_single_data csd;
@@ -561,7 +562,7 @@ static int null_add_dev(void)
 		goto out_free_nullb;
 
 	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL)) {
-		struct vsl_dev *dev;
+		struct vsl_dev *vsl_dev;
 
 		nullb->tag_set.ops = &null_mq_ops;
 		nullb->tag_set.nr_hw_queues = submit_queues;
@@ -572,17 +573,17 @@ static int null_add_dev(void)
 		nullb->tag_set.driver_data = nullb;
 
 		if (queue_mode == NULL_Q_VSL) {
-			dev = vsl_alloc();
-			if (!dev)
+			vsl_dev = vsl_alloc();
+			if (!vsl_dev)
 				goto out_cleanup_queues;
 
 			nullb->tag_set.ops = &null_vsl_blk_ops;
-			nullb->tag_set.driver_data = dev;
+			nullb->tag_set.driver_data = vsl_dev;
 
-			dev->ops = &null_vsl_dev_ops;
-			dev->driver_data = nullb;
+			vsl_dev->ops = &null_vsl_dev_ops;
+			vsl_dev->driver_data = nullb;
 
-			vsl_config_cmd_size(dev, &nullb->tag_set);
+			vsl_config_cmd_size(vsl_dev, &nullb->tag_set);
 		}
 
 		if (blk_mq_alloc_tag_set(&nullb->tag_set))
@@ -593,12 +594,12 @@ static int null_add_dev(void)
 			goto out_cleanup_tags;
 
 		if (queue_mode == NULL_Q_VSL) {
-			dev->q = dev->admin_q = nullb->q;
-			if (!vsl_init(dev)) {
-				vsl_free(dev);
+			vsl_dev->q = vsl_dev->admin_q = nullb->q;
+			if (vsl_init(vsl_dev)) {
+				vsl_free(vsl_dev);
 				goto out_cleanup_tags;
 			}
-			nullb->vsl_dev = dev;
+			nullb->vsl_dev = vsl_dev;
 		}
 	} else if (queue_mode == NULL_Q_BIO) {
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);

@@ -111,9 +111,10 @@ int vsl_init_request(void *data, struct request *rq, unsigned int hctx_idx,
 				unsigned int rq_idx, unsigned int numa_node)
 {
 	struct vsl_dev *dev = data;
-	struct per_rq_data *pdu = get_per_rq_data(dev, rq);
+	struct vsl_dev *rq_dev = blk_mq_rq_to_pdu(rq);
 
-	pdu->dev = dev->stor;
+	/* We assume that the first struct of the pdu is struct vsl_dev. */
+	rq_dev = dev;
 
 	/* TODO: Allow underlying driver to hook in its own init_reques fn */
 	return 0;
@@ -373,7 +374,7 @@ int vsl_init(struct vsl_dev *dev)
 	if (!dev->ops->identify || !dev->ops->vsl_queue_rq)
 		return -EINVAL;
 
-	if (vsl_queue_init(dev))
+	if (!vsl_queue_init(dev))
 		return -EINVAL;
 
 	_addr_cache = kmem_cache_create("vsl_addr_cache",

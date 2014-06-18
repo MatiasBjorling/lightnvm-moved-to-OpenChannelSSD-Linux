@@ -282,7 +282,7 @@ struct vsl_target_type {
 
 /* Main structure */
 struct vsl_stor {
-	struct openvsl_dev *dev;
+	struct vsl_dev *dev;
 	uint32_t sector_size;
 
 	struct vsl_target_type *type;
@@ -356,7 +356,6 @@ struct vsl_stor {
 };
 
 struct per_rq_data {
-	struct vsl_stor *dev;
 	struct vsl_ap *ap;
 	struct vsl_addr *addr;
 	struct timespec start_tv;
@@ -484,11 +483,9 @@ static inline int physical_to_slot(struct vsl_stor *s, sector_t phys)
 		NR_HOST_PAGES_IN_FLASH_PAGE;
 }
 
-static inline struct per_rq_data *get_per_rq_data(struct vsl_dev *dev,
-							struct request *rq)
+static inline void *get_per_rq_data(struct vsl_dev *dev, struct request *rq)
 {
-	return (struct per_rq_data *)blk_mq_rq_to_pdu(rq)
-							+ dev->drv_cmd_size;
+	return blk_mq_rq_to_pdu(rq) + dev->drv_cmd_size;
 }
 
 static inline struct vsl_inflight *vsl_hash_addr_to_inflight(struct vsl_stor *s,

@@ -338,23 +338,16 @@ struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 
 void vsl_endio(struct request *rq, int err)
 {
-	struct per_rq_data *pb;
-	struct vsl_stor *s;
-	struct vsl_ap *ap;
-	struct vsl_pool *pool;
-	struct vsl_addr *p;
-	struct vsl_block *block;
-	struct timespec end_tv, diff_tv;
-	unsigned long diff, dev_wait, total_wait = 0;
+	struct vsl_dev *vsl_dev = blk_mq_rq_to_pdu(rq);
+	struct vsl_stor *s = vsl_dev->stor;
+	struct per_rq_data *pb = get_per_rq_data(vsl_dev, rq);
+	struct vsl_ap *ap = pb->ap;
+	struct vsl_pool *pool = ap->pool;
+	struct vsl_addr *p = pb->addr;
+	struct vsl_block *block = p->block;
+/*	struct timespec end_tv, diff_tv; */
+/*	unsigned long diff, dev_wait, total_wait = 0; */
 	unsigned int data_cnt;
-
-	/* s is null */
-	pb = get_per_rq_data(s, rq);
-	p = pb->addr;
-	block = p->block;
-	ap = pb->ap;
-	s = ap->parent;
-	pool = ap->pool;
 
 	vsl_unlock_addr(s, pb->l_addr);
 
@@ -368,10 +361,10 @@ void vsl_endio(struct request *rq, int err)
 		}
 
 		/* physical waits if hardware doesn't have a real backend */
-		dev_wait = ap->t_write;
-	} else {
+		/*dev_wait = ap->t_write;*/
+	} /*else {
 		dev_wait = ap->t_read;
-	}
+	}*/
 
 /*	if (!(s->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
 wait_longer:
@@ -388,9 +381,6 @@ wait_longer:
 	}*/
 /*
 	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
-		/* we need this. updating pool current only by waiting_bios
-		 * worker leaves a windows where current is bio thats was
-		 * already ended *//*
 		spin_lock(&pool->waiting_lock);
 		pool->cur_bio = NULL;
 		spin_unlock(&pool->waiting_lock);
@@ -410,11 +400,6 @@ wait_longer:
 	mempool_free(pb->addr, s->addr_pool);
 }
 
-static void vsl_end_write_rq(struct request *rq, int err)
-{
-	vsl_endio(rq, err);
-}
-
 static void vsl_rq_zero_end(struct request *rq)
 {
 	/* TODO: fill rq with zeroes */
@@ -431,7 +416,7 @@ void vsl_submit_rq(struct vsl_stor *s,
 	struct vsl_dev *dev = s->dev;
 	struct vsl_block *block = p->block;
 	struct vsl_ap *ap = block_to_ap(s, block);
-	struct vsl_pool *pool = ap->pool;
+/*	struct vsl_pool *pool = ap->pool;*/
 	struct per_rq_data *pb;
 
 	pb = get_per_rq_data(s->dev, rq);
@@ -457,14 +442,12 @@ void vsl_submit_rq(struct vsl_stor *s,
 
 		bio = bio_list_peek(&pool->waiting_bios);
 
-		/* we're not the only bio waiting */ /*
 		if (!bio) {
 			atomic_dec(&pool->is_active);
 			spin_unlock(&pool->waiting_lock);
 			return;
 		}
 
-		/* we're the only bio waiting. queue relevant worker*/ /*
 		queue_work(s->kbiod_wq, &pool->waiting_ws);
 		spin_unlock(&pool->waiting_lock);
 		return;

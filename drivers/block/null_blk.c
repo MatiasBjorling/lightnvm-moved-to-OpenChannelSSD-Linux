@@ -323,39 +323,38 @@ static void null_request_fn(struct request_queue *q)
 	}
 }
 
-static struct vsl_id null_vsl_id(struct vsl_dev *dev)
+static int null_vsl_id(struct vsl_dev *dev, struct vsl_id *vsl_id)
 {
-	struct vsl_id i;
-	i.ver_id = 0x1;
-	i.nvm_type = VSL_NVMT_BLK;
-	i.nchannels = 1;
-	return i;
+	vsl_id->ver_id = 0x1;
+	vsl_id->nvm_type = VSL_NVMT_BLK;
+	vsl_id->.nchannels = 1;
+	return 0;
 }
 
-static struct vsl_id_chnl null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num)
+static int null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
+							struct vsl_id_chnl *ic)
 {
-	struct vsl_id_chnl ic;
-	ic.queue_size = hw_queue_depth;
-	ic.gran_read = bs;
-	ic.gran_write = bs;
-	ic.gran_erase = bs;
-	ic.oob_size = 0;
-	ic.t_r = ic.t_sqr = completion_nsec;
-	ic.t_w = ic.t_sqw = completion_nsec;
-	ic.t_e = completion_nsec;
-	ic.io_sched = VSL_IOSCHED_CHANNEL;
-	ic.laddr_begin = 0;
-	ic.laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;
-	return ic;
+	ic->queue_size = hw_queue_depth;
+	ic->gran_read = bs;
+	ic->gran_write = bs;
+	ic->gran_erase = bs;
+	ic->oob_size = 0;
+	ic->t_r = ic->t_sqr = completion_nsec;
+	ic->t_w = ic->t_sqw = completion_nsec;
+	ic->t_e = completion_nsec;
+	ic->io_sched = VSL_IOSCHED_CHANNEL;
+	ic->laddr_begin = 0;
+	ic->laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;
+	return 0;
 }
 
-static struct vsl_get_features null_vsl_get_features(struct vsl_dev *dev)
+static int null_vsl_get_features(struct vsl_dev *dev,
+						struct vsl_get_features *gf)
 {
-	struct vsl_get_features gf;
-	gf.rsp[0] = (1 << VSL_RSP_L2P);
-	gf.rsp[0] |= (1 << VSL_RSP_P2L);
-	gf.rsp[0] |= (1 << VSL_RSP_GC);
-	return gf;
+	gf->rsp[0] = (1 << VSL_RSP_L2P);
+	gf->rsp[0] |= (1 << VSL_RSP_P2L);
+	gf->rsp[0] |= (1 << VSL_RSP_GC);
+	return 0;
 }
 
 static int null_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)

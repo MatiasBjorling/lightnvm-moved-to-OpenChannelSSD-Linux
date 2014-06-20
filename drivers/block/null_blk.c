@@ -337,7 +337,7 @@ static int null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
 	ic->queue_size = hw_queue_depth;
 	ic->gran_read = bs;
 	ic->gran_write = bs;
-	ic->gran_erase = bs;
+	ic->gran_erase = bs * 128;
 	ic->oob_size = 0;
 	ic->t_r = ic->t_sqr = completion_nsec;
 	ic->t_w = ic->t_sqw = completion_nsec;

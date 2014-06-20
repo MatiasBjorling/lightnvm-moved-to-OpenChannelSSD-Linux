@@ -32,11 +32,6 @@
 /* If enabled, we delay requests on each ap to run serialized. */
 #define SERIALIZE_POOL_ACCESS 0
 
-/* Sleep timings before simulating device specific storage (in us) */
-#define TIMING_READ 25
-#define TIMING_WRITE 500
-#define TIMING_ERASE 1500
-
 /* Run GC every X seconds */
 #define GC_TIME 10
 
@@ -372,6 +367,10 @@ int vsl_queue_init(struct vsl_dev *dev)
 int vsl_init(struct vsl_dev *dev)
 {
 	struct vsl_stor *s;
+	struct vsl_id vsl_id;
+	struct vsl_id_chnl vsl_id_chnl;
+
+	unsigned long size;
 
 	if (!dev->ops->identify || !dev->ops->vsl_queue_rq)
 		return -EINVAL;
@@ -399,17 +398,26 @@ int vsl_init(struct vsl_dev *dev)
 		goto err_map;
 	}
 
-	s->nr_pools = VSL_NUM_POOLS;
-	s->nr_blks_per_pool = VSL_NUM_BLOCKS;
-	s->nr_pages_per_blk = VSL_NUM_PAGES;
+	if (dev->ops->identify(dev, &vsl_id))
+		goto err_map;
 
-	/* Optional */
+	s->nr_pools = vsl_id.nchannels;
+
+	/* TODO: We're limited to the same setup for each channel */
+	if (dev->ops->identify_channel(dev, 0, &vsl_id_chnl))
+		goto err_map;
+
+	size = vsl_id_chnl.laddr_end - vsl_id_chnl.laddr_begin;
+
+	s->nr_blks_per_pool = size / vsl_id_chnl.gran_erase;
+	s->nr_pages_per_blk = vsl_id_chnl.gran_erase / vsl_id_chnl.gran_read;
+
 	s->nr_aps_per_pool = APS_PER_POOL;
 	/* s->config.flags = VSL_OPT_* */
 	s->config.gc_time = GC_TIME;
-	s->config.t_read = TIMING_READ;
-	s->config.t_write = TIMING_WRITE;
-	s->config.t_erase = TIMING_ERASE;
+	s->config.t_read = vsl_id_chnl.t_r / 1000;
+	s->config.t_write = vsl_id_chnl.t_w / 1000;
+	s->config.t_erase = vsl_id_chnl.t_e / 1000;
 
 	/* Constants */
 	s->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE

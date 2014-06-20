@@ -327,7 +327,7 @@ static int null_vsl_id(struct vsl_dev *dev, struct vsl_id *vsl_id)
 {
 	vsl_id->ver_id = 0x1;
 	vsl_id->nvm_type = VSL_NVMT_BLK;
-	vsl_id->.nchannels = 1;
+	vsl_id->nchannels = 1;
 	return 0;
 }
 
@@ -335,13 +335,13 @@ static int null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
 							struct vsl_id_chnl *ic)
 {
 	ic->queue_size = hw_queue_depth;
-	ic->gran_read = bs;
-	ic->gran_write = bs;
-	ic->gran_erase = bs * 128;
+	ic->gran_read = 4096;
+	ic->gran_write = 4096;
+	ic->gran_erase = 4096 * 128;
 	ic->oob_size = 0;
-	ic->t_r = ic->t_sqr = completion_nsec;
-	ic->t_w = ic->t_sqw = completion_nsec;
-	ic->t_e = completion_nsec;
+	ic->t_r = ic->t_sqr = 25000; /* 25us */
+	ic->t_w = ic->t_sqw = 500000; /* 500us */
+	ic->t_e = 1500000; /* 1.500us */
 	ic->io_sched = VSL_IOSCHED_CHANNEL;
 	ic->laddr_begin = 0;
 	ic->laddr_end = (gb * 1024 * 1024 * 1024ULL) - 1;

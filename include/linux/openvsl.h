@@ -75,9 +75,9 @@ struct vsl_get_features {
 
 struct vsl_dev;
 
-typedef struct vsl_id (vsl_id_fn)(struct vsl_dev *dev);
-typedef struct vsl_id_chnl (vsl_id_chnl_fn)(struct vsl_dev *dev, int chnl_num);
-typedef struct vsl_get_features (vsl_get_features_fn)(struct vsl_dev *dev);
+typedef int (vsl_id_fn)(struct vsl_dev *dev, struct vsl_id *);
+typedef int (vsl_id_chnl_fn)(struct vsl_dev *dev, int chnl_num, struct vsl_id_chnl *);
+typedef int (vsl_get_features_fn)(struct vsl_dev *dev, struct vsl_get_features *);
 typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, u8 rsp, u8 val);
 typedef int (vsl_queue_rq_fn)(struct request *, void *);
 typedef int (vsl_init_hctx_fn)(struct vsl_dev *, void *, unsigned int);

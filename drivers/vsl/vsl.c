@@ -170,8 +170,8 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		bio_list_init(&pool->waiting_bios);
 		atomic_set(&pool->is_active, 0);
 
-		pool->blocks = kzalloc(sizeof(struct vsl_block) *
-						pool->nr_blocks, GFP_KERNEL);
+		pool->blocks = vzalloc(sizeof(struct vsl_block) *
+							pool->nr_blocks);
 		if (!pool->blocks)
 			goto err_blocks;
 
@@ -246,10 +246,9 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 	int i;
 	unsigned int order;
 
-	s->trans_map = vmalloc(sizeof(struct vsl_addr) * s->nr_pages);
+	s->trans_map = vzalloc(sizeof(struct vsl_addr) * s->nr_pages);
 	if (!s->trans_map)
 		return -ENOMEM;
-	memset(s->trans_map, 0, sizeof(struct vsl_addr) * s->nr_pages);
 
 	s->rev_trans_map = vmalloc(sizeof(struct vsl_rev_addr)
 							* s->nr_pages);
@@ -407,7 +406,7 @@ int vsl_init(struct vsl_dev *dev)
 	if (dev->ops->identify_channel(dev, 0, &vsl_id_chnl))
 		goto err_map;
 
-	size = vsl_id_chnl.laddr_end - vsl_id_chnl.laddr_begin;
+	size = vsl_id_chnl.laddr_end - vsl_id_chnl.laddr_begin + 1;
 
 	s->nr_blks_per_pool = size / vsl_id_chnl.gran_erase;
 	s->nr_pages_per_blk = vsl_id_chnl.gran_erase / vsl_id_chnl.gran_read;

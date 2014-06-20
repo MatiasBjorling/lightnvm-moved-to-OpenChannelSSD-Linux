@@ -355,6 +355,10 @@ struct vsl_stor {
 	unsigned int per_rq_offset;
 };
 
+struct per_rq_data_vsl {
+	struct vsl_dev *dev;
+};
+
 struct per_rq_data {
 	struct vsl_ap *ap;
 	struct vsl_addr *addr;
@@ -485,6 +489,7 @@ static inline int physical_to_slot(struct vsl_stor *s, sector_t phys)
 
 static inline void *get_per_rq_data(struct vsl_dev *dev, struct request *rq)
 {
+	BUG_ON(!dev);
 	return blk_mq_rq_to_pdu(rq) + dev->drv_cmd_size;
 }
 

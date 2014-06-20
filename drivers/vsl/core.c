@@ -338,7 +338,8 @@ struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 
 void vsl_endio(struct request *rq, int err)
 {
-	struct vsl_dev *vsl_dev = blk_mq_rq_to_pdu(rq);
+	struct per_rq_data_vsl *pdu_dev = blk_mq_rq_to_pdu(rq);
+	struct vsl_dev *vsl_dev = pdu_dev->dev;
 	struct vsl_stor *s = vsl_dev->stor;
 	struct per_rq_data *pb = get_per_rq_data(vsl_dev, rq);
 	struct vsl_ap *ap = pb->ap;
@@ -403,7 +404,7 @@ wait_longer:
 static void vsl_rq_zero_end(struct request *rq)
 {
 	/* TODO: fill rq with zeroes */
-	blk_mq_complete_request(rq);
+	blk_mq_end_io(rq, 0);
 }
 
 /* remember to lock l_add before calling vsl_submit_rq */

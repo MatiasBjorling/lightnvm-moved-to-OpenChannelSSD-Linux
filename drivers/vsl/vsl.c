@@ -111,10 +111,12 @@ int vsl_init_request(void *data, struct request *rq, unsigned int hctx_idx,
 				unsigned int rq_idx, unsigned int numa_node)
 {
 	struct vsl_dev *dev = data;
-	struct vsl_dev *rq_dev = blk_mq_rq_to_pdu(rq);
+	struct per_rq_data_vsl *rq_dev = blk_mq_rq_to_pdu(rq);
+
+	BUG_ON(!dev);
 
 	/* We assume that the first struct of the pdu is struct vsl_dev. */
-	rq_dev = dev;
+	rq_dev->dev = dev;
 
 	/* TODO: Allow underlying driver to hook in its own init_reques fn */
 	return 0;
@@ -427,29 +429,30 @@ int vsl_init(struct vsl_dev *dev)
 		goto err_map;
 	}
 
-	pr_info("vsl: pls: %u blks: %u pgs: %u aps: %u ppa: %u",
+	pr_info("vsl: pls: %u blks: %u pgs: %u aps: %u ppa: %u\n",
 		s->nr_pools,
 		s->nr_blks_per_pool,
 		s->nr_pages_per_blk,
 		s->nr_aps,
 		s->nr_aps_per_pool);
-	pr_info("vsl: timings: %u/%u/%u",
+	pr_info("vsl: timings: %u/%u/%u\n",
 			s->config.t_read,
 			s->config.t_write,
 			s->config.t_erase);
-	pr_info("vsl: target sector size=%d", s->sector_size);
+	pr_info("vsl: target sector size=%d\n", s->sector_size);
 	/*pr_info("vsl: disk logical sector size=%d",
 		bdev_logical_block_size(s->dev->bdev));
 	pr_info("vsl: disk physical sector size=%d",
 		bdev_physical_block_size(s->dev->bdev));*/
-	pr_info("vsl: disk flash page size=%d", FLASH_PAGE_SIZE);
-	pr_info("vsl: allocated %lu physical pages (%lu KB)",
+	pr_info("vsl: disk flash page size=%d\n", FLASH_PAGE_SIZE);
+	pr_info("vsl: allocated %lu physical pages (%lu KB)\n",
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
 
 	dev->stor = s;
 	return 0;
 err_map:
 	kfree(s);
+	pr_err("Failed to initialize vsl\n");
 	return -ENOMEM;
 }
 

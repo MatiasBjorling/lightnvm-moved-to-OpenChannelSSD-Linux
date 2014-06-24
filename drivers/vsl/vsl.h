@@ -333,10 +333,6 @@ struct vsl_stor {
 	struct workqueue_struct *krqd_wq;
 	struct workqueue_struct *kgc_wq;
 
-	spinlock_t deferred_lock;
-	struct work_struct deferred_ws;
-	struct bio_list deferred_bios;
-
 	struct timer_list gc_timer;
 
 	/* in-flight data lookup, lookup by logical address. Remember the

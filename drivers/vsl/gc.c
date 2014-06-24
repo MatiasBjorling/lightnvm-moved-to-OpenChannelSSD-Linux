@@ -197,7 +197,7 @@ void vsl_gc_collect(struct work_struct *work)
 	spin_unlock(&pool->lock);
 	s->next_collect_pool++;
 
-	queue_work(s->krqd_wq, &s->deferred_ws);
+	/* TODO: Hint that request queue can be started again */
 }
 
 void vsl_gc_block(struct work_struct *work)

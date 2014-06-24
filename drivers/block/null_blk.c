@@ -234,7 +234,7 @@ static void null_cmd_end_timer(struct nullb_cmd *cmd)
 
 static void null_softirq_done_fn(struct request *rq)
 {
-	if (queue_mode == NULL_Q_MQ)
+	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL))
 		end_cmd(blk_mq_rq_to_pdu(rq));
 	else
 		end_cmd(rq->special);
@@ -647,7 +647,7 @@ static int null_add_dev(void)
 out_cleanup_blk_queue:
 	blk_cleanup_queue(nullb->q);
 out_cleanup_tags:
-	if (queue_mode == NULL_Q_MQ)
+	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL))
 		blk_mq_free_tag_set(&nullb->tag_set);
 out_cleanup_queues:
 	cleanup_queues(nullb);

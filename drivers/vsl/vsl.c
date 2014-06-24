@@ -140,9 +140,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 	struct vsl_ap *ap;
 	int i, j;
 
-	spin_lock_init(&s->deferred_lock);
 	spin_lock_init(&s->rev_lock);
-	bio_list_init(&s->deferred_bios);
 
 	s->pools = kzalloc(sizeof(struct vsl_pool) * s->nr_pools,
 								GFP_KERNEL);

@@ -97,9 +97,6 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 
 	vsl_reset_block(block);
 
-	block->data = mempool_alloc(s->block_page_pool, GFP_ATOMIC);
-	BUG_ON(!block->data);
-
 	return block;
 }
 

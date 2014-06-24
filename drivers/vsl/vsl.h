@@ -125,7 +125,6 @@ struct vsl_block {
 	struct list_head prio;
 
 	/* Persistent data structures */
-	struct page *data;
 	atomic_t data_size; /* data pages inserted into data variable */
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
 
@@ -311,7 +310,6 @@ struct vsl_stor {
 
 	mempool_t *addr_pool;
 	mempool_t *page_pool;
-	mempool_t *block_page_pool;
 
 	/* Frequently used config variables */
 	int nr_pools;

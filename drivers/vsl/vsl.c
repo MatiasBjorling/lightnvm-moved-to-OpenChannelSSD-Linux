@@ -242,7 +242,6 @@ err_pool:
 static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 {
 	int i;
-	unsigned int order;
 
 	s->trans_map = vzalloc(sizeof(struct vsl_addr) * s->nr_pages);
 	if (!s->trans_map)
@@ -271,11 +270,6 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 	if (!s->addr_pool)
 		goto err_page_pool;
 
-	order = ffs(s->nr_host_pages_in_blk) - 1;
-	s->block_page_pool = mempool_create_page_pool(s->nr_aps, order);
-	if (!s->block_page_pool)
-		goto err_addr_pool;
-
 	/*if (bdev_physical_block_size(s->dev->bdev) > EXPOSED_PAGE_SIZE) {
 		pr_err("lightnvm: bad sector size.");
 		goto err_block_page_pool;
@@ -300,15 +294,13 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 	vsl_pool_init(s, dev);
 
 	if (s->type->init && s->type->init(s))
-		goto err_block_page_pool;
+		goto err_addr_pool;
 
 	/* FIXME: Clean up pool init on failure. */
 	setup_timer(&s->gc_timer, vsl_gc_cb, (unsigned long)s);
 	mod_timer(&s->gc_timer, jiffies + msecs_to_jiffies(1000));
 
 	return 0;
-err_block_page_pool:
-	mempool_destroy(s->block_page_pool);
 err_addr_pool:
 	mempool_destroy(s->addr_pool);
 err_page_pool:

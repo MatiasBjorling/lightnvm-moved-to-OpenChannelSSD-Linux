@@ -390,6 +390,7 @@ wait_longer:
 	}
 */
 
+	blk_mq_end_io(rq, err);
 	if (pb->event) {
 		complete(pb->event);
 		/* all submitted requests allocate their own addr,
@@ -498,6 +499,7 @@ int __vsl_write_rq(struct vsl_stor *s,
 	struct vsl_addr *p;
 	sector_t l_addr = blk_rq_sectors(rq) / NR_PHY_IN_LOG;
 
+	vsl_lock_addr(s, l_addr);
 	p = s->type->map_ltop(s, l_addr, is_gc, trans_map, private);
 	if (!p) {
 		BUG_ON(is_gc);

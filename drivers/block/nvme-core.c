@@ -915,6 +915,26 @@ int lnvme_identify_channel(struct nvme_dev *dev, unsigned nsid, dma_addr_t dma_a
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }
 
+int lnvme_get_features(struct nvme_dev *dev, unsigned nsid, dma_addr_t dma_addr)
+{
+	struct nvme_command c;
+	memset(&c, 0, sizeof(c));
+	c.common.opcode = lnvme_admin_get_features;
+	c.common.nsid = cpu_to_le32(nsid);
+	c.common.prp1 = cpu_to_le64(dma_addr);
+	return nvme_submit_admin_cmd(dev, &c, NULL);
+}
+
+int lnvme_set_responsibility(struct nvme_dev *dev, unsigned nsid, dma_addr_t dma_addr)
+{
+	struct nvme_command c;
+	memset(&c, 0, sizeof(c));
+	c.common.opcode = lnvme_admin_set_responsibility;
+	c.common.nsid = cpu_to_le32(nsid);
+	c.common.prp1 = cpu_to_le64(dma_addr);
+	return nvme_submit_admin_cmd(dev, &c, NULL);
+}
+
 int nvme_identify(struct nvme_dev *dev, unsigned nsid, unsigned cns,
 							dma_addr_t dma_addr)
 {

@@ -895,12 +895,12 @@ static int adapter_delete_sq(struct nvme_dev *dev, u16 sqid)
 	return adapter_delete_queue(dev, nvme_admin_delete_sq, sqid);
 }
 
-int lnvme_identify(struct nvme_dev *dev, unsigned nsid, dma_addr_t dma_addr)
+int lnvme_identify(struct nvme_dev *dev, dma_addr_t dma_addr)
 {
 	struct nvme_command c;
 	memset(&c, 0, sizeof(c));
 	c.l_identify.opcode = lnvme_admin_identify;
-	c.l_identify.nsid = cpu_to_le32(nsid);
+	c.l_identify.nsid = cpu_to_le32(0);
 	c.l_identify.prp1 = cpu_to_le64(dma_addr);
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }

@@ -255,7 +255,7 @@ typedef int (*vsl_page_special_fn)(struct vsl_stor *, unsigned int);
 struct vsl_target_type {
 	const char *name;
 	unsigned int version[3];
-	unsigned int per_rq_size; 
+	unsigned int per_rq_size;
 
 	vsl_map_ltop_fn map_ltop;
 
@@ -398,7 +398,8 @@ struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *, sector_t l_addr);
 
 /*   I/O bio related */
 struct vsl_addr *vsl_get_trans_map(struct vsl_stor *, void *private);
-struct request *vsl_write_init_rq(struct vsl_stor *, struct request *, struct vsl_addr *);
+struct request *vsl_write_init_rq(struct vsl_stor *, struct request *,
+							struct vsl_addr *);
 /* FIXME: Shorten */
 int vsl_write_rq(struct vsl_stor *, struct request *rq);
 int __vsl_write_rq(struct vsl_stor *, struct request *, int, void *,
@@ -447,24 +448,26 @@ static inline struct vsl_ap *get_next_ap(struct vsl_stor *s)
 static inline int block_is_full(struct vsl_block *block)
 {
 	struct vsl_stor *s = block->pool->s;
+
 	return (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
 			block->next_offset == s->nr_host_pages_in_blk;
 }
 
 static inline sector_t block_to_addr(struct vsl_block *block)
 {
-	struct vsl_stor *s;
-	BUG_ON(!block);
-	s = block->pool->s;
+	struct vsl_stor *s = block->pool->s;
+
 	return block->id * s->nr_host_pages_in_blk;
 }
 
-static inline struct vsl_pool *paddr_to_pool(struct vsl_stor *s, sector_t p_addr)
+static inline struct vsl_pool *paddr_to_pool(struct vsl_stor *s,
+							sector_t p_addr)
 {
 	return &s->pools[p_addr / (s->nr_pages / s->nr_pools)];
 }
 
-static inline struct vsl_ap *block_to_ap(struct vsl_stor *s, struct vsl_block *b)
+static inline struct vsl_ap *block_to_ap(struct vsl_stor *s,
+							struct vsl_block *b)
 {
 	unsigned int ap_idx, div, mod;
 
@@ -493,7 +496,8 @@ static inline struct vsl_inflight *vsl_hash_addr_to_inflight(struct vsl_stor *s,
 	return &s->inflight_map[l_addr % VSL_INFLIGHT_PARTITIONS];
 }
 
-static inline void __vsl_lock_addr(struct vsl_stor *s, sector_t l_addr, int spin)
+static inline void __vsl_lock_addr(struct vsl_stor *s, sector_t l_addr,
+								int spin)
 {
 	struct vsl_inflight *inflight = vsl_hash_addr_to_inflight(s, l_addr);
 	struct vsl_inflight_addr *a;
@@ -567,7 +571,8 @@ static inline void show_pool(struct vsl_pool *pool)
 		prio_cnt++;
 	spin_unlock(&pool->lock);
 
-	pr_err("lightnvm: P-%d F:%u U:%u P:%u", pool->id, free_cnt, used_cnt, prio_cnt);
+	pr_err("lightnvm: P-%d F:%u U:%u P:%u",
+					pool->id, free_cnt, used_cnt, prio_cnt);
 }
 
 static inline void show_all_pools(struct vsl_stor *s)

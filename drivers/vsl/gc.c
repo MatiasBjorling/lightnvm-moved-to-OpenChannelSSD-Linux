@@ -7,6 +7,7 @@
 static void queue_pool_gc(struct vsl_pool *pool)
 {
 	struct vsl_stor *s = pool->s;
+
 	queue_work(s->krqd_wq, &pool->gc_ws);
 }
 
@@ -216,6 +217,7 @@ void vsl_gc_kick(struct vsl_stor *s)
 {
 	struct vsl_pool *pool;
 	unsigned int i;
+
 	BUG_ON(!s);
 
 	vsl_for_each_pool(s, pool, i)

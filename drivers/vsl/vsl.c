@@ -142,8 +142,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 
 	spin_lock_init(&s->rev_lock);
 
-	s->pools = kzalloc(sizeof(struct vsl_pool) * s->nr_pools,
-								GFP_KERNEL);
+	s->pools = kcalloc(s->nr_pools, sizeof(struct vsl_pool), GFP_KERNEL);
 	if (!s->pools)
 		goto err_pool;
 
@@ -190,7 +189,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 	}
 
 	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;
-	s->aps = kzalloc(sizeof(struct vsl_ap) * s->nr_aps, GFP_KERNEL);
+	s->aps = kcalloc(s->nr_aps, sizeof(struct vsl_ap), GFP_KERNEL);
 	if (!s->aps)
 		goto err_blocks;
 
@@ -270,10 +269,6 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 	if (!s->addr_pool)
 		goto err_page_pool;
 
-	/*if (bdev_physical_block_size(s->dev->bdev) > EXPOSED_PAGE_SIZE) {
-		pr_err("lightnvm: bad sector size.");
-		goto err_block_page_pool;
-	}*/
 	s->sector_size = EXPOSED_PAGE_SIZE;
 
 	/* inflight maintainence */

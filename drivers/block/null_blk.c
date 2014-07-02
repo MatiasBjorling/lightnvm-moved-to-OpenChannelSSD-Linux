@@ -113,6 +113,10 @@ static bool use_per_node_hctx = false;
 module_param(use_per_node_hctx, bool, S_IRUGO);
 MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware context queues. Default: false");
 
+static int vsl_num_channels = 1;
+module_param(vsl_num_channels, int, S_IRUGO);
+MODULE_PARM_DESC(vsl_num_channels, "Number of channels to be exposed through VSL. Default: 1");
+
 static void put_tag(struct nullb_queue *nq, unsigned int tag)
 {
 	clear_bit_unlock(tag, nq->tag_map);
@@ -327,7 +331,7 @@ static int null_vsl_id(struct vsl_dev *dev, struct vsl_id *vsl_id)
 {
 	vsl_id->ver_id = 0x1;
 	vsl_id->nvm_type = VSL_NVMT_BLK;
-	vsl_id->nchannels = 1;
+	vsl_id->nchannels = vsl_num_channels;
 	return 0;
 }
 

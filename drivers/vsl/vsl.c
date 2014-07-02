@@ -348,7 +348,7 @@ int vsl_queue_init(struct vsl_dev *dev)
 	return true;
 }
 
-int vsl_init(struct vsl_dev *dev)
+int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 {
 	struct vsl_stor *s;
 	struct vsl_id vsl_id;

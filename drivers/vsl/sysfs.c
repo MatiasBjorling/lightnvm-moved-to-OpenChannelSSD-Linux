@@ -3,11 +3,17 @@
 
 #include "vsl.h"
 
-static ssize_t vsl_attr_blk_usage_show(struct vsl_dev *vsl, char *buf)
+static ssize_t vsl_attr_free_blocks_show(struct vsl_dev *vsl, char *buf)
 {
+	char *buf_start = buf;
 	struct vsl_stor *stor = vsl->stor;
+	struct vsl_pool *pool;
+	unsigned int i;
 
-	return sprintf(buf, "%s\n", "To be implemented");
+	vsl_for_each_pool(stor, pool, i)
+		buf += sprintf(buf, "%8u\t%u\n", i, pool->nr_free_blocks);
+
+	return buf - buf_start;
 }
 
 static ssize_t vsl_attr_show(struct device *dev, char *page,
@@ -29,10 +35,10 @@ static ssize_t vsl_attr_do_show_##_name(struct device *d,		\
 static struct device_attribute vsl_attr_##_name =			\
 	__ATTR(_name, S_IRUGO, vsl_attr_do_show_##_name, NULL);
 
-VSL_ATTR_RO(blk_usage);
+VSL_ATTR_RO(free_blocks);
 
 static struct attribute *vsl_attrs[] = {
-	&vsl_attr_blk_usage.attr,
+	&vsl_attr_free_blocks.attr,
 	NULL,
 };
 

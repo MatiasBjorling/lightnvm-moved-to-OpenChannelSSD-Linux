@@ -393,7 +393,7 @@ int vsl_init(struct vsl_dev *dev)
 
 	size = vsl_id_chnl.laddr_end - vsl_id_chnl.laddr_begin + 1;
 
-	s->nr_blks_per_pool = size / vsl_id_chnl.gran_erase;
+	s->nr_blks_per_pool = size / vsl_id_chnl.gran_erase / vsl_id.nchannels;
 	s->nr_pages_per_blk = vsl_id_chnl.gran_erase / vsl_id_chnl.gran_read;
 
 	s->nr_aps_per_pool = APS_PER_POOL;

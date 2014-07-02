@@ -335,6 +335,7 @@ static int null_vsl_id(struct vsl_dev *dev, struct vsl_id *vsl_id)
 	return 0;
 }
 
+
 static int null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
 							struct vsl_id_chnl *ic)
 {
@@ -448,8 +449,11 @@ static void null_del_dev(struct nullb *nullb)
 
 	del_gendisk(nullb->disk);
 	blk_cleanup_queue(nullb->q);
-	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL))
+	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL)) {
+		if (queue_mode == NULL_Q_VSL)
+			vsl_remove_sysfs(nullb->disk->private_data);
 		blk_mq_free_tag_set(&nullb->tag_set);
+	}
 	put_disk(nullb->disk);
 	kfree(nullb);
 }
@@ -550,6 +554,7 @@ static int null_add_dev(void)
 {
 	struct gendisk *disk;
 	struct nullb *nullb;
+	struct vsl_dev *vsl_dev = NULL;
 	sector_t size;
 
 	nullb = kzalloc_node(sizeof(*nullb), GFP_KERNEL, home_node);
@@ -565,8 +570,6 @@ static int null_add_dev(void)
 		goto out_free_nullb;
 
 	if (queue_mode & (NULL_Q_MQ|NULL_Q_VSL)) {
-		struct vsl_dev *vsl_dev;
-
 		nullb->tag_set.ops = &null_mq_ops;
 		nullb->tag_set.nr_hw_queues = submit_queues;
 		nullb->tag_set.queue_depth = hw_queue_depth;
@@ -595,15 +598,6 @@ static int null_add_dev(void)
 		nullb->q = blk_mq_init_queue(&nullb->tag_set);
 		if (!nullb->q)
 			goto out_cleanup_tags;
-
-		if (queue_mode == NULL_Q_VSL) {
-			vsl_dev->q = vsl_dev->admin_q = nullb->q;
-			if (vsl_init(vsl_dev)) {
-				vsl_free(vsl_dev);
-				goto out_cleanup_tags;
-			}
-			nullb->vsl_dev = vsl_dev;
-		}
 	} else if (queue_mode == NULL_Q_BIO) {
 		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
 		if (!nullb->q)
@@ -626,11 +620,6 @@ static int null_add_dev(void)
 	if (!disk)
 		goto out_cleanup_blk_queue;
 
-	mutex_lock(&lock);
-	list_add_tail(&nullb->list, &nullb_list);
-	nullb->index = nullb_indexes++;
-	mutex_unlock(&lock);
-
 	blk_queue_logical_block_size(nullb->q, bs);
 	blk_queue_physical_block_size(nullb->q, bs);
 
@@ -642,12 +631,33 @@ static int null_add_dev(void)
 	disk->major		= null_major;
 	disk->first_minor	= nullb->index;
 	disk->fops		= &null_fops;
-	disk->private_data	= nullb;
 	disk->queue		= nullb->q;
+
+	if (vsl_dev) {
+		vsl_dev->q = vsl_dev->admin_q = nullb->q;
+		vsl_dev->disk = disk;
+
+		if (vsl_init(disk, vsl_dev))
+			goto out_cleanup_vsl;
+
+		nullb->vsl_dev = vsl_dev;
+		disk->private_data = vsl_dev;
+	} else
+		disk->private_data = nullb;
+
+	mutex_lock(&lock);
+	list_add_tail(&nullb->list, &nullb_list);
+	nullb->index = nullb_indexes++;
+	mutex_unlock(&lock);
+
 	sprintf(disk->disk_name, "nullb%d", nullb->index);
 	add_disk(disk);
+	vsl_add_sysfs(vsl_dev);
 	return 0;
 
+out_cleanup_vsl:
+	vsl_free(vsl_dev);
+	put_disk(disk);
 out_cleanup_blk_queue:
 	blk_cleanup_queue(nullb->q);
 out_cleanup_tags:

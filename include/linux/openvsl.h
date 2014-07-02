@@ -3,6 +3,7 @@
 
 #include <linux/types.h>
 #include <linux/blk-mq.h>
+#include <linux/genhd.h>
 
 enum VSL_RSP_VAL {
 	VSL_RSP_OFF	= 0,
@@ -103,6 +104,8 @@ struct vsl_dev {
 
 	struct vsl_dev_ops *ops;
 
+	struct gendisk *disk;
+
 	unsigned int drv_cmd_size;
 
 	void *driver_data;
@@ -112,10 +115,13 @@ struct vsl_dev {
 /* OpenVSL configuration */
 void vsl_config_cmd_size(struct vsl_dev *, struct blk_mq_tag_set *);
 
-int vsl_init(struct vsl_dev *);
+int vsl_init(struct gendisk *disk, struct vsl_dev *);
 void vsl_exit(struct vsl_dev *);
 struct vsl_dev *vsl_alloc(void);
 void vsl_free(struct vsl_dev *);
+
+int vsl_add_sysfs(struct vsl_dev *);
+void vsl_remove_sysfs(struct vsl_dev *);
 
 /* OpenVSL Requests */
 int vsl_queue_rq(struct blk_mq_hw_ctx *, struct request *);

@@ -48,7 +48,7 @@ enum {
 	/* KV commands for KV compatible block devices */
 	IOCB_CMD_KVGET = 9,
 	IOCB_CMD_KVPUT = 10,
-	IOCB_CMD_EXIST = 11,
+	IOCB_CMD_KVEXISTS = 11,
 };
 
 /*

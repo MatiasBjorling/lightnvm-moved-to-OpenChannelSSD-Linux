@@ -141,6 +141,8 @@ struct nvme_cmd_info {
 	struct nvme_queue *nvmeq;
 };
 
+#define IS_LNVME_DEV(dev) ((dev)->l_ctrl != NULL)
+
 static int nvme_admin_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 				unsigned int hctx_idx)
 {
@@ -899,9 +901,9 @@ int lnvme_identify(struct nvme_dev *dev, dma_addr_t dma_addr)
 {
 	struct nvme_command c;
 	memset(&c, 0, sizeof(c));
-	c.l_identify.opcode = lnvme_admin_identify;
-	c.l_identify.nsid = cpu_to_le32(0);
-	c.l_identify.prp1 = cpu_to_le64(dma_addr);
+	c.common.opcode = lnvme_admin_identify;
+	c.common.nsid = cpu_to_le32(0);
+	c.common.prp1 = cpu_to_le64(dma_addr);
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }
 
@@ -1961,6 +1963,88 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 	return result;
 }
 
+static void __lnvme_ctrl_le2cpu(struct lnvme_ctrl *dst, struct lnvme_id_ctrl *src)
+{
+	dst->ver_id = le16_to_cpu(src->base.ver_id);
+	dst->nvm_type = src->base.nvm_type;
+	dst->nchannels = le16_to_cpu(src->base.nchannels);
+}
+
+static void __lnvme_chnl_le2cpu(struct lnvme_chnl *dst, struct lnvme_id_chnl *src)
+{
+	dst->queue_size = le64_to_cpu(src->base.queue_size);
+	dst->gran_read = le64_to_cpu(src->base.gran_read);
+	dst->gran_write = le64_to_cpu(src->base.gran_write);
+	dst->gran_erase = le64_to_cpu(src->base.gran_erase);
+	dst->oob_size = le64_to_cpu(src->base.oob_size);
+	dst->t_r = le32_to_cpu(src->base.t_r);
+	dst->t_sqr = le32_to_cpu(src->base.t_sqr);
+	dst->t_w = le32_to_cpu(src->base.t_w);
+	dst->t_sqw = le32_to_cpu(src->base.t_sqw);
+	dst->t_e = le32_to_cpu(src->base.t_e);
+	dst->io_sched = src->base.io_sched;
+	dst->laddr_begin = le64_to_cpu(src->base.laddr_begin);
+	dst->laddr_end = le64_to_cpu(src->base.laddr_end);
+}
+
+static int __lnvme_dev_add(struct nvme_dev *dev)
+{
+	int ret;
+	struct pci_dev *pdev = dev->pci_dev;
+	struct lnvme_id_ctrl *c;
+	void *mem;
+	dma_addr_t dma_addr;
+	__le16 i;
+	mem = dma_alloc_coherent(&pdev->dev, 4096, &dma_addr, GFP_KERNEL);
+	if (!mem) {
+		ret = -ENOMEM;
+		goto enomem_dma;
+	}
+
+	ret = lnvme_identify(dev, dma_addr);
+	if (ret) {
+		ret = 0;
+		goto out;
+	}
+
+	dev->l_ctrl = kzalloc(sizeof(struct lnvme_ctrl), GFP_KERNEL);
+	if (! dev->l_ctrl) {
+		ret = -ENOMEM;
+		goto enomem_ctrl;
+	}
+	c = mem;
+	__lnvme_ctrl_le2cpu(dev->l_ctrl, c);
+
+	dev->l_chnls = kmalloc(
+		sizeof(struct lnvme_chnl) * dev->l_ctrl->nchannels,
+		GFP_KERNEL);
+	if (! dev->l_chnls) {
+		ret = -ENOMEM;
+		goto enomem_chnl;
+	}
+
+	for (i = 0; i < dev->l_ctrl->nchannels; i++) {
+		ret = lnvme_identify_channel(dev, i, dma_addr);
+		if (ret) {
+			ret = -EIO;
+			goto e_id_chnl;
+		}
+		__lnvme_chnl_le2cpu(dev->l_chnls+i,
+				(struct lnvme_id_chnl *)mem);
+	}
+	printk("NVMe: (lnvme_dev_add) Examined %u channels\n", (unsigned int)i);
+	goto out;
+e_id_chnl:
+	kfree(dev->l_chnls);
+enomem_chnl:
+	kfree(dev->l_ctrl);
+enomem_ctrl:
+out:
+	dma_free_coherent(&pdev->dev, 4096, mem, dma_addr);
+enomem_dma:
+	return ret;
+}
+
 /*
  * Return: error value if an error occurred setting up the queues or calling
  * Identify Device.  0 if these succeeded, even if adding some of the
@@ -1989,6 +2073,9 @@ static int nvme_dev_add(struct nvme_dev *dev)
 		res = -EIO;
 		goto out;
 	}
+
+	/*TODO do something intelligent here*/
+	res = __lnvme_dev_add(dev);
 
 	ctrl = mem;
 	nn = le32_to_cpup(&ctrl->nn);
@@ -2379,6 +2466,10 @@ static void nvme_free_dev(struct kref *kref)
 
 	nvme_free_namespaces(dev);
 	blk_mq_free_tag_set(&dev->tagset);
+	if (IS_LNVME_DEV(dev)) {
+		kfree(dev->l_chnls);
+		kfree(dev->l_ctrl);
+	}
 	kfree(dev->queues);
 	kfree(dev->entry);
 	kfree(dev);

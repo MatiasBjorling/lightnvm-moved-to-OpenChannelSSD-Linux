@@ -85,14 +85,18 @@ struct nvme_id_ctrl {
 	__u8			vs[1024];
 };
 
-struct lnvme_id_ctrl {
+struct lnvme_ctrl {
 	__le16			ver_id;
 	__u8			nvm_type;
 	__le16			nchannels;
-	__u8			unused[4091];
-};
+} __attribute__((packed));
 
-struct lnvme_id_chnl {
+struct lnvme_id_ctrl {
+	struct lnvme_ctrl	base;
+	__u8			unused[4091];
+} __attribute__((packed));
+
+struct lnvme_chnl {
 	__le64			queue_size;
 	__le64			gran_read;
 	__le64			gran_write;
@@ -106,8 +110,12 @@ struct lnvme_id_chnl {
 	__u8			io_sched;
 	__le64			laddr_begin;
 	__le64			laddr_end;
+} __attribute__((packed));
+
+struct lnvme_id_chnl {
+	struct lnvme_chnl	base;
 	__u8			unused[4034];
-};
+} __attribute__((packed));
 
 enum {
 	NVME_CTRL_ONCS_COMPARE			= 1 << 0,

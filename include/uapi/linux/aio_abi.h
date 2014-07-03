@@ -44,6 +44,11 @@ enum {
 	IOCB_CMD_NOOP = 6,
 	IOCB_CMD_PREADV = 7,
 	IOCB_CMD_PWRITEV = 8,
+
+	/* KV commands for KV compatible block devices */
+	IOCB_CMD_KVGET = 9,
+	IOCB_CMD_KVPUT = 10,
+	IOCB_CMD_EXIST = 11,
 };
 
 /*

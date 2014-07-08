@@ -589,7 +589,8 @@ static int null_add_dev(void)
 			vsl_dev->ops = &null_vsl_dev_ops;
 			vsl_dev->driver_data = nullb;
 
-			vsl_config_cmd_size(vsl_dev, &nullb->tag_set);
+			vsl_dev->drv_cmd_size = nullb->tag_set.cmd_size;
+			nullb->tag_set.cmd_size += vsl_cmd_size();
 		}
 
 		if (blk_mq_alloc_tag_set(&nullb->tag_set))

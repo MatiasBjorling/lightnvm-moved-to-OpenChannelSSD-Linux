@@ -113,7 +113,7 @@ struct vsl_dev {
 };
 
 /* OpenVSL configuration */
-void vsl_config_cmd_size(struct vsl_dev *, struct blk_mq_tag_set *);
+unsigned int vsl_cmd_size(void);
 
 int vsl_init(struct gendisk *disk, struct vsl_dev *);
 void vsl_exit(struct vsl_dev *);

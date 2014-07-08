@@ -85,18 +85,14 @@ struct nvme_id_ctrl {
 	__u8			vs[1024];
 };
 
-struct lnvme_ctrl {
+struct nvme_lnvm_id_ctrl {
 	__le16			ver_id;
 	__u8			nvm_type;
 	__le16			nchannels;
-} __attribute__((packed));
-
-struct lnvme_id_ctrl {
-	struct lnvme_ctrl	base;
 	__u8			unused[4091];
 } __attribute__((packed));
 
-struct lnvme_chnl {
+struct nvme_lnvm_id_chnl {
 	__le64			queue_size;
 	__le64			gran_read;
 	__le64			gran_write;
@@ -110,10 +106,6 @@ struct lnvme_chnl {
 	__u8			io_sched;
 	__le64			laddr_begin;
 	__le64			laddr_end;
-} __attribute__((packed));
-
-struct lnvme_id_chnl {
-	struct lnvme_chnl	base;
 	__u8			unused[4034];
 } __attribute__((packed));
 
@@ -319,13 +311,13 @@ enum nvme_admin_opcode {
 	nvme_admin_security_recv	= 0x82,
 };
 
-enum lnvme_admin_opcode {
-	lnvme_admin_identify		= 0xc0,
-	lnvme_admin_identify_channel	= 0xc1,
-	lnvme_admin_get_features	= 0xc2,
-	lnvme_admin_set_responsibility	= 0xc3,
-	lnvme_admin_get_l2p_tbl		= 0xc4,
-	lnvme_admin_get_p2l_tbl		= 0xc5,
+enum lnvm_admin_opcode {
+	lnvm_admin_identify		= 0xc0,
+	lnvm_admin_identify_channel	= 0xc1,
+	lnvm_admin_get_features		= 0xc2,
+	lnvm_admin_set_responsibility	= 0xc3,
+	lnvm_admin_get_l2p_tbl		= 0xc4,
+	lnvm_admin_get_p2l_tbl		= 0xc5,
 };
 
 enum {
@@ -451,7 +443,7 @@ struct nvme_format_cmd {
 	__u32			rsvd11[5];
 };
 
-struct lnvme_identify_cmd {
+struct nvme_lnvm_identify {
 	__u8			opcode;
 	__u8			flags;
 	__u16			command_id;
@@ -476,7 +468,7 @@ struct nvme_command {
 		struct nvme_format_cmd format;
 		struct nvme_dsm_cmd dsm;
 		struct nvme_abort_cmd abort;
-		struct lnvme_identify_cmd l_identify;
+		struct nvme_lnvm_identify lnvm_identify;
 	};
 };
 

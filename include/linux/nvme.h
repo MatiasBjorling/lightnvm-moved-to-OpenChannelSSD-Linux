@@ -103,8 +103,8 @@ struct nvme_dev {
 	u16 abort_limit;
 	u8 vwc;
 	u8 initialized;
-	struct lnvme_ctrl *l_ctrl;
-	struct lnvme_chnl *l_chnls;
+	struct nvme_lnvm_id_ctrl *lnvm_ctrl;
+	struct nvme_lnvm_id_chnl *lnvm_chnls;
 };
 
 /*

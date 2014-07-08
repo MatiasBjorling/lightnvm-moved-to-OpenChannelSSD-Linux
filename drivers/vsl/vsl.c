@@ -127,10 +127,9 @@ void vsl_complete_request(struct request *rq)
 	blk_mq_complete_request(rq);
 }
 
-void vsl_config_cmd_size(struct vsl_dev *dev, struct blk_mq_tag_set *tagset)
+unsigned int vsl_cmd_size(void)
 {
-	dev->drv_cmd_size = tagset->cmd_size;
-	tagset->cmd_size += sizeof(struct per_rq_data);
+	return sizeof(struct per_rq_data);
 }
 
 static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)

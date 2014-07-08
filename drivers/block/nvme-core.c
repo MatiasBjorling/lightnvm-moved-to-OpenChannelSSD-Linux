@@ -912,7 +912,7 @@ int lnvme_identify_channel(struct nvme_dev *dev, unsigned nsid, dma_addr_t dma_a
 	struct nvme_command c;
 	memset(&c, 0, sizeof(c));
 	c.common.opcode = lnvme_admin_identify_channel;
-	c.common.nsid = cpu_to_le32(nsid);
+	c.common.nsid = c.common.cdw10[0] = cpu_to_le32(nsid);
 	c.common.prp1 = cpu_to_le64(dma_addr);
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }

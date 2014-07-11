@@ -428,7 +428,6 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	 * no lock for accounting. */
 	ap->io_accesses[rq_data_dir(rq)]++;
 
-	printk("I: %lu -> %lu\n", pb->l_addr, rq->bi_sector);
 /*	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		spin_lock(&pool->waiting_lock);
 		s->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
@@ -495,7 +494,7 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 			struct vsl_addr *trans_map)
 {
 	struct vsl_addr *p;
-	sector_t l_addr = blk_rq_sectors(rq) / NR_PHY_IN_LOG;
+	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
 	vsl_lock_addr(s, l_addr);
 	p = s->type->map_ltop(s, l_addr, is_gc, trans_map, private);
@@ -507,6 +506,10 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
+	/*
+	 * MB: Should be revised. We might need a different hook into device
+	 * driver
+	 */
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
 
 	vsl_submit_rq(s, hctx, rq, p, l_addr, sync, trans_map);

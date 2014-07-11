@@ -11,7 +11,6 @@
 #include <linux/hrtimer.h>
 
 struct nullb_cmd {
-	struct vsl_dev *vsl_dev;
 	struct list_head list;
 	struct llist_node ll_list;
 	struct call_single_data csd;
@@ -383,6 +382,12 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	return __null_queue_rq(rq, hctx->driver_data);
 }
 
+static int null_vsl_queue_rq(struct vsl_dev *vsl_dev,
+				struct blk_mq_hw_ctx *hctx, struct request *rq)
+{
+	return __null_queue_rq(rq, vsl_dev->driver_data);
+}
+
 static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
 {
 	BUG_ON(!nullb);
@@ -390,19 +395,6 @@ static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
 
 	init_waitqueue_head(&nq->wait);
 	nq->queue_depth = nullb->queue_depth;
-}
-
-static int null_vsl_init_hctx(struct vsl_dev *dev, void *data,
-			  unsigned int index)
-{
-	struct nullb *nullb = data;
-	struct nullb_queue *nq = &nullb->queues[index];
-
-	dev->driver_data = nq;
-	null_init_queue(nullb, nq);
-	nullb->nr_queues++;
-
-	return 0;
 }
 
 static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
@@ -424,15 +416,13 @@ static struct vsl_dev_ops null_vsl_dev_ops = {
 	.get_features		= null_vsl_get_features,
 	.set_responsibility	= null_vsl_set_rsp,
 
-	.vsl_queue_rq		= __null_queue_rq,
-	.vsl_init_hctx		= null_vsl_init_hctx,
+	.vsl_queue_rq		= null_vsl_queue_rq,
 };
 
 static struct blk_mq_ops null_vsl_blk_ops = {
 	.queue_rq	= vsl_queue_rq,
 	.map_queue	= blk_mq_map_queue,
-	.init_hctx	= vsl_init_hctx,
-	.init_request	= vsl_init_request,
+	.init_hctx	= null_init_hctx,
 	.complete	= null_softirq_done_fn,
 };
 
@@ -614,7 +604,11 @@ static int null_add_dev(void)
 		init_driver_queues(nullb);
 	}
 
-	nullb->q->queuedata = nullb;
+	if (queue_mode == NULL_Q_VSL)
+		nullb->q->queuedata = vsl_dev;
+	else
+		nullb->q->queuedata = nullb;
+
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, nullb->q);
 
 	disk = nullb->disk = alloc_disk_node(1, home_node);
@@ -635,7 +629,7 @@ static int null_add_dev(void)
 	disk->queue		= nullb->q;
 
 	if (vsl_dev) {
-		vsl_dev->q = vsl_dev->admin_q = nullb->q;
+		vsl_dev->q = nullb->q;
 		vsl_dev->disk = disk;
 
 		if (vsl_init(disk, vsl_dev))

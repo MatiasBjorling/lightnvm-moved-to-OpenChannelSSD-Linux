@@ -335,8 +335,7 @@ struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 
 void vsl_endio(struct request *rq, int err)
 {
-	struct per_rq_data_vsl *pdu_dev = blk_mq_rq_to_pdu(rq);
-	struct vsl_dev *vsl_dev = pdu_dev->dev;
+	struct vsl_dev *vsl_dev = rq->q->queuedata;
 	struct vsl_stor *s = vsl_dev->stor;
 	struct per_rq_data *pb = get_per_rq_data(vsl_dev, rq);
 	struct vsl_ap *ap = pb->ap;
@@ -347,6 +346,7 @@ void vsl_endio(struct request *rq, int err)
 /*	unsigned long diff, dev_wait, total_wait = 0; */
 	unsigned int data_cnt;
 
+	printk("F: %lu\n", pb->l_addr);
 	vsl_unlock_addr(s, pb->l_addr);
 
 	if (rq_data_dir(rq) == WRITE) {
@@ -387,7 +387,6 @@ wait_longer:
 	}
 */
 
-	blk_mq_end_io(rq, err);
 	if (pb->event) {
 		complete(pb->event);
 		/* all submitted requests allocate their own addr,
@@ -406,7 +405,7 @@ static void vsl_rq_zero_end(struct request *rq)
 }
 
 /* remember to lock l_add before calling vsl_submit_rq */
-void vsl_submit_rq(struct vsl_stor *s,
+void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 			struct request *rq,
 			struct vsl_addr *p, sector_t l_addr,
 			struct completion *sync,
@@ -429,6 +428,7 @@ void vsl_submit_rq(struct vsl_stor *s,
 	 * no lock for accounting. */
 	ap->io_accesses[rq_data_dir(rq)]++;
 
+	printk("I: %lu -> %lu\n", pb->l_addr, rq->bi_sector);
 /*	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
 		spin_lock(&pool->waiting_lock);
 		s->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
@@ -452,10 +452,11 @@ void vsl_submit_rq(struct vsl_stor *s,
 		return;
 	}*/
 
-	dev->ops->vsl_queue_rq(rq, dev->driver_data);
+	dev->ops->vsl_queue_rq(dev, hctx, rq);
 }
 
-int vsl_read_rq(struct vsl_stor *s, struct request *rq)
+int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
+							struct request *rq)
 {
 	struct vsl_addr *p;
 	sector_t l_addr;
@@ -482,13 +483,13 @@ int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 		goto finished;
 	}
 
-	vsl_submit_rq(s, rq, p, l_addr, READ, s->trans_map);
+	vsl_submit_rq(s, hctx, rq, p, l_addr, READ, s->trans_map);
 finished:
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
 /* Assumes that l_addr is locked with vsl_lock_addr() */
-int __vsl_write_rq(struct vsl_stor *s,
+int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 			struct request *rq, int is_gc,
 			void *private, struct completion *sync,
 			struct vsl_addr *trans_map)
@@ -508,12 +509,13 @@ int __vsl_write_rq(struct vsl_stor *s,
 
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
 
-	vsl_submit_rq(s, rq, p, l_addr, sync, trans_map);
+	vsl_submit_rq(s, hctx, rq, p, l_addr, sync, trans_map);
 
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-int vsl_write_rq(struct vsl_stor *s, struct request *rq)
+int vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
+							struct request *rq)
 {
-	return __vsl_write_rq(s, rq, 0, NULL, NULL, s->trans_map);
+	return __vsl_write_rq(s, hctx, rq, 0, NULL, NULL, s->trans_map);
 }

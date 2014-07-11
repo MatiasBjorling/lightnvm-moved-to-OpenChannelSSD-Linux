@@ -240,8 +240,10 @@ struct per_rq_data;
 typedef struct vsl_addr *(*vsl_map_ltop_fn)(struct vsl_stor *, sector_t, int,
 						struct vsl_addr *, void *);
 typedef struct vsl_addr *(*vsl_lookup_ltop_fn)(struct vsl_stor *, sector_t);
-typedef int (*vsl_write_rq_fn)(struct vsl_stor *, struct request *);
-typedef int (*vsl_read_rq_fn)(struct vsl_stor *, struct request *);
+typedef int (*vsl_write_rq_fn)(struct vsl_stor *,
+				struct blk_mq_hw_ctx *, struct request *);
+typedef int (*vsl_read_rq_fn)(struct vsl_stor *,
+				struct blk_mq_hw_ctx *, struct request *);
 typedef void (*vsl_alloc_phys_addr_fn)(struct vsl_stor *, struct vsl_block *);
 typedef int (*vsl_ioctl_fn)(struct vsl_stor *,
 					unsigned int cmd, unsigned long arg);
@@ -401,17 +403,18 @@ struct vsl_addr *vsl_get_trans_map(struct vsl_stor *, void *private);
 struct request *vsl_write_init_rq(struct vsl_stor *, struct request *,
 							struct vsl_addr *);
 /* FIXME: Shorten */
-int vsl_write_rq(struct vsl_stor *, struct request *rq);
-int __vsl_write_rq(struct vsl_stor *, struct request *, int, void *,
-			struct completion *, struct vsl_addr *);
-int vsl_read_rq(struct vsl_stor *, struct request *rq);
+int vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *);
+int __vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
+			int, void *, struct completion *, struct vsl_addr *);
+int vsl_read_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *rq);
 
 /* FIXME: Shorten */
 void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 					int is_gc, struct vsl_addr *trans_map);
 /* FIXME: Shorten */
-void vsl_submit_rq(struct vsl_stor *, struct request *, struct vsl_addr *,
-			sector_t, struct completion *, struct vsl_addr *);
+void vsl_submit_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
+		   struct vsl_addr *, sector_t, struct completion *,
+		   struct vsl_addr *);
 
 /*   VSL device related */
 void vsl_block_release(struct kref *);

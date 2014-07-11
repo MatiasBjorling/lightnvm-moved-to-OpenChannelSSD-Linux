@@ -123,8 +123,8 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		spin_unlock(&s->rev_lock);
 
 		init_completion(&sync);
-		vsl_submit_rq(s, src_rq, &src, rev->addr,
-							&sync, rev->trans_map);
+		/*vsl_submit_rq(s, src_rq, &src, rev->addr,
+							&sync, rev->trans_map); */
 		wait_for_completion(&sync);
 
 		blk_put_request(src_rq);
@@ -150,7 +150,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 
 
 		init_completion(&sync);
-		__vsl_write_rq(s, src_rq, 1, NULL, &sync, rev->trans_map);
+	//	__vsl_write_rq(s, hctx, src_rq, 1, NULL, &sync, rev->trans_map);
 		wait_for_completion(&sync);
 
 overwritten:

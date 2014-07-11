@@ -342,11 +342,8 @@ void vsl_endio(struct request *rq, int err)
 	struct vsl_pool *pool = ap->pool;
 	struct vsl_addr *p = pb->addr;
 	struct vsl_block *block = p->block;
-/*	struct timespec end_tv, diff_tv; */
-/*	unsigned long diff, dev_wait, total_wait = 0; */
 	unsigned int data_cnt;
 
-	printk("F: %lu\n", pb->l_addr);
 	vsl_unlock_addr(s, pb->l_addr);
 
 	if (rq_data_dir(rq) == WRITE) {
@@ -357,35 +354,7 @@ void vsl_endio(struct request *rq, int err)
 			list_add_tail(&block->prio, &pool->prio_list);
 			spin_unlock(&pool->lock);
 		}
-
-		/* physical waits if hardware doesn't have a real backend */
-		/*dev_wait = ap->t_write;*/
-	} /*else {
-		dev_wait = ap->t_read;
-	}*/
-
-/*	if (!(s->config.flags & NVM_OPT_NO_WAITS) && dev_wait) {
-wait_longer:
-		getnstimeofday(&end_tv);
-		diff_tv = timespec_sub(end_tv, pb->start_tv);
-		diff = timespec_to_ns(&diff_tv) / 1000;
-		if (dev_wait > diff) {
-			total_wait = dev_wait - diff;
-			WARN_ON(total_wait > 1500);
-			if (total_wait > 10)
-				udelay(5);
-			goto wait_longer;
-		}
-	}*/
-/*
-	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
-		spin_lock(&pool->waiting_lock);
-		pool->cur_bio = NULL;
-		spin_unlock(&pool->waiting_lock);
-
-		queue_work(s->kbiod_wq, &pool->waiting_ws);
 	}
-*/
 
 	if (pb->event) {
 		complete(pb->event);
@@ -414,7 +383,6 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	struct vsl_dev *dev = s->dev;
 	struct vsl_block *block = p->block;
 	struct vsl_ap *ap = block_to_ap(s, block);
-/*	struct vsl_pool *pool = ap->pool;*/
 	struct per_rq_data *pb;
 
 	pb = get_per_rq_data(s->dev, rq);
@@ -427,29 +395,6 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	/* We allow counting to be semi-accurate as theres
 	 * no lock for accounting. */
 	ap->io_accesses[rq_data_dir(rq)]++;
-
-/*	if (s->config.flags & NVM_OPT_POOL_SERIALIZE) {
-		spin_lock(&pool->waiting_lock);
-		s->type->bio_wait_add(&pool->waiting_bios, bio, p->private);
-
-		if (atomic_inc_return(&pool->is_active) != 1) {
-			atomic_dec(&pool->is_active);
-			spin_unlock(&pool->waiting_lock);
-			return;
-		}
-
-		bio = bio_list_peek(&pool->waiting_bios);
-
-		if (!bio) {
-			atomic_dec(&pool->is_active);
-			spin_unlock(&pool->waiting_lock);
-			return;
-		}
-
-		queue_work(s->kbiod_wq, &pool->waiting_ws);
-		spin_unlock(&pool->waiting_lock);
-		return;
-	}*/
 
 	dev->ops->vsl_queue_rq(dev, hctx, rq);
 }

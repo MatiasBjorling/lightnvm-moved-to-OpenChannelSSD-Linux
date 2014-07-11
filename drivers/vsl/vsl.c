@@ -79,7 +79,7 @@ void vsl_unregister_target(struct vsl_target_type *t)
 
 int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 {
-	struct vsl_dev *dev = hctx->driver_data;
+	struct vsl_dev *dev = rq->q->queuedata;
 	struct vsl_stor *s = dev->stor;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
@@ -89,41 +89,22 @@ int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	};
 
 	if (rq_data_dir(rq) == WRITE)
-		return s->type->write_rq(s, rq);
+		return s->type->write_rq(s, hctx, rq);
 	else
-		return s->type->read_rq(s, rq);
-}
-
-int vsl_init_hctx(struct blk_mq_hw_ctx *hctx, void *data, unsigned int index)
-{
-	struct vsl_dev *dev = data;
-
-	hctx->driver_data = dev;
-	return dev->ops->vsl_init_hctx(dev, dev->driver_data, index);
-}
-
-int vsl_init_request(void *data, struct request *rq, unsigned int hctx_idx,
-				unsigned int rq_idx, unsigned int numa_node)
-{
-	struct vsl_dev *dev = data;
-	struct per_rq_data_vsl *rq_dev = blk_mq_rq_to_pdu(rq);
-
-	BUG_ON(!dev);
-
-	/* We assume that the first struct of the pdu is struct vsl_dev. */
-	rq_dev->dev = dev;
-
-	/* TODO: Allow underlying driver to hook in its own init_reques fn */
-	return 0;
+		return s->type->read_rq(s, hctx, rq);
 }
 
 void vsl_end_io(struct request *rq, int error)
 {
+	printk("error: %d\n", error);
 	vsl_endio(rq, error);
+	blk_mq_end_io(rq, error);
 }
 
 void vsl_complete_request(struct request *rq)
 {
+	vsl_endio(rq, 0);
+	printk("completed\n");
 	blk_mq_complete_request(rq);
 }
 
@@ -146,6 +127,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		goto err_pool;
 
 	vsl_for_each_pool(s, pool, i) {
+		printk("i %d\n", i);
 		spin_lock_init(&pool->lock);
 		spin_lock_init(&pool->waiting_lock);
 
@@ -171,7 +153,6 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		if (!pool->blocks)
 			goto err_blocks;
 
-		spin_lock(&pool->lock);
 		pool_for_each_block(pool, block, j) {
 			spin_lock_init(&block->lock);
 			atomic_set(&block->gc_running, 0);
@@ -184,7 +165,6 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 			list_add_tail(&block->list, &pool->free_list);
 			INIT_WORK(&block->ws_gc, vsl_gc_block);
 		}
-		spin_unlock(&pool->lock);
 	}
 
 	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;

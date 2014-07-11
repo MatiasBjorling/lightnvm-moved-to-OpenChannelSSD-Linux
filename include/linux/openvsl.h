@@ -80,8 +80,8 @@ typedef int (vsl_id_fn)(struct vsl_dev *dev, struct vsl_id *);
 typedef int (vsl_id_chnl_fn)(struct vsl_dev *dev, int chnl_num, struct vsl_id_chnl *);
 typedef int (vsl_get_features_fn)(struct vsl_dev *dev, struct vsl_get_features *);
 typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, u8 rsp, u8 val);
-typedef int (vsl_queue_rq_fn)(struct request *, void *);
-typedef int (vsl_init_hctx_fn)(struct vsl_dev *, void *, unsigned int);
+typedef int (vsl_queue_rq_fn)(struct vsl_dev *, struct blk_mq_hw_ctx *hctx,
+							struct request *);
 typedef int (vsl_erase_blk_fn)(struct vsl_dev *, sector_t);
 
 struct vsl_dev_ops {
@@ -92,7 +92,6 @@ struct vsl_dev_ops {
 
 	/* Requests */
 	vsl_queue_rq_fn		*vsl_queue_rq;
-	vsl_init_hctx_fn	*vsl_init_hctx;
 
 	/* LightNVM commands */
 	vsl_erase_blk_fn	*vsl_erase_blk;
@@ -123,11 +122,8 @@ void vsl_free(struct vsl_dev *);
 int vsl_add_sysfs(struct vsl_dev *);
 void vsl_remove_sysfs(struct vsl_dev *);
 
-/* OpenVSL Requests */
+/* OpenVSL blk-mq request management */
 int vsl_queue_rq(struct blk_mq_hw_ctx *, struct request *);
-int vsl_init_hctx(struct blk_mq_hw_ctx *, void *, unsigned int);
-int vsl_init_request(void *, struct request *, unsigned int, unsigned int,
-								unsigned int);
 void vsl_end_io(struct request *, int);
 void vsl_complete_request(struct request *);
 #endif

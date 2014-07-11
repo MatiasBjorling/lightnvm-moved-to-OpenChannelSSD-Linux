@@ -406,7 +406,10 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
 			rq_data_dir(req) ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 	nvme_free_iod(nvmeq->dev, iod);
 
-	blk_mq_complete_request(req);
+	if (nvmeq->dev->oacs & NVME_CTRL_OACS_LIGHTNVM)
+		vsl_complete_request(req);
+	else
+		blk_mq_complete_request(req);
 }
 
 /* length is in bytes.  gfp flags indicates whether we may sleep. */
@@ -568,10 +571,9 @@ static int nvme_submit_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 	return 0;
 }
 
-static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
+static int __nvme_queue_rq(struct nvme_queue *nvmeq, struct nvme_ns *ns,
+							struct request *req)
 {
-	struct nvme_ns *ns = hctx->queue->queuedata;
-	struct nvme_queue *nvmeq = hctx->driver_data;
 	struct nvme_cmd_info *cmd = blk_mq_rq_to_pdu(req);
 	struct nvme_iod *iod;
 	enum dma_data_direction dma_dir;
@@ -652,6 +654,23 @@ static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 	nvme_finish_cmd(nvmeq, req->tag, NULL);
 	nvme_free_iod(nvmeq->dev, iod);
 	return result;
+}
+
+static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
+{
+	struct nvme_ns *ns = hctx->queue->queuedata;
+	struct nvme_queue *nvmeq = hctx->driver_data;
+
+	return __nvme_queue_rq(nvmeq, ns, req);
+}
+
+static int nvme_vsl_queue_rq(struct vsl_dev *vsl_dev,
+				struct blk_mq_hw_ctx *hctx, struct request *req)
+{
+	struct nvme_ns *ns = vsl_dev->driver_data;
+	struct nvme_queue *nvmeq = hctx->driver_data;
+
+	return __nvme_queue_rq(nvmeq, ns, req);
 }
 
 static int nvme_process_cq(struct nvme_queue *nvmeq)
@@ -1333,11 +1352,112 @@ static int nvme_shutdown_ctrl(struct nvme_dev *dev)
 	return 0;
 }
 
+static int nvme_vsl_id(struct vsl_dev *vsl_dev, struct vsl_id *vsl_id)
+{
+	struct nvme_ns *ns = vsl_dev->driver_data;
+	struct nvme_dev *dev = ns->dev;
+	struct pci_dev *pdev = dev->pci_dev;
+	struct nvme_lnvm_id_ctrl *ctrl;
+	void *mem;
+	dma_addr_t dma_addr;
+	unsigned int ret = 0;
+
+	mem = dma_alloc_coherent(&pdev->dev, 4096, &dma_addr, GFP_KERNEL);
+	if (!mem)
+		return -ENOMEM;
+
+	ret = lnvm_identify(dev, dma_addr);
+	if (ret) {
+		ret = -EIO;
+		goto out;
+	}
+
+	ctrl = mem;
+	vsl_id->ver_id = le16_to_cpu(ctrl->ver_id);
+	vsl_id->nvm_type = ctrl->nvm_type;
+	vsl_id->nchannels = le16_to_cpu(ctrl->nchannels);
+ out:
+	dma_free_coherent(&pdev->dev, 4096, mem, dma_addr);
+	return ret;
+}
+
+
+static int nvme_vsl_id_chnl(struct vsl_dev *vsl_dev, int chnl_id,
+							struct vsl_id_chnl *ic)
+{
+	struct nvme_ns *ns = vsl_dev->driver_data;
+	struct nvme_dev *dev = ns->dev;
+	struct pci_dev *pdev = dev->pci_dev;
+	struct nvme_lnvm_id_chnl *chnl;
+	void *mem;
+	dma_addr_t dma_addr;
+	unsigned int ret = 0;
+
+	mem = dma_alloc_coherent(&pdev->dev, 4096, &dma_addr, GFP_KERNEL);
+	if (!mem)
+		return -ENOMEM;
+
+	ret = lnvm_identify_channel(dev, chnl_id, dma_addr);
+	if (ret) {
+		ret = -EIO;
+		goto out;
+	}
+
+	chnl = mem;
+	ic->queue_size = le64_to_cpu(chnl->queue_size);
+	ic->gran_read = le64_to_cpu(chnl->gran_read);
+	ic->gran_write = le64_to_cpu(chnl->gran_write);
+	ic->gran_erase = le64_to_cpu(chnl->gran_erase);
+	ic->oob_size = le64_to_cpu(chnl->oob_size);
+	ic->t_r = le32_to_cpu(chnl->t_r);
+	ic->t_sqr = le32_to_cpu(chnl->t_sqr);
+	ic->t_w = le32_to_cpu(chnl->t_w);
+	ic->t_sqw = le32_to_cpu(chnl->t_sqw);
+	ic->t_e = le32_to_cpu(chnl->t_e);
+	ic->io_sched = chnl->io_sched;
+	ic->laddr_begin = le64_to_cpu(chnl->laddr_begin);
+	ic->laddr_end = le64_to_cpu(chnl->laddr_end);
+ out:
+	dma_free_coherent(&pdev->dev, 4096, mem, dma_addr);
+	return ret;
+}
+
+static int nvme_vsl_get_features(struct vsl_dev *dev,
+						struct vsl_get_features *gf)
+{
+	gf->rsp[0] = (1 << VSL_RSP_L2P);
+	gf->rsp[0] |= (1 << VSL_RSP_P2L);
+	gf->rsp[0] |= (1 << VSL_RSP_GC);
+	return 0;
+}
+
+static int nvme_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
+{
+	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
+}
+
 static struct blk_mq_ops nvme_mq_admin_ops = {
 	.queue_rq	= nvme_admin_queue_rq,
 	.map_queue	= blk_mq_map_queue,
 	.init_hctx	= nvme_admin_init_hctx,
 	.init_request	= nvme_admin_init_request,
+	.timeout	= nvme_timeout,
+};
+
+static struct vsl_dev_ops nvme_vsl_dev_ops = {
+	.identify		= nvme_vsl_id,
+	.identify_channel	= nvme_vsl_id_chnl,
+	.get_features		= nvme_vsl_get_features,
+	.set_responsibility	= nvme_vsl_set_rsp,
+
+	.vsl_queue_rq		= nvme_vsl_queue_rq,
+};
+
+static struct blk_mq_ops nvme_vsl_mq_ops = {
+	.queue_rq	= vsl_queue_rq,
+	.map_queue	= blk_mq_map_queue,
+	.init_hctx	= nvme_init_hctx,
+	.init_request	= nvme_init_request,
 	.timeout	= nvme_timeout,
 };
 
@@ -1807,6 +1927,7 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 			struct nvme_id_ns *id, struct nvme_lba_range_type *rt)
 {
 	struct nvme_ns *ns;
+	struct vsl_dev *vsl_dev;
 	struct gendisk *disk;
 	int node = dev_to_node(&dev->pci_dev->dev);
 	int lbaf;
@@ -1817,16 +1938,31 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	ns = kzalloc_node(sizeof(*ns), GFP_KERNEL, node);
 	if (!ns)
 		return NULL;
+
+	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM) {
+		vsl_dev = vsl_alloc();
+		if (!vsl_dev)
+			goto out_free_ns;
+
+		vsl_dev->ops = &nvme_vsl_dev_ops;
+		vsl_dev->driver_data = ns;
+		vsl_dev->drv_cmd_size = dev->tagset.cmd_size - vsl_cmd_size();
+	}
+
 	ns->queue = blk_mq_init_queue(&dev->tagset);
 	if (!ns->queue)
-		goto out_free_ns;
+		goto out_free_vsl;
 	queue_flag_set_unlocked(QUEUE_FLAG_DEFAULT, ns->queue);
 	queue_flag_set_unlocked(QUEUE_FLAG_NOMERGES, ns->queue);
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, ns->queue);
 	queue_flag_set_unlocked(QUEUE_FLAG_SG_GAPS, ns->queue);
 	queue_flag_clear_unlocked(QUEUE_FLAG_IO_STAT, ns->queue);
 	ns->dev = dev;
-	ns->queue->queuedata = ns;
+
+	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM)
+		ns->queue->queuedata = vsl_dev;
+	else
+		ns->queue->queuedata = ns;
 
 	disk = alloc_disk_node(0, node);
 	if (!disk)
@@ -1848,7 +1984,6 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	disk->major = nvme_major;
 	disk->first_minor = 0;
 	disk->fops = &nvme_fops;
-	disk->private_data = ns;
 	disk->queue = ns->queue;
 	disk->driverfs_dev = &dev->pci_dev->dev;
 	disk->flags = GENHD_FL_EXT_DEVT;
@@ -1858,8 +1993,24 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	if (dev->oncs & NVME_CTRL_ONCS_DSM)
 		nvme_config_discard(ns);
 
-	return ns;
+	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM) {
+		vsl_dev->q = ns->queue;
+		vsl_dev->disk = disk;
 
+		if (vsl_init(disk, vsl_dev))
+			goto out_put_disk;
+
+		ns->vsl_dev = vsl_dev;
+		disk->private_data = vsl_dev;
+	} else {
+		disk->private_data = ns;
+	}
+
+	return ns;
+ out_put_disk:
+	put_disk(disk);
+ out_free_vsl:
+	vsl_free(vsl_dev);
  out_free_queue:
 	blk_cleanup_queue(ns->queue);
  out_free_ns:
@@ -1973,87 +2124,6 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 	return result;
 }
 
-static void lnvm_ctrl_le2cpu(struct nvme_lnvm_id_ctrl *dst,
-						struct nvme_lnvm_id_ctrl *src)
-{
-	dst->ver_id = le16_to_cpu(src->ver_id);
-	dst->nvm_type = src->nvm_type;
-	dst->nchannels = le16_to_cpu(src->nchannels);
-}
-
-static void lnvm_chnl_le2cpu(struct nvme_lnvm_id_chnl *dst,
-						struct nvme_lnvm_id_chnl *src)
-{
-	dst->queue_size = le64_to_cpu(src->queue_size);
-	dst->gran_read = le64_to_cpu(src->gran_read);
-	dst->gran_write = le64_to_cpu(src->gran_write);
-	dst->gran_erase = le64_to_cpu(src->gran_erase);
-	dst->oob_size = le64_to_cpu(src->oob_size);
-	dst->t_r = le32_to_cpu(src->t_r);
-	dst->t_sqr = le32_to_cpu(src->t_sqr);
-	dst->t_w = le32_to_cpu(src->t_w);
-	dst->t_sqw = le32_to_cpu(src->t_sqw);
-	dst->t_e = le32_to_cpu(src->t_e);
-	dst->io_sched = src->io_sched;
-	dst->laddr_begin = le64_to_cpu(src->laddr_begin);
-	dst->laddr_end = le64_to_cpu(src->laddr_end);
-}
-
-static int lnvm_configure(struct nvme_dev *dev)
-{
-	struct pci_dev *pdev = dev->pci_dev;
-	struct nvme_lnvm_id_ctrl *ctrl;
-	void *mem;
-	dma_addr_t dma_addr;
-	unsigned int i;
-	int ret;
-
-	mem = dma_alloc_coherent(&pdev->dev, 4096, &dma_addr, GFP_KERNEL);
-	if (!mem)
-		return -ENOMEM;
-
-	/* returns non-zero if the device isn't lightnvm compat. */
-	ret = lnvm_identify(dev, dma_addr);
-	if (ret) {
-		ret = 0;
-		goto out;
-	}
-
-	dev->lnvm_ctrl = kzalloc(sizeof(struct nvme_lnvm_id_ctrl), GFP_KERNEL);
-	if (!dev->lnvm_ctrl) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	ctrl = mem;
-	lnvm_ctrl_le2cpu(dev->lnvm_ctrl, ctrl);
-
-	dev->lnvm_chnls = kcalloc(dev->lnvm_ctrl->nchannels,
-				sizeof(struct nvme_lnvm_id_chnl), GFP_KERNEL);
-	if (!dev->lnvm_chnls) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	for (i = 0; i < dev->lnvm_ctrl->nchannels; i++) {
-		if (lnvm_identify_channel(dev, i, dma_addr)) {
-			ret = -EIO;
-			goto err;
-		}
-		lnvm_chnl_le2cpu(&dev->lnvm_chnls[i], mem);
-	}
-
-	goto out;
- err:
-	kfree(dev->lnvm_chnls);
-	kfree(dev->lnvm_ctrl);
-	dev->lnvm_chnls = NULL;
-	dev->lnvm_ctrl = NULL;
- out:
-	dma_free_coherent(&pdev->dev, 4096, mem, dma_addr);
-	return ret;
-}
-
 /*
  * Return: error value if an error occurred setting up the queues or calling
  * Identify Device.  0 if these succeeded, even if adding some of the
@@ -2083,18 +2153,10 @@ static int nvme_dev_add(struct nvme_dev *dev)
 		goto out;
 	}
 
-	/*TODO do something intelligent here*/
-	res = lnvm_configure(dev);
-	if (res) {
-		dev_err(&pdev->dev,
-			"Identify LightNVM Controller failed (%d)\n", res);
-		res = -EIO;
-		goto out;
-	}
-
 	ctrl = mem;
 	nn = le32_to_cpup(&ctrl->nn);
 	dev->oncs = le16_to_cpup(&ctrl->oncs);
+	dev->oacs = le16_to_cpup(&ctrl->oacs);
 	dev->abort_limit = ctrl->acl + 1;
 	dev->vwc = ctrl->vwc;
 	memcpy(dev->serial, ctrl->sn, sizeof(ctrl->sn));
@@ -2115,7 +2177,6 @@ static int nvme_dev_add(struct nvme_dev *dev)
 			dev->max_hw_sectors = max_hw_sectors;
 	}
 
-	dev->tagset.ops = &nvme_mq_ops;
 	dev->tagset.nr_hw_queues = dev->online_queues - 1;
 	dev->tagset.timeout = NVME_IO_TIMEOUT;
 	dev->tagset.numa_node = dev_to_node(&dev->pci_dev->dev);
@@ -2123,6 +2184,18 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	dev->tagset.cmd_size = sizeof(struct nvme_cmd_info);
 	dev->tagset.flags = BLK_MQ_F_SHOULD_MERGE;
 	dev->tagset.driver_data = dev;
+	/* LightNVM is actually per ns, but as the tagset is defined with a set
+	 * of operations for the hole device. It currently is either all or
+	 * no lightnvm compatible name-spaces for a given device. This should
+	 * either be moved toward the nvme_queue_rq function, or allow per ns
+	 * queue_rq function to be specified.
+	 */
+	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM) {
+		dev->tagset.ops = &nvme_vsl_mq_ops;
+		dev->tagset.cmd_size += vsl_cmd_size();
+	} else {
+		dev->tagset.ops = &nvme_mq_ops;
+	}
 
 	if (blk_mq_alloc_tag_set(&dev->tagset))
 		goto out;
@@ -2145,8 +2218,11 @@ static int nvme_dev_add(struct nvme_dev *dev)
 		if (ns)
 			list_add_tail(&ns->list, &dev->namespaces);
 	}
-	list_for_each_entry(ns, &dev->namespaces, list)
+	list_for_each_entry(ns, &dev->namespaces, list) {
 		add_disk(ns->disk);
+		if (ns->vsl_dev)
+			vsl_add_sysfs(ns->vsl_dev);
+	}
 	res = 0;
 
  out:
@@ -2481,8 +2557,6 @@ static void nvme_free_dev(struct kref *kref)
 
 	nvme_free_namespaces(dev);
 	blk_mq_free_tag_set(&dev->tagset);
-	kfree(dev->lnvm_chnls);
-	kfree(dev->lnvm_ctrl);
 	kfree(dev->queues);
 	kfree(dev->entry);
 	kfree(dev);

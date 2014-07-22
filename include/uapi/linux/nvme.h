@@ -538,6 +538,7 @@ struct nvme_user_io {
 	__u32	reftag;
 	__u16	apptag;
 	__u16	appmask;
+	__u32	host_lba;
 };
 
 struct nvme_admin_cmd {

@@ -221,6 +221,11 @@ enum nvme_opcode {
 	nvme_cmd_dsm		= 0x09,
 };
 
+enum lnvme_opcode {
+	lnvme_cmd_erase_sync	= 0x80,
+	lnvme_cmd_erase_async	= 0x81,
+};
+
 struct nvme_common_command {
 	__u8			opcode;
 	__u8			flags;

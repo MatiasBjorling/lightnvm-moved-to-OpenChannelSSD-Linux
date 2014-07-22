@@ -1643,6 +1643,36 @@ void nvme_unmap_user_pages(struct nvme_dev *dev, int write,
 		put_page(sg_page(&iod->sg[i]));
 }
 
+static int lnvme_submit_io(struct nvme_ns *ns, struct nvme_user_io *io)
+{
+	struct nvme_command c;
+	struct nvme_dev *dev = ns->dev;
+
+	switch(io->opcode) {
+	case lnvme_cmd_erase_sync:
+	case lnvme_cmd_erase_async:
+		printk("lnvme_submit_io: valid erase commands!\n");
+		break;
+	default:
+		printk("lnvme_submit_io: invalid commands!\n");
+		return -EINVAL;
+	}
+
+	memset(&c, 0, sizeof(c));
+	c.rw.opcode = io->opcode;
+	c.rw.flags = io->flags;
+	c.rw.nsid = cpu_to_le32(ns->ns_id);
+	c.rw.slba = cpu_to_le64(io->slba);
+	c.rw.length = cpu_to_le16(io->nblocks);
+	c.rw.control = cpu_to_le16(io->control);
+	c.rw.dsmgmt = cpu_to_le32(io->dsmgmt);
+	c.rw.reftag = cpu_to_le32(io->reftag);
+	c.rw.apptag = cpu_to_le16(io->apptag);
+	c.rw.appmask = cpu_to_le16(io->appmask);
+
+	return nvme_submit_io_cmd(dev, ns, &c, NULL);
+}
+
 static int nvme_submit_io(struct nvme_ns *ns, struct nvme_user_io __user *uio)
 {
 	struct nvme_dev *dev = ns->dev;
@@ -1669,6 +1699,9 @@ static int nvme_submit_io(struct nvme_ns *ns, struct nvme_user_io __user *uio)
 		iod = nvme_map_user_pages(dev, io.opcode & 1, io.addr, length);
 		break;
 	default:
+		if ( IS_LNVME_DEV(dev) ) {
+			return lnvme_submit_io(ns, &io);
+		}
 		return -EINVAL;
 	}
 

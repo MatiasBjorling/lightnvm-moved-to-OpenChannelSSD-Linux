@@ -142,6 +142,23 @@ struct nvme_cmd_info {
 	struct nvme_queue *nvmeq;
 };
 
+#define IS_LNVME_DEV(dev) ((dev)->l_ctrl != NULL)
+
+static __le32 host_lba(struct nvme_command *cmd)
+{
+	return (cmd->common.cdw10[3] && 0xffffff00) |
+		((cmd->common.cdw10[2] >> 16) & 0xff);
+}
+
+static void host_lba_set(struct nvme_command *cmd, u32 val)
+{
+	__le32 *cdw12 = &cmd->common.cdw10[2];
+	__le32 *cdw13 = &cmd->common.cdw10[3];
+	val = cpu_to_le32(val);
+	*cdw12 = ((*cdw12) & 0xff00ffff) | ((val & 0xff) << 16);
+	*cdw13 = ((*cdw13) & 0xff) | (val & 0xffffff00);
+}
+
 static int nvme_admin_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 				unsigned int hctx_idx)
 {
@@ -1669,6 +1686,7 @@ static int nvme_submit_io(struct nvme_ns *ns, struct nvme_user_io __user *uio)
 	c.rw.reftag = cpu_to_le32(io.reftag);
 	c.rw.apptag = cpu_to_le16(io.apptag);
 	c.rw.appmask = cpu_to_le16(io.appmask);
+	host_lba_set(&c, io.host_lba);
 
 	if (meta_len) {
 		meta_iod = nvme_map_user_pages(dev, io.opcode & 1, io.metadata,

@@ -104,7 +104,6 @@ void vsl_end_io(struct request *rq, int error)
 void vsl_complete_request(struct request *rq)
 {
 	vsl_endio(rq, 0);
-	printk("completed\n");
 	blk_mq_complete_request(rq);
 }
 

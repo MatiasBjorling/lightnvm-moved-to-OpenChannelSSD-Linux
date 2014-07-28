@@ -142,8 +142,6 @@ struct nvme_cmd_info {
 	struct nvme_queue *nvmeq;
 };
 
-#define IS_LNVME_DEV(dev) ((dev)->l_ctrl != NULL)
-
 static __le32 host_lba(struct nvme_command *cmd)
 {
 	return (cmd->common.cdw10[3] && 0xffffff00) |
@@ -1699,9 +1697,8 @@ static int nvme_submit_io(struct nvme_ns *ns, struct nvme_user_io __user *uio)
 		iod = nvme_map_user_pages(dev, io.opcode & 1, io.addr, length);
 		break;
 	default:
-		if ( IS_LNVME_DEV(dev) ) {
+		if (ns->vsl_dev)
 			return lnvme_submit_io(ns, &io);
-		}
 		return -EINVAL;
 	}
 

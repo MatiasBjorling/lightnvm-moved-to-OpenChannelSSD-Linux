@@ -1975,7 +1975,7 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 			struct nvme_id_ns *id, struct nvme_lba_range_type *rt)
 {
 	struct nvme_ns *ns;
-	struct vsl_dev *vsl_dev;
+	struct vsl_dev *vsl_dev = NULL;
 	struct gendisk *disk;
 	int node = dev_to_node(&dev->pci_dev->dev);
 	int lbaf;

@@ -2049,11 +2049,9 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 			goto out_put_disk;
 
 		ns->vsl_dev = vsl_dev;
-		disk->private_data = vsl_dev;
-	} else {
-		disk->private_data = ns;
 	}
 
+	disk->private_data = ns;
 	return ns;
  out_put_disk:
 	put_disk(disk);

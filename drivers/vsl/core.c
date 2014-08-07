@@ -434,7 +434,6 @@ finished:
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-/* Assumes that l_addr is locked with vsl_lock_addr() */
 int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 			struct request *rq, int is_gc,
 			void *private, struct completion *sync,

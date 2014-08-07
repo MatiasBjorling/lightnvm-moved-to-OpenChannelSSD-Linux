@@ -42,10 +42,11 @@ void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 /* requires pool->lock taken */
 inline void vsl_reset_block(struct vsl_block *block)
 {
-	struct vsl_stor *s = block->pool->s;
+	struct vsl_stor *s;
 
 	BUG_ON(!block);
 
+	s = block->pool->s;
 	spin_lock(&block->lock);
 	bitmap_zero(block->invalid_pages, s->nr_host_pages_in_blk);
 	block->ap = NULL;
@@ -69,11 +70,12 @@ inline void vsl_reset_block(struct vsl_block *block)
  */
 struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 {
-	struct vsl_stor *s = pool->s;
+	struct vsl_stor *s;
 	struct vsl_block *block = NULL;
 
 	BUG_ON(!pool);
 
+	s = pool->s;
 	spin_lock(&pool->lock);
 
 	if (list_empty(&pool->free_list)) {

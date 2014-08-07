@@ -64,9 +64,9 @@ inline void vsl_reset_block(struct vsl_block *block)
  * used_list. We then move it back when its free to be used by another append
  * point.
  *
- * The newly acclaimed block is always added to the back of user_list. As we
- * assume that the start of used list is the oldest block, and therefore higher
- * probability of invalidated pages.
+ * The newly claimed block is always added to the back of used_list. As we
+ * assume that the start of used list is the oldest block, and therefore
+ * more likely to contain invalidated pages.
  */
 struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 {
@@ -266,7 +266,7 @@ struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *s, sector_t l_addr,
 	p->addr = gp->addr;
 	p->block = gp->block;
 
-	/* if it has not been written, p is inited to 0. */
+	/* if it has not been written, p is initialized to 0. */
 	if (p->block) {
 		/* during gc, the mapping will be updated accordently. We
 		 * therefore stop submitting new reads to the address, until it

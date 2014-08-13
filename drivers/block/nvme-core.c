@@ -1851,6 +1851,10 @@ static int nvme_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
 							unsigned long arg)
 {
 	struct nvme_ns *ns = bdev->bd_disk->private_data;
+	int ret;
+
+	if (vsl_ioctl(&ret, bdev, mode, cmd, arg))
+		return ret;
 
 	switch (cmd) {
 	case NVME_IOCTL_ID:
@@ -1874,6 +1878,10 @@ static int nvme_compat_ioctl(struct block_device *bdev, fmode_t mode,
 					unsigned int cmd, unsigned long arg)
 {
 	struct nvme_ns *ns = bdev->bd_disk->private_data;
+	int ret;
+
+	if (vsl_compat_ioctl(&ret, bdev, mode, cmd, arg))
+		return ret;
 
 	switch (cmd) {
 	case SG_IO:

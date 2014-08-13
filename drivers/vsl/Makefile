@@ -2,4 +2,4 @@
 # Makefile for OpenVSL.
 #
 
-obj-$(CONFIG_OPENVSL)		+= vsl.o core.o gc.o sysfs.o
+obj-$(CONFIG_OPENVSL)		+= vsl.o core.o gc.o sysfs.o vslkv.o

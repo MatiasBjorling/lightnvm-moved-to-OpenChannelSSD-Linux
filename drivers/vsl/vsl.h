@@ -30,9 +30,6 @@
 #define LTOP_EMPTY -1
 #define LTOP_POISON 0xD3ADB33F
 
-#define VSL_IOC_MAGIC 'O'
-#define VSL_IOCTL_ID _IO(VSL_IOC_MAGIC, 0x40)
-
 /*
  * For now we hardcode some of the configuration for the OpenVSL device that we
  * have. In the future this should be made configurable.
@@ -430,6 +427,9 @@ void vsl_block_erase(struct kref *);
 void vsl_gc_cb(unsigned long data);
 void vsl_gc_collect(struct work_struct *work);
 void vsl_gc_kick(struct vsl_stor *s);
+
+/*kv.c*/
+int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd);
 
 #define vsl_for_each_pool(n, pool, i) \
 		for ((i) = 0, pool = &(n)->pools[0]; \

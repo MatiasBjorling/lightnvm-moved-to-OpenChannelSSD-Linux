@@ -20,6 +20,7 @@
 #include <linux/blk-mq.h>
 #include <linux/list.h>
 #include <linux/sem.h>
+#include <linux/types.h>
 #include <linux/openvsl.h>
 #include "vsl.h"
 
@@ -464,6 +465,29 @@ void vsl_exit(struct vsl_dev *dev)
 
 	pr_info("vsl: successfully unloaded");
 }
+
+int vsl_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
+	unsigned int cmd, unsigned long arg)
+{
+	struct vsl_dev *dev = bdev->bd_queue->queuedata;
+
+	switch(cmd) {
+	case VSL_IOCTL_CMD_KV:
+		return vslkv_unpack(dev, (void __user *)arg);
+	default:
+		return 0;
+	}
+}
+
+#ifdef CONFIG_COMPAT
+int vsl_compat_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
+		unsigned int cmd, unsigned long arg)
+{
+	return vsl_ioctl(ret, bdev, mode, cmd, arg);
+}
+#else
+#define vsl_compat_ioctl	NULL
+#endif
 
 MODULE_DESCRIPTION("OpenVSL");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");

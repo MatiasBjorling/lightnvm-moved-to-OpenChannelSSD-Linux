@@ -551,7 +551,7 @@ static inline void vsl_unlock_addr(struct vsl_stor *s, sector_t l_addr)
 		if (a->l_addr == l_addr)
 			break;
 
-	BUG_ON(!a && a->l_addr != l_addr);
+	BUG_ON(!a || a->l_addr != l_addr);
 
 	a->l_addr = LTOP_POISON;
 

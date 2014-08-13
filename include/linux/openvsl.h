@@ -126,4 +126,26 @@ void vsl_remove_sysfs(struct vsl_dev *);
 int vsl_queue_rq(struct blk_mq_hw_ctx *, struct request *);
 void vsl_end_io(struct request *, int);
 void vsl_complete_request(struct request *);
+
+int vsl_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
+	unsigned int cmd, unsigned long arg);
+int vsl_compat_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
+	unsigned int cmd, unsigned long arg);
+
+struct vsl_cmd_kv {
+	uint8_t	opcode;
+	uint8_t	res[7];
+};
+
+#define VSL_IOC_MAGIC 'O'
+#define VSL_IOCTL_ID 		_IO(VSL_IOC_MAGIC, 0x40)
+#define VSL_IOCTL_CMD_KV	_IOWR(VSL_IOC_MAGIC, 0x50, struct vsl_cmd_kv)
+
+enum VslKvCommands {
+	VSL_KV_GET	= 0x00,
+	VSL_KV_PUT	= 0x01,
+	VSL_KV_UPDATE	= 0x02,
+	VSL_KV_DEL	= 0x04,
+};
+
 #endif

@@ -210,7 +210,7 @@ void vsl_gc_block(struct work_struct *work)
 	 * in parallel to be erased. */
 	vsl_move_valid_pages(s, block);
 	__erase_block(block);
-	vsl_pool_put_block(block);
+	s->type->pool_put_blk(block);
 }
 
 void vsl_gc_kick(struct vsl_stor *s)

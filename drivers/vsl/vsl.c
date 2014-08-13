@@ -39,6 +39,8 @@
 /* Minimum pages needed within a pool */
 #define MIN_POOL_PAGES 16
 
+extern struct vsl_target_type vsl_target_rrpc;
+
 static struct kmem_cache *_addr_cache;
 
 static LIST_HEAD(_targets);
@@ -177,10 +179,10 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		ap->parent = s;
 		ap->pool = &s->pools[i / s->nr_aps_per_pool];
 
-		block = vsl_pool_get_block(ap->pool, 0);
+		block = s->type->pool_get_blk(ap->pool, 0);
 		vsl_set_ap_cur(ap, block);
 		/* Emergency gc block */
-		block = vsl_pool_get_block(ap->pool, 1);
+		block = s->type->pool_get_blk(ap->pool, 1);
 		ap->gc_cur = block;
 
 		ap->t_read = s->config.t_read;
@@ -290,16 +292,6 @@ err_rev_trans_map:
 #define VSL_NUM_POOLS 8
 #define VSL_NUM_BLOCKS 256
 #define VSL_NUM_PAGES 256
-
-/* none target type, round robin, page-based FTL, and cost-based GC */
-static struct vsl_target_type vsl_target_rrpc = {
-	.name			= "rrpc",
-	.version		= {1, 0, 0},
-	.lookup_ltop	= vsl_lookup_ltop,
-	.map_ltop	= vsl_map_ltop_rr,
-	.write_rq	= vsl_write_rq,
-	.read_rq	= vsl_read_rq,
-};
 
 struct vsl_dev *vsl_alloc()
 {

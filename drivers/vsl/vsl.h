@@ -232,6 +232,8 @@ struct vsl_inflight {
 
 struct vsl_stor;
 struct per_rq_data;
+struct vsl_block;
+struct vsl_pool;
 
 /* overridable functionality */
 typedef struct vsl_addr *(*vsl_map_ltop_fn)(struct vsl_stor *, sector_t, int,
@@ -242,6 +244,9 @@ typedef int (*vsl_write_rq_fn)(struct vsl_stor *,
 typedef int (*vsl_read_rq_fn)(struct vsl_stor *,
 				struct blk_mq_hw_ctx *, struct request *);
 typedef void (*vsl_alloc_phys_addr_fn)(struct vsl_stor *, struct vsl_block *);
+typedef struct vsl_block *(*vsl_pool_get_blk_fn)(struct vsl_pool *pool,
+						int is_gc);
+typedef void (*vsl_pool_put_blk_fn)(struct vsl_block *block);
 typedef int (*vsl_ioctl_fn)(struct vsl_stor *,
 					unsigned int cmd, unsigned long arg);
 typedef int (*vsl_init_fn)(struct vsl_stor *);
@@ -267,8 +272,10 @@ struct vsl_target_type {
 	vsl_ioctl_fn ioctl;
 	vsl_endio_fn end_rq;
 
-	/* engine specific overrides */
+	/* engine-specific overrides */
 	vsl_alloc_phys_addr_fn alloc_phys_addr;
+	vsl_pool_get_blk_fn pool_get_blk;
+	vsl_pool_put_blk_fn pool_put_blk;
 
 	/* module specific init/teardown */
 	vsl_init_fn init;
@@ -372,7 +379,6 @@ struct vsl_target_type *find_vsl_target_type(const char *name);
 
 /* core.c */
 /*   Helpers */
-struct vsl_block *vsl_pool_get_block(struct vsl_pool *, int is_gc);
 void invalidate_block_page(struct vsl_stor *, struct vsl_addr *);
 void vsl_set_ap_cur(struct vsl_ap *, struct vsl_block *);
 sector_t vsl_alloc_phys_addr(struct vsl_block *);
@@ -417,7 +423,6 @@ void vsl_submit_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
 void vsl_block_release(struct kref *);
 
 /*   Block maintanence */
-void vsl_pool_put_block(struct vsl_block *);
 void vsl_reset_block(struct vsl_block *);
 
 void vsl_endio(struct request *, int);
@@ -428,8 +433,12 @@ void vsl_gc_cb(unsigned long data);
 void vsl_gc_collect(struct work_struct *work);
 void vsl_gc_kick(struct vsl_stor *s);
 
+/* vsltgt.c */
+struct vsl_block *vsl_pool_get_block(struct vsl_pool *, int is_gc);
+
 /*kv.c*/
 int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd);
+void vsl_pool_put_block(struct vsl_block *);
 
 #define vsl_for_each_pool(n, pool, i) \
 		for ((i) = 0, pool = &(n)->pools[0]; \

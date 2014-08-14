@@ -26,6 +26,14 @@
 #include <linux/openvsl.h>
 #include <linux/blk-mq.h>
 
+#ifdef VSL_DEBUG
+/*Wrap BUG_ON to allow additional checks in debug mode without
+ impacting production performance*/
+#define VSL_ASSERT(c) BUG_ON( (c) == 0 )
+#else
+#define VSL_ASSERT(c)
+#endif //VSL_DEBUG
+
 #define VSL_MSG_PREFIX "vsl"
 #define LTOP_EMPTY -1
 #define LTOP_POISON 0xD3ADB33F

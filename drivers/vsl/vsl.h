@@ -67,10 +67,6 @@
 #define VSL_INFLIGHT_PARTITIONS 8
 #define VSL_INFLIGHT_TAGS 256
 
-#define VSL_WRITE_SUCCESS  0
-#define VSL_WRITE_DEFERRED 1
-#define VSL_WRITE_GC_ABORT 2
-
 #define VSL_OPT_MISC_OFFSET 15
 
 enum ltop_flags {

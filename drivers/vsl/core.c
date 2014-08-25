@@ -1,16 +1,26 @@
 #include <linux/openvsl.h>
 #include "vsl.h"
 
-/* requires lock on the translation map used */
-void invalidate_block_page(struct vsl_stor *s, struct vsl_addr *p)
+inline void __invalidate_block_page(struct vsl_stor *s,
+				struct vsl_addr *p)
 {
 	unsigned int page_offset;
 	struct vsl_block *block = p->block;
 
+	VSL_ASSERT(spin_is_locked(&s->rev_lock));
+	VSL_ASSERT(spin_is_locked(&block->lock));
+
 	page_offset = p->addr % s->nr_host_pages_in_blk;
-	spin_lock(&block->lock);
 	WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 	block->nr_invalid_pages++;
+}
+
+void invalidate_block_page(struct vsl_stor *s, struct vsl_addr *p)
+{
+	struct vsl_block *block = p->block;
+
+	spin_lock(&block->lock);
+	__invalidate_block_page(s, p);
 	spin_unlock(&block->lock);
 }
 

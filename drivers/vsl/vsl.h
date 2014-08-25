@@ -387,6 +387,7 @@ struct vsl_target_type *find_vsl_target_type(const char *name);
 
 /* core.c */
 /*   Helpers */
+void __invalidate_block_page(struct vsl_stor *, struct vsl_addr *);
 void invalidate_block_page(struct vsl_stor *, struct vsl_addr *);
 void vsl_set_ap_cur(struct vsl_ap *, struct vsl_block *);
 sector_t vsl_alloc_phys_addr(struct vsl_block *);

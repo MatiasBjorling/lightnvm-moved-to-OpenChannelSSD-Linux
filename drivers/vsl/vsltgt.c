@@ -13,22 +13,23 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 {
 	struct vsl_stor *s;
 	struct vsl_block *block = NULL;
+	unsigned long flags;
 
 	BUG_ON(!pool);
 
 	s = pool->s;
-	spin_lock(&pool->lock);
+	spin_lock_irqsave(&pool->lock, flags);
 
 	if (list_empty(&pool->free_list)) {
 		pr_err_ratelimited("Pool have no free pages available");
 		__show_pool(pool);
-		spin_unlock(&pool->lock);
-		return NULL;
+		spin_unlock_irqrestore(&pool->lock, flags);
+		goto out;
 	}
 
 	while (!is_gc && pool->nr_free_blocks < s->nr_aps) {
-		spin_unlock(&pool->lock);
-		return NULL;
+		spin_unlock_irqrestore(&pool->lock, flags);
+		goto out;
 	}
 
 	block = list_first_entry(&pool->free_list, struct vsl_block, list);
@@ -36,10 +37,11 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 
 	pool->nr_free_blocks--;
 
-	spin_unlock(&pool->lock);
+	spin_unlock_irqrestore(&pool->lock, flags);
 
 	vsl_reset_block(block);
 
+out:
 	return block;
 }
 
@@ -50,13 +52,14 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 void vsl_pool_put_block(struct vsl_block *block)
 {
 	struct vsl_pool *pool = block->pool;
+	unsigned long flags;
 
-	spin_lock(&pool->lock);
+	spin_lock_irqsave(&pool->lock, flags);
 
 	list_move_tail(&block->list, &pool->free_list);
 	pool->nr_free_blocks++;
 
-	spin_unlock(&pool->lock);
+	spin_unlock_irqrestore(&pool->lock, flags);
 }
 
 struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *s, sector_t l_addr,

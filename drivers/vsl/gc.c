@@ -119,7 +119,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		}
 
 		/* unlocked by vsl_submit_bio vsl_endio */
-		__vsl_lock_addr(s, rev->addr, 1);
+		__vsl_lock_laddr_range(s, 1, rev->addr, 1);
 		spin_unlock(&s->rev_lock);
 
 		init_completion(&sync);
@@ -145,7 +145,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		src_bio->bi_iter.bi_sector = rev->addr * NR_PHY_IN_LOG;
 
 		/* again, unlocked by vsl_endio */
-		__vsl_lock_addr(s, rev->addr, 1);
+		__vsl_lock_laddr_range(s, 1, rev->addr, 1);
 		spin_unlock(&s->rev_lock);
 
 

@@ -224,15 +224,16 @@ struct vsl_config {
 	unsigned int t_erase;
 };
 
-struct vsl_inflight_addr {
+struct vsl_inflight_request {
 	struct list_head list;
-	sector_t l_addr;
+	sector_t l_start;
+	sector_t l_end;
 	int tag;
 };
 
 struct vsl_inflight {
 	spinlock_t lock;
-	struct list_head addrs;
+	struct list_head reqs;
 };
 
 struct vsl_stor;
@@ -352,7 +353,7 @@ struct vsl_stor {
 	 * utilization. */
 	struct percpu_ida free_inflight;
 	struct vsl_inflight inflight_map[VSL_INFLIGHT_PARTITIONS];
-	struct vsl_inflight_addr inflight_addrs[VSL_INFLIGHT_TAGS];
+	struct vsl_inflight_request inflight_addrs[VSL_INFLIGHT_TAGS];
 
 	/* nvm module specific data */
 	void *private;
@@ -518,71 +519,97 @@ static inline void *get_per_rq_data(struct vsl_dev *dev, struct request *rq)
 	return blk_mq_rq_to_pdu(rq) + dev->drv_cmd_size;
 }
 
-static inline struct vsl_inflight *vsl_hash_addr_to_inflight(struct vsl_stor *s,
-								sector_t l_addr)
+static inline struct vsl_inflight *vsl_laddr_to_inflight(struct vsl_stor *s,
+							sector_t l_addr)
 {
-	return &s->inflight_map[l_addr % VSL_INFLIGHT_PARTITIONS];
+	return &s->inflight_map[l_addr % VSL_INFLIGHT_PARTITIONS ];
 }
 
-static inline void __vsl_lock_addr(struct vsl_stor *s, sector_t l_addr,
-								int spin)
+static inline int request_equals(struct vsl_inflight_request *r,
+			sector_t laddr_start, sector_t laddr_end)
 {
-	struct vsl_inflight *inflight = vsl_hash_addr_to_inflight(s, l_addr);
-	struct vsl_inflight_addr *a;
-	int tag = percpu_ida_alloc(&s->free_inflight, __GFP_WAIT);
+	return (r->l_end == laddr_end && r->l_start == laddr_start);
+}
 
-	BUG_ON(l_addr >= s->nr_pages);
+static inline int request_intersects(struct vsl_inflight_request *r,
+				sector_t laddr_start, sector_t laddr_end)
+{
+	return (laddr_end >= r->l_start && laddr_end <= r->l_end) &&
+		(laddr_start >= r->l_start && laddr_start <= r->l_end);
+}
+
+/*TODO: make compatible with multi-block requests*/
+static inline void __vsl_lock_laddr_range(struct vsl_stor *s, int spin,
+				sector_t laddr_start, unsigned nsectors)
+{
+	struct vsl_inflight *inflight;
+	struct vsl_inflight_request *r;
+	sector_t laddr_end = laddr_start + nsectors - 1;
+	int tag;
+	unsigned long flags;
+
+	VSL_ASSERT(nsectors >= 1);
+	BUG_ON(laddr_end >= s->nr_pages);
+	BUG_ON(nsectors > s->nr_pages_per_blk); /*FIXME Not yet supported*/
+
+	inflight = vsl_laddr_to_inflight(s, laddr_start);
+	tag = percpu_ida_alloc(&s->free_inflight, __GFP_WAIT);
 
 retry:
-	spin_lock(&inflight->lock);
+	spin_lock_irqsave(&inflight->lock, flags);
 
-	list_for_each_entry(a, &inflight->addrs, list) {
-		if (a->l_addr == l_addr) {
-			spin_unlock(&inflight->lock);
-			/* TODO: give up control and come back. I haven't found
-			 * a good way to complete the work, when the data the
-			 * complete structure is being reused */
+	list_for_each_entry(r, &inflight->reqs, list) {
+		if (request_intersects(r, laddr_start, laddr_end)) {
+			/*existing, overlapping request, come back later*/
+			spin_unlock_irqrestore(&inflight->lock, flags);
 			if (!spin)
 				schedule();
 			goto retry;
 		}
 	}
 
-	a = &s->inflight_addrs[tag];
+	r = &s->inflight_addrs[tag];
 
-	a->l_addr = l_addr;
-	a->tag = tag;
+	r->l_start = laddr_start;
+	r->l_end = laddr_end;
+	r->tag = tag;
 
-	list_add_tail(&a->list, &inflight->addrs);
-	spin_unlock(&inflight->lock);
+	list_add_tail(&r->list, &inflight->reqs);
+	spin_unlock_irqrestore(&inflight->lock, flags);
 }
 
-static inline void vsl_lock_addr(struct vsl_stor *s, sector_t l_addr)
+static inline void vsl_lock_laddr_range(struct vsl_stor *s, sector_t laddr_start,
+					unsigned int nsectors)
 {
-	__vsl_lock_addr(s, l_addr, 0);
+	return __vsl_lock_laddr_range(s, 0, laddr_start, nsectors);
 }
 
-static inline void vsl_unlock_addr(struct vsl_stor *s, sector_t l_addr)
+static inline void vsl_unlock_laddr_range(struct vsl_stor *s,
+					sector_t laddr_start,
+					unsigned int nsectors)
 {
-	struct vsl_inflight *inflight =
-			vsl_hash_addr_to_inflight(s, l_addr);
-	struct vsl_inflight_addr *a = NULL;
+	struct vsl_inflight *inflight = vsl_laddr_to_inflight(s, laddr_start);
+	struct vsl_inflight_request *r = NULL;
+	sector_t laddr_end = laddr_start + nsectors - 1;
+	unsigned long flags;
 
-	spin_lock(&inflight->lock);
+	VSL_ASSERT(nsectors >= 1);
+	VSL_ASSERT(laddr_end >= laddr_start);
 
-	BUG_ON(list_empty(&inflight->addrs));
+	spin_lock_irqsave(&inflight->lock, flags);
+	BUG_ON(list_empty(&inflight->reqs));
 
-	list_for_each_entry(a, &inflight->addrs, list)
-		if (a->l_addr == l_addr)
+	list_for_each_entry(r, &inflight->reqs, list)
+		if (request_equals(r, laddr_start, laddr_end))
 			break;
 
-	BUG_ON(!a || a->l_addr != l_addr);
+	BUG_ON(!r || !request_equals(r, laddr_start, laddr_end));
 
-	a->l_addr = LTOP_POISON;
+	r->l_start = r->l_end = LTOP_POISON;
 
-	list_del_init(&a->list);
-	spin_unlock(&inflight->lock);
-	percpu_ida_free(&s->free_inflight, a->tag);
+	list_del_init(&r->list);
+	spin_unlock_irqrestore(&inflight->lock, flags);
+	percpu_ida_free(&s->free_inflight, r->tag);
 }
 
 static inline void __show_pool(struct vsl_pool *pool)

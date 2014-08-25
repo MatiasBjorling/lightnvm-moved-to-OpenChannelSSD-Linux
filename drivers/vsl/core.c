@@ -207,13 +207,11 @@ void vsl_endio(struct request *rq, int err)
 	struct vsl_dev *vsl_dev = rq->q->queuedata;
 	struct vsl_stor *s = vsl_dev->stor;
 	struct per_rq_data *pb = get_per_rq_data(vsl_dev, rq);
-	struct vsl_ap *ap = pb->ap;
-	struct vsl_pool *pool = ap->pool;
 	struct vsl_addr *p = pb->addr;
 	struct vsl_block *block = p->block;
 	unsigned int data_cnt;
 
-	vsl_unlock_addr(s, pb->l_addr);
+	vsl_unlock_laddr_range(s, pb->l_addr, 1);
 
 	if (rq_data_dir(rq) == WRITE) {
 		/* maintain data in buffer until block is full */
@@ -275,11 +273,11 @@ int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 
 	l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
-	vsl_lock_addr(s, l_addr);
+	vsl_lock_laddr_range(s, l_addr, 1);
 
 	p = s->type->lookup_ltop(s, l_addr);
 	if (!p) {
-		vsl_unlock_addr(s, l_addr);
+		vsl_unlock_laddr_range(s, l_addr, 1);
 		vsl_gc_kick(s);
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
@@ -291,7 +289,7 @@ int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 		rq->__sector = 0;
 		vsl_rq_zero_end(rq);
 		mempool_free(p, s->addr_pool);
-		vsl_unlock_addr(s, l_addr);
+		vsl_unlock_laddr_range(s, l_addr, 1);
 		goto finished;
 	}
 
@@ -308,11 +306,11 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	struct vsl_addr *p;
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
-	vsl_lock_addr(s, l_addr);
+	vsl_lock_laddr_range(s, l_addr, 1);
 	p = s->type->map_ltop(s, l_addr, is_gc, trans_map, private);
 	if (!p) {
 		BUG_ON(is_gc);
-		vsl_unlock_addr(s, l_addr);
+		vsl_unlock_laddr_range(s, l_addr, 1);
 		vsl_gc_kick(s);
 
 		return BLK_MQ_RQ_QUEUE_BUSY;

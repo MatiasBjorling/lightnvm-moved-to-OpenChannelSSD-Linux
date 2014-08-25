@@ -258,7 +258,7 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 
 	for (i = 0; i < VSL_INFLIGHT_PARTITIONS; i++) {
 		spin_lock_init(&s->inflight_map[i].lock);
-		INIT_LIST_HEAD(&s->inflight_map[i].addrs);
+		INIT_LIST_HEAD(&s->inflight_map[i].reqs);
 	}
 
 	/* simple round-robin strategy */

@@ -167,12 +167,14 @@ void vsl_gc_collect(struct work_struct *work)
 	struct vsl_stor *s = pool->s;
 	struct vsl_block *block;
 	unsigned int nr_blocks_need;
+	unsigned long flags;
 
 	nr_blocks_need = pool->nr_blocks / 10;
 
 	if (nr_blocks_need < s->nr_aps)
 		nr_blocks_need = s->nr_aps;
 
+	local_irq_save(flags);
 	spin_lock(&pool->lock);
 	while (nr_blocks_need > pool->nr_free_blocks &&
 						!list_empty(&pool->prio_list)) {
@@ -195,6 +197,7 @@ void vsl_gc_collect(struct work_struct *work)
 	}
 	spin_unlock(&pool->lock);
 	s->next_collect_pool++;
+	local_irq_restore(flags);
 
 	/* TODO: Hint that request queue can be started again */
 }

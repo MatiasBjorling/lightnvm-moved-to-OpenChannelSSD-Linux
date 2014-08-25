@@ -132,6 +132,7 @@ struct vsl_block {
 	/* Block state handling */
 	atomic_t gc_running;
 	struct work_struct ws_gc;
+	struct work_struct ws_eio;
 };
 
 /* Logical to physical mapping */
@@ -395,6 +396,7 @@ sector_t vsl_alloc_phys_addr_special(struct vsl_block *, vsl_page_special_fn);
 void vsl_delayed_bio_submit(struct work_struct *);
 void vsl_deferred_bio_submit(struct work_struct *);
 void vsl_gc_block(struct work_struct *);
+void vsl_gc_recycle_block(struct work_struct *);
 
 /* Allocation of physical addresses from block
  * when increasing responsibility. */

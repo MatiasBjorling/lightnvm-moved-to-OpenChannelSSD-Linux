@@ -461,6 +461,12 @@ void vsl_pool_put_block(struct vsl_block *);
 		for ((i) = 0, b = &(p)->blocks[0]; \
 			(i) < (p)->nr_blocks; (i)++, b = &(p)->blocks[(i)])
 
+/*FIXME: does not copy p->private, should it ?*/
+#define block_for_each_page(b, p) \
+	for((p)->addr = block_to_addr((b)), (p)->block = (b); \
+		(p)->addr < block_to_addr((b)) \
+			+ (b)->pool->s->nr_host_pages_in_blk; \
+		(p)->addr++)
 static inline struct vsl_ap *get_next_ap(struct vsl_stor *s)
 {
 	return &s->aps[atomic_inc_return(&s->next_write_ap) % s->nr_aps];

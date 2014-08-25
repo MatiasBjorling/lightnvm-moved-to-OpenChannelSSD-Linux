@@ -179,9 +179,7 @@ void vsl_gc_collect(struct work_struct *work)
 		block = block_prio_find_max(pool);
 
 		if (!block->nr_invalid_pages) {
-			spin_unlock(&pool->lock);
-			show_pool(pool);
-			spin_lock(&pool->lock);
+			__show_pool(pool);
 			pr_err("No invalid pages");
 			break;
 		}

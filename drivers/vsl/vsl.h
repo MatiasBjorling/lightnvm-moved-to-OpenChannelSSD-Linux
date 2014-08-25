@@ -573,22 +573,29 @@ static inline void vsl_unlock_addr(struct vsl_stor *s, sector_t l_addr)
 	percpu_ida_free(&s->free_inflight, a->tag);
 }
 
-static inline void show_pool(struct vsl_pool *pool)
+static inline void __show_pool(struct vsl_pool *pool)
 {
 	struct list_head *head, *cur;
 	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
 
-	spin_lock(&pool->lock);
+	VSL_ASSERT(spin_is_locked(&pool->lock));
+
 	list_for_each_safe(head, cur, &pool->free_list)
 		free_cnt++;
 	list_for_each_safe(head, cur, &pool->used_list)
 		used_cnt++;
 	list_for_each_safe(head, cur, &pool->prio_list)
 		prio_cnt++;
-	spin_unlock(&pool->lock);
 
 	pr_err("lightnvm: P-%d F:%u U:%u P:%u",
 					pool->id, free_cnt, used_cnt, prio_cnt);
+}
+
+static inline void show_pool(struct vsl_pool *pool)
+{
+	spin_lock(&pool->lock);
+	__show_pool(pool);
+	spin_unlock(&pool->lock);
 }
 
 static inline void show_all_pools(struct vsl_stor *s)

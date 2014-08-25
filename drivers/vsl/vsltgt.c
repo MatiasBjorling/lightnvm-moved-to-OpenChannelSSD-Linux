@@ -21,8 +21,8 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *pool, int is_gc)
 
 	if (list_empty(&pool->free_list)) {
 		pr_err_ratelimited("Pool have no free pages available");
+		__show_pool(pool);
 		spin_unlock(&pool->lock);
-		show_pool(pool);
 		return NULL;
 	}
 

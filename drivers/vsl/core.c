@@ -209,9 +209,8 @@ void vsl_endio(struct request *rq, int err)
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
 		if (data_cnt == s->nr_host_pages_in_blk) {
-			spin_lock(&pool->lock);
-			list_add_tail(&block->prio, &pool->prio_list);
-			spin_unlock(&pool->lock);
+			/*defer scheduling of the block for recycling*/
+			queue_work(s->kgc_wq, &block->ws_eio);
 		}
 	}
 

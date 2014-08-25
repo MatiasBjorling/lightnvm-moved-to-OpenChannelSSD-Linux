@@ -214,6 +214,17 @@ void vsl_gc_block(struct work_struct *work)
 	s->type->pool_put_blk(block);
 }
 
+void vsl_gc_recycle_block(struct work_struct *work)
+{
+	struct vsl_block *block = container_of(work, struct vsl_block, ws_eio);
+	struct vsl_pool *pool = block->pool;
+
+	spin_lock(&pool->lock);
+	list_add_tail(&block->prio, &pool->prio_list);
+	spin_unlock(&pool->lock);
+}
+
+
 void vsl_gc_kick(struct vsl_stor *s)
 {
 	struct vsl_pool *pool;

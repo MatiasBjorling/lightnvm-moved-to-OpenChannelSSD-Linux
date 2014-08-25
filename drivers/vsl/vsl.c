@@ -166,6 +166,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 
 			list_add_tail(&block->list, &pool->free_list);
 			INIT_WORK(&block->ws_gc, vsl_gc_block);
+			INIT_WORK(&block->ws_eio, vsl_gc_recycle_block);
 		}
 	}
 

@@ -327,6 +327,9 @@ struct vsl_stor {
 	int nr_pages_per_blk;
 	int nr_aps;
 	int nr_aps_per_pool;
+	unsigned gran_blk;
+	unsigned gran_read;
+	unsigned gran_write;
 
 	/* Calculated values */
 	unsigned int nr_host_pages_in_blk;

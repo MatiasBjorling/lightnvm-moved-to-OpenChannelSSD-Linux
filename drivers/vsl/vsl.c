@@ -252,7 +252,7 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 
 	s->sector_size = EXPOSED_PAGE_SIZE;
 
-	/* inflight maintainence */
+	/* inflight maintenance */
 	percpu_ida_init(&s->free_inflight, VSL_INFLIGHT_TAGS);
 
 	for (i = 0; i < VSL_INFLIGHT_PARTITIONS; i++) {
@@ -364,8 +364,13 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	size = vsl_id_chnl.laddr_end - vsl_id_chnl.laddr_begin + 1;
 
-	s->nr_blks_per_pool = size / vsl_id_chnl.gran_erase / vsl_id.nchannels;
-	s->nr_pages_per_blk = vsl_id_chnl.gran_erase / vsl_id_chnl.gran_read;
+	s->gran_blk = vsl_id_chnl.gran_erase;
+	s->gran_read = vsl_id_chnl.gran_read;
+	s->gran_write = vsl_id_chnl.gran_write;
+
+	s->nr_blks_per_pool = size / s->gran_blk / vsl_id.nchannels;
+	/*FIXME: gran_{read,write} may differ */
+	s->nr_pages_per_blk = s->gran_blk / s->gran_read;
 
 	s->nr_aps_per_pool = APS_PER_POOL;
 	/* s->config.flags = VSL_OPT_* */

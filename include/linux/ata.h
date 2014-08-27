@@ -800,6 +800,14 @@ static inline bool ata_id_has_ncq_send_and_recv(const u16 *id)
 	return id[ATA_ID_SATA_CAPABILITY_2] & BIT(6);
 }
 
+static inline bool ata_id_has_lightnvm(const u16 *id)
+{
+	if (ata_id_major_version(id) >= 7 &&
+		(id[ATA_ID_DATA_SET_MGMT] & 0x2))
+			return true;
+	return false;
+}
+
 static inline bool ata_id_has_trim(const u16 *id)
 {
 	if (ata_id_major_version(id) >= 7 &&

@@ -2188,6 +2188,10 @@ static unsigned int ata_scsiop_inq_b0(struct ata_scsi_args *args, u8 *rbuf)
 		put_unaligned_be32(1, &rbuf[28]);
 	}
 
+	if (ata_id_has_lightnvm(args->id))
+		rbuf[44] = 1; /* The VPD has its word 44 set to 1 for
+				 detection */
+
 	return 0;
 }
 

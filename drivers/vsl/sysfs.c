@@ -57,6 +57,7 @@ void vsl_remove_sysfs(struct vsl_dev *vsl)
 	dev = disk_to_dev(vsl->disk);
 	sysfs_remove_group(&dev->kobj, &vsl_attribute_group);
 }
+EXPORT_SYMBOL_GPL(vsl_remove_sysfs);
 
 int vsl_add_sysfs(struct vsl_dev *vsl)
 {
@@ -75,3 +76,4 @@ int vsl_add_sysfs(struct vsl_dev *vsl)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(vsl_add_sysfs);

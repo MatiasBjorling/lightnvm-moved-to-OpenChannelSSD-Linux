@@ -96,6 +96,7 @@ int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	else
 		return s->type->read_rq(s, hctx, rq);
 }
+EXPORT_SYMBOL_GPL(vsl_queue_rq);
 
 void vsl_end_io(struct request *rq, int error)
 {
@@ -103,17 +104,20 @@ void vsl_end_io(struct request *rq, int error)
 	vsl_endio(rq, error);
 	blk_mq_end_io(rq, error);
 }
+EXPORT_SYMBOL_GPL(vsl_end_io);
 
 void vsl_complete_request(struct request *rq)
 {
 	vsl_endio(rq, 0);
 	blk_mq_complete_request(rq);
 }
+EXPORT_SYMBOL_GPL(vsl_complete_request);
 
 unsigned int vsl_cmd_size(void)
 {
 	return sizeof(struct per_rq_data);
 }
+EXPORT_SYMBOL_GPL(vsl_cmd_size);
 
 static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 {
@@ -298,11 +302,13 @@ struct vsl_dev *vsl_alloc()
 {
 	return kmalloc(sizeof(struct vsl_dev), GFP_KERNEL);
 }
+EXPORT_SYMBOL_GPL(vsl_alloc);
 
 void vsl_free(struct vsl_dev *dev)
 {
 	kfree(dev);
 }
+EXPORT_SYMBOL_GPL(vsl_free);
 
 int vsl_queue_init(struct vsl_dev *dev)
 {
@@ -424,6 +430,7 @@ err_map:
 	pr_err("Failed to initialize vsl\n");
 	return -ENOMEM;
 }
+EXPORT_SYMBOL_GPL(vsl_init);
 
 void vsl_exit(struct vsl_dev *dev)
 {

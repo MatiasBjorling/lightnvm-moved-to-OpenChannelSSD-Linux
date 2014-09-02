@@ -123,9 +123,9 @@ int vsl_add_sysfs(struct vsl_dev *);
 void vsl_remove_sysfs(struct vsl_dev *);
 
 /* OpenVSL blk-mq request management */
-int vsl_queue_rq(struct blk_mq_hw_ctx *, struct request *);
-void vsl_end_io(struct request *, int);
-void vsl_complete_request(struct request *);
+int vsl_queue_rq(struct vsl_dev *, struct blk_mq_hw_ctx *, struct request *);
+void vsl_end_io(struct vsl_dev *, struct request *, int);
+void vsl_complete_request(struct vsl_dev *, struct request *);
 
 int vsl_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
 	unsigned int cmd, unsigned long arg);

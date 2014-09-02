@@ -422,7 +422,7 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
 	nvme_free_iod(nvmeq->dev, iod);
 
 	if (nvmeq->dev->oacs & NVME_CTRL_OACS_LIGHTNVM)
-		vsl_complete_request(req);
+		vsl_complete_request(req->q->queuedata, req);
 	else
 		blk_mq_complete_request(req);
 }
@@ -676,14 +676,8 @@ static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 	struct nvme_ns *ns = hctx->queue->queuedata;
 	struct nvme_queue *nvmeq = hctx->driver_data;
 
-	return __nvme_queue_rq(nvmeq, ns, req);
-}
-
-static int nvme_vsl_queue_rq(struct vsl_dev *vsl_dev,
-				struct blk_mq_hw_ctx *hctx, struct request *req)
-{
-	struct nvme_ns *ns = vsl_dev->driver_data;
-	struct nvme_queue *nvmeq = hctx->driver_data;
+	if (ns->vsl_dev)
+		vsl_queue_rq(req->q->queuedata, hctx, req);
 
 	return __nvme_queue_rq(nvmeq, ns, req);
 }
@@ -1464,12 +1458,10 @@ static struct vsl_dev_ops nvme_vsl_dev_ops = {
 	.identify_channel	= nvme_vsl_id_chnl,
 	.get_features		= nvme_vsl_get_features,
 	.set_responsibility	= nvme_vsl_set_rsp,
-
-	.vsl_queue_rq		= nvme_vsl_queue_rq,
 };
 
 static struct blk_mq_ops nvme_vsl_mq_ops = {
-	.queue_rq	= vsl_queue_rq,
+	.queue_rq	= nvme_queue_rq,
 	.map_queue	= blk_mq_map_queue,
 	.init_hctx	= nvme_init_hctx,
 	.init_request	= nvme_init_request,

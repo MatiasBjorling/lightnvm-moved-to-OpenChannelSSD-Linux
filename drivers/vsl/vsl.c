@@ -80,9 +80,9 @@ void vsl_unregister_target(struct vsl_target_type *t)
 	up_write(&_lock);
 }
 
-int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
+int vsl_queue_rq(struct vsl_dev *dev,
+				struct blk_mq_hw_ctx *hctx, struct request *rq)
 {
-	struct vsl_dev *dev = rq->q->queuedata;
 	struct vsl_stor *s = dev->stor;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
@@ -98,17 +98,17 @@ int vsl_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 }
 EXPORT_SYMBOL_GPL(vsl_queue_rq);
 
-void vsl_end_io(struct request *rq, int error)
+void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 {
 	printk("error: %d\n", error);
-	vsl_endio(rq, error);
+	vsl_endio(vsl_dev, rq, error);
 	blk_mq_end_io(rq, error);
 }
 EXPORT_SYMBOL_GPL(vsl_end_io);
 
-void vsl_complete_request(struct request *rq)
+void vsl_complete_request(struct vsl_dev *vsl_dev, struct request *rq)
 {
-	vsl_endio(rq, 0);
+	vsl_endio(vsl_dev, rq, 0);
 	blk_mq_complete_request(rq);
 }
 EXPORT_SYMBOL_GPL(vsl_complete_request);
@@ -334,7 +334,7 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	unsigned long size;
 
-	if (!dev->ops->identify || !dev->ops->vsl_queue_rq)
+	if (!dev->ops->identify)
 		return -EINVAL;
 
 	if (!vsl_queue_init(dev))

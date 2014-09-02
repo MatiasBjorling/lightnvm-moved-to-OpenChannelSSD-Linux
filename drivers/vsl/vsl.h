@@ -436,7 +436,7 @@ void vsl_block_release(struct kref *);
 /*   Block maintanence */
 void vsl_reset_block(struct vsl_block *);
 
-void vsl_endio(struct request *, int);
+void vsl_endio(struct vsl_dev *, struct request *, int);
 
 /* gc.c */
 void vsl_block_erase(struct kref *);

@@ -202,9 +202,8 @@ void vsl_erase_block(struct vsl_block *block)
 	/* Send erase command to device. */
 }
 
-void vsl_endio(struct request *rq, int err)
+void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 {
-	struct vsl_dev *vsl_dev = rq->q->queuedata;
 	struct vsl_stor *s = vsl_dev->stor;
 	struct per_rq_data *pb = get_per_rq_data(vsl_dev, rq);
 	struct vsl_addr *p = pb->addr;
@@ -248,8 +247,13 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 {
 	struct vsl_dev *dev = s->dev;
 	struct vsl_block *block = p->block;
-	struct vsl_ap *ap = block_to_ap(s, block);
+	struct vsl_ap *ap;
 	struct per_rq_data *pb;
+
+	if (block)
+		ap = block_to_ap(s, block);
+	else
+		ap = &s->aps[0];
 
 	pb = get_per_rq_data(s->dev, rq);
 	pb->ap = ap;
@@ -261,8 +265,6 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	/* We allow counting to be semi-accurate as theres
 	 * no lock for accounting. */
 	ap->io_accesses[rq_data_dir(rq)]++;
-
-	dev->ops->vsl_queue_rq(dev, hctx, rq);
 }
 
 int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
@@ -285,16 +287,10 @@ int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	rq->__sector = p->addr * NR_PHY_IN_LOG +
 					(blk_rq_pos(rq) % NR_PHY_IN_LOG);
 
-	if (!p->block) {
+	if (!p->block)
 		rq->__sector = 0;
-		vsl_rq_zero_end(rq);
-		mempool_free(p, s->addr_pool);
-		vsl_unlock_laddr_range(s, l_addr, 1);
-		goto finished;
-	}
 
 	vsl_submit_rq(s, hctx, rq, p, l_addr, READ, s->trans_map);
-finished:
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 

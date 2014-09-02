@@ -187,7 +187,7 @@ static void end_cmd(struct nullb_cmd *cmd)
 		blk_mq_end_io(cmd->rq, 0);
 		return;
 	case NULL_Q_VSL:
-		vsl_end_io(cmd->rq, 0);
+		vsl_end_io(cmd->rq->q->queuedata, cmd->rq, 0);
 		return;
 	case NULL_Q_RQ:
 		INIT_LIST_HEAD(&cmd->rq->queuelist);
@@ -253,7 +253,7 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 			blk_mq_complete_request(cmd->rq);
 			break;
 		case NULL_Q_VSL:
-			vsl_complete_request(cmd->rq);
+			vsl_complete_request(cmd->rq->q->queuedata, cmd->rq);
 			break;
 		case NULL_Q_RQ:
 			blk_complete_request(cmd->rq);
@@ -419,13 +419,6 @@ static struct vsl_dev_ops null_vsl_dev_ops = {
 	.vsl_queue_rq		= null_vsl_queue_rq,
 };
 
-static struct blk_mq_ops null_vsl_blk_ops = {
-	.queue_rq	= vsl_queue_rq,
-	.map_queue	= blk_mq_map_queue,
-	.init_hctx	= null_init_hctx,
-	.complete	= null_softirq_done_fn,
-};
-
 static struct blk_mq_ops null_mq_ops = {
 	.queue_rq       = null_queue_rq,
 	.map_queue      = blk_mq_map_queue,
@@ -572,9 +565,6 @@ static int null_add_dev(void)
 			vsl_dev = vsl_alloc();
 			if (!vsl_dev)
 				goto out_cleanup_queues;
-
-			nullb->tag_set.ops = &null_vsl_blk_ops;
-			nullb->tag_set.driver_data = vsl_dev;
 
 			vsl_dev->ops = &null_vsl_dev_ops;
 			vsl_dev->driver_data = nullb;

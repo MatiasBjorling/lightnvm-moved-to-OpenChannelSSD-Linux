@@ -22,6 +22,7 @@
 #include <linux/hardirq.h>
 #include <linux/scatterlist.h>
 #include <linux/blk-mq.h>
+#include <linux/openvsl.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -1849,6 +1850,13 @@ static int scsi_mq_prep_fn(struct request *req)
 	return scsi_setup_cmnd(sdev, req);
 }
 
+static void scsi_vsl_done(struct scsi_cmnd *cmd)
+{
+	struct scsi_device *sdp = cmd->device;
+	trace_scsi_dispatch_cmd_done(cmd);
+	vsl_complete_request(sdp->vsl_dev, cmd->request);
+}
+
 static void scsi_mq_done(struct scsi_cmnd *cmd)
 {
 	trace_scsi_dispatch_cmd_done(cmd);
@@ -1887,7 +1895,13 @@ static int scsi_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 	}
 
 	scsi_init_cmd_errh(cmd);
-	cmd->scsi_done = scsi_mq_done;
+
+	if (sdev->vsl_dev && req->cmd_type == REQ_TYPE_FS) {
+		vsl_queue_rq(sdev->vsl_dev, hctx, req);
+		cmd->scsi_done = scsi_vsl_done;
+	} else {
+		cmd->scsi_done = scsi_mq_done;
+	}
 
 	reason = scsi_dispatch_cmd(cmd);
 	if (reason) {
@@ -2073,7 +2087,7 @@ int scsi_mq_setup_tags(struct Scsi_Host *shost)
 	shost->tag_set.ops = &scsi_mq_ops;
 	shost->tag_set.nr_hw_queues = 1;
 	shost->tag_set.queue_depth = shost->can_queue;
-	shost->tag_set.cmd_size = cmd_size;
+	shost->tag_set.cmd_size = cmd_size + vsl_cmd_size();
 	shost->tag_set.numa_node = NUMA_NO_NODE;
 	shost->tag_set.flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_SG_MERGE;
 	shost->tag_set.driver_data = shost;

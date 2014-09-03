@@ -133,15 +133,19 @@ int vsl_compat_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
 	unsigned int cmd, unsigned long arg);
 
 struct vsl_cmd_kv {
-	uint8_t	opcode;
-	uint8_t	res[7];
+	u8	opcode;
+	u8	res[3];
+	u16	key_len;
+	u16	val_len;
+	u64	key_addr;
+	u64	val_addr;
 };
 
 enum VslKvCommands {
 	VSL_KV_GET	= 0x00,
 	VSL_KV_PUT	= 0x01,
 	VSL_KV_UPDATE	= 0x02,
-	VSL_KV_DEL	= 0x04,
+	VSL_KV_DEL	= 0x03,
 };
 
 #define VSL_IOCTL_UNHANDLED -1

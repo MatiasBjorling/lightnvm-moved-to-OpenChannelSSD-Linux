@@ -2907,7 +2907,7 @@ static int scsi_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
 	ic->laddr_end = (VSL_SECTORS_PER_PAGE *
 			 VSL_PAGES_PER_BLOCK *
 			 VSL_BLOCK_PER_BANK *
-			 VSL_NUM_BANKS) - 1;
+			 VSL_NUM_BANKS * 1024) - 1;
 	return 0;
 }
 

@@ -242,9 +242,11 @@ struct vsl_block;
 struct vsl_pool;
 
 /* overridable functionality */
-typedef struct vsl_addr *(*vsl_map_ltop_fn)(struct vsl_stor *, sector_t, int,
-						struct vsl_addr *, void *);
 typedef struct vsl_addr *(*vsl_lookup_ltop_fn)(struct vsl_stor *, sector_t);
+typedef struct vsl_addr *(*vsl_map_ltop_page_fn)(struct vsl_stor *, sector_t,
+						int);
+typedef struct vsl_block *(*vsl_map_ltop_block_fn)(struct vsl_stor *, sector_t,
+						int);
 typedef int (*vsl_write_rq_fn)(struct vsl_stor *,
 				struct blk_mq_hw_ctx *, struct request *);
 typedef int (*vsl_read_rq_fn)(struct vsl_stor *,
@@ -267,8 +269,6 @@ struct vsl_target_type {
 	unsigned int version[3];
 	unsigned int per_rq_size;
 
-	vsl_map_ltop_fn map_ltop;
-
 	/* lookup functions */
 	vsl_lookup_ltop_fn lookup_ltop;
 
@@ -282,6 +282,8 @@ struct vsl_target_type {
 	vsl_alloc_phys_addr_fn alloc_phys_addr;
 	vsl_pool_get_blk_fn pool_get_blk;
 	vsl_pool_put_blk_fn pool_put_blk;
+	vsl_map_ltop_page_fn map_page;
+	vsl_map_ltop_block_fn map_block;
 
 	/* module specific init/teardown */
 	vsl_init_fn init;

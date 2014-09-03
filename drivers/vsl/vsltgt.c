@@ -103,22 +103,18 @@ struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *s, sector_t l_addr)
 	return vsl_lookup_ltop_map(s, l_addr, s->trans_map, NULL);
 }
 
-/* Simple round-robin Logical to physical address translation.
- *
- * Retrieve the mapping using the active append point. Then update the ap for
- * the next write to the disk.
- *
- * Returns vsl_addr with the physical address and block. Remember to return to
- * s->addr_cache when request is finished.
- */
-struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
-				 struct vsl_addr *trans_map, void *private)
+static inline unsigned int vsl_rq_sectors(const struct request *rq)
 {
-	struct vsl_ap *ap;
-	struct vsl_addr *p;
+	/*TODO: remove hardcoding, query vsl_dev for setting*/
+	return blk_rq_bytes(rq) >> 9;
+}
 
+static struct vsl_ap *__vsl_get_ap_rr(struct vsl_stor *s, int is_gc)
+{
 	if (!is_gc) {
-		ap = get_next_ap(s);
+		/*TODO: Factor out fnc and dependent vsl_stor var (latter to
+		  custom, per-target struct)*/
+		return get_next_ap(s);
 	} else {
 		/* during GC, we don't care about RR, instead we want to make
 		 * sure that we maintain evenness between the block pools. */
@@ -134,23 +130,100 @@ struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *s, sector_t l_addr, int is_gc,
 				max_free = pool;
 		}
 
-		ap = &s->aps[max_free->id];
+		return &s->aps[max_free->id];
 	}
-
-	spin_lock(&ap->lock);
-	p = vsl_alloc_addr_from_ap(ap, is_gc);
-	spin_unlock(&ap->lock);
-
-	if (p)
-		vsl_update_map(s, l_addr, p, is_gc, trans_map);
-
-	return p;
 }
 
-static inline unsigned int vsl_rq_sectors(const struct request *rq)
+/*read/write RQ has locked addr range already*/
+
+static struct vsl_block *vsl_map_block_rr(struct vsl_stor *s, sector_t l_addr,
+					int is_gc)
 {
-	/*TODO: remove hardcoding, query vsl_dev for setting*/
-	return blk_rq_bytes(rq) >> 9;
+	struct vsl_ap *ap = NULL;
+	struct vsl_block *block;
+
+	ap = __vsl_get_ap_rr(s, is_gc);
+
+	spin_lock(&ap->lock);
+	block = s->type->pool_get_blk(ap->pool, is_gc);
+	spin_unlock(&ap->lock);
+	return block; /*NULL iff. no free blocks*/
+}
+
+/* Simple round-robin Logical to physical address translation.
+ *
+ * Retrieve the mapping using the active append point. Then update the ap for
+ * the next write to the disk.
+ *
+ * Returns vsl_addr with the physical address and block. Remember to return to
+ * s->addr_cache when request is finished.
+ */
+static struct vsl_addr *vsl_map_page_rr(struct vsl_stor *s, sector_t l_addr,
+					int is_gc)
+{
+	struct vsl_ap *ap = NULL;
+	struct vsl_pool *pool = NULL;
+	struct vsl_block *p_block = NULL;
+	sector_t p_addr;
+	struct vsl_addr *p = NULL;
+
+	p = mempool_alloc(s->addr_pool, GFP_ATOMIC);
+	if (!p)
+		return NULL;
+
+	ap = __vsl_get_ap_rr(s, is_gc);
+	pool = ap->pool;
+
+	spin_lock(&ap->lock);
+
+	p_block = ap->cur;
+	p_addr = vsl_alloc_phys_addr(p_block);
+
+	if (p_addr == LTOP_EMPTY) {
+		p_block = s->type->pool_get_blk(pool, 0);
+
+		if (!p_block) {
+			if (is_gc) {
+				p_addr = vsl_alloc_phys_addr(ap->gc_cur);
+				if (p_addr == LTOP_EMPTY) {
+					p_block = s->type->pool_get_blk(pool, 1);
+					ap->gc_cur = p_block;
+					ap->gc_cur->ap = ap;
+					if (!p_block) {
+						show_all_pools(ap->parent);
+						pr_err("vsl: no more blocks");
+						goto finished;
+					} else {
+						p_addr =
+						vsl_alloc_phys_addr(ap->gc_cur);
+					}
+				}
+				p_block = ap->gc_cur;
+			}
+			goto finished;
+		}
+
+		vsl_set_ap_cur(ap, p_block);
+		p_addr = vsl_alloc_phys_addr(p_block);
+	}
+
+finished:
+	if (p_addr == LTOP_EMPTY) {
+		mempool_free(p, s->addr_pool);
+		return NULL;
+	}
+
+	p->addr = p_addr;
+	p->block = p_block;
+	p->private = NULL;
+
+	if (!p_block)
+		WARN_ON(is_gc);
+
+	spin_unlock(&ap->lock);
+	if (p)
+		vsl_update_map(s, l_addr, p, is_gc, s->trans_map);
+	return p;
 }
 
 /* none target type, round robin, page-based FTL, and cost-based GC */
@@ -158,7 +231,8 @@ struct vsl_target_type vsl_target_rrpc = {
 	.name		= "rrpc",
 	.version	= {1, 0, 0},
 	.lookup_ltop	= vsl_lookup_ltop,
-	.map_ltop	= vsl_map_ltop_rr,
+	.map_page	= vsl_map_page_rr,
+	.map_block	= vsl_map_block_rr,
 	.write_rq	= vsl_write_rq,
 	.read_rq	= vsl_read_rq,
 
@@ -171,8 +245,9 @@ struct vsl_target_type vsl_target_rrbc = {
 	.name		= "rrbc",
 	.version	= {1, 0, 0},
 	.lookup_ltop	= vsl_lookup_ltop,
-	/*refactor this to separate out blk and page alloc*/
-	.map_ltop	= vsl_map_ltop_rr,
+	.map_page	= NULL,
+	.map_block	= vsl_map_block_rr,
+
 	/*rewrite these to support multi-page writes*/
 	.write_rq	= vsl_write_rq,
 	.read_rq	= vsl_read_rq,

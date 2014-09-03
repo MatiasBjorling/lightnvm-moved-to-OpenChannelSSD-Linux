@@ -136,67 +136,6 @@ void vsl_set_ap_cur(struct vsl_ap *ap, struct vsl_block *block)
 	ap->cur->ap = ap;
 }
 
-/* requires ap->lock held */
-struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *ap, int is_gc)
-{
-	struct vsl_stor *s = ap->parent;
-	struct vsl_block *p_block;
-	struct vsl_pool *pool;
-	struct vsl_addr *p;
-	sector_t p_addr;
-
-	p = mempool_alloc(s->addr_pool, GFP_ATOMIC);
-	if (!p)
-		return NULL;
-
-	p_block = ap->cur;
-	pool = p_block->pool;
-	p_addr = vsl_alloc_phys_addr(p_block);
-
-	if (p_addr == LTOP_EMPTY) {
-		p_block = s->type->pool_get_blk(pool, 0);
-
-		if (!p_block) {
-			if (is_gc) {
-				p_addr = vsl_alloc_phys_addr(ap->gc_cur);
-				if (p_addr == LTOP_EMPTY) {
-					p_block = s->type->pool_get_blk(pool, 1);
-					ap->gc_cur = p_block;
-					ap->gc_cur->ap = ap;
-					if (!p_block) {
-						show_all_pools(ap->parent);
-						pr_err("vsl: no more blocks");
-						goto finished;
-					} else {
-						p_addr =
-						vsl_alloc_phys_addr(ap->gc_cur);
-					}
-				}
-				p_block = ap->gc_cur;
-			}
-			goto finished;
-		}
-
-		vsl_set_ap_cur(ap, p_block);
-		p_addr = vsl_alloc_phys_addr(p_block);
-	}
-
-finished:
-	if (p_addr == LTOP_EMPTY) {
-		mempool_free(p, s->addr_pool);
-		return NULL;
-	}
-
-	p->addr = p_addr;
-	p->block = p_block;
-	p->private = NULL;
-
-	if (!p_block)
-		WARN_ON(is_gc);
-
-	return p;
-}
-
 void vsl_erase_block(struct vsl_block *block)
 {
 	/* Send erase command to device. */
@@ -303,7 +242,7 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
 	vsl_lock_laddr_range(s, l_addr, 1);
-	p = s->type->map_ltop(s, l_addr, is_gc, trans_map, private);
+	p = s->type->map_page(s, l_addr, is_gc);
 	if (!p) {
 		BUG_ON(is_gc);
 		vsl_unlock_laddr_range(s, l_addr, 1);

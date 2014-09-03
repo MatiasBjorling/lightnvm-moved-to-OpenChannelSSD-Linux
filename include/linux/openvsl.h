@@ -144,6 +144,8 @@ enum VslKvCommands {
 	VSL_KV_DEL	= 0x04,
 };
 
+#define VSL_IOCTL_UNHANDLED -1
+
 #define VSL_IOC_MAGIC 'O'
 #define VSL_IOCTL_ID		_IO(VSL_IOC_MAGIC, 0x40)
 #define VSL_IOCTL_KV		_IOWR(VSL_IOC_MAGIC, 0x50, struct vsl_cmd_kv)

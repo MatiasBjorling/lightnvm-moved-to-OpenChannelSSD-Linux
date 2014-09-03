@@ -480,25 +480,24 @@ void vsl_exit(struct vsl_dev *dev)
 	pr_info("vsl: successfully unloaded");
 }
 
-int vsl_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
-	unsigned int cmd, unsigned long arg)
+int vsl_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
+							unsigned long arg)
 {
 	struct vsl_dev *dev = bdev->bd_queue->queuedata;
 
 	switch(cmd) {
 	case VSL_IOCTL_KV:
-		*ret = vslkv_unpack(dev, (void __user *)arg);
-		return 0;
+		return vslkv_unpack(dev, (void __user *)arg);
 	default:
-		return VSL_IOCTL_UNHANDLED;
+		return -ENOTTY;
 	}
 }
 
 #ifdef CONFIG_COMPAT
-int vsl_compat_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
+int vsl_compat_ioctl(struct block_device *bdev, fmode_t mode,
 		unsigned int cmd, unsigned long arg)
 {
-	return vsl_ioctl(ret, bdev, mode, cmd, arg);
+	return vsl_ioctl(bdev, mode, cmd, arg);
 }
 #else
 #define vsl_compat_ioctl	NULL

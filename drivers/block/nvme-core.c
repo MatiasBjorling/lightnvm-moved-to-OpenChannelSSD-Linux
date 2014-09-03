@@ -1844,9 +1844,11 @@ static int nvme_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
 {
 	struct nvme_ns *ns = bdev->bd_disk->private_data;
 	int ret;
-	if (ns->vsl_dev &&
-		vsl_ioctl(&ret, bdev, mode, cmd, arg) != VSL_IOCTL_UNHANDLED) {
-		return ret;
+
+	if (ns->vsl_dev) {
+		ret = vsl_ioctl(bdev, mode, cmd, arg);
+		if (ret != -ENOTTY)
+			return ret;
 	}
 
 	switch (cmd) {
@@ -1873,9 +1875,10 @@ static int nvme_compat_ioctl(struct block_device *bdev, fmode_t mode,
 	struct nvme_ns *ns = bdev->bd_disk->private_data;
 	int ret;
 
-	if (ns->vsl_dev &&
-		vsl_ioctl(&ret, bdev, mode, cmd, arg) != VSL_IOCTL_UNHANDLED) {
-		return ret;
+	if (ns->vsl_dev) {
+		ret = vsl_ioctl(bdev, mode, cmd, arg);
+		if (ret != -ENOTTY)
+			return ret;
 	}
 
 	switch (cmd) {

@@ -1327,6 +1327,12 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
 	if (!scsi_block_when_processing_errors(sdp) || !error)
 		goto out;
 
+	if (sdp->vsl_dev) {
+		error = vsl_ioctl(bdev, mode, cmd, arg);
+		if (error != -ENOTTY)
+			goto out;
+	}
+
 	/*
 	 * Send SCSI addressing ioctls directly to mid level, send other
 	 * ioctls to block level and then onto mid level if they can't be

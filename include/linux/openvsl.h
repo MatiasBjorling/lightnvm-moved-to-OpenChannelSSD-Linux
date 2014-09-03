@@ -127,10 +127,8 @@ int vsl_queue_rq(struct vsl_dev *, struct blk_mq_hw_ctx *, struct request *);
 void vsl_end_io(struct vsl_dev *, struct request *, int);
 void vsl_complete_request(struct vsl_dev *, struct request *);
 
-int vsl_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
-	unsigned int cmd, unsigned long arg);
-int vsl_compat_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
-	unsigned int cmd, unsigned long arg);
+int vsl_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd, unsigned long arg);
+int vsl_compat_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd, unsigned long arg);
 
 struct vsl_cmd_kv {
 	u8	opcode;
@@ -147,8 +145,6 @@ enum VslKvCommands {
 	VSL_KV_UPDATE	= 0x02,
 	VSL_KV_DEL	= 0x03,
 };
-
-#define VSL_IOCTL_UNHANDLED -1
 
 #define VSL_IOC_MAGIC 'O'
 #define VSL_IOCTL_ID		_IO(VSL_IOC_MAGIC, 0x40)

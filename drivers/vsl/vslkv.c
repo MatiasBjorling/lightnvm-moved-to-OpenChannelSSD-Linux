@@ -209,8 +209,7 @@ int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd)
 	printk("copying key '%llx', len: %u\n", cmd.key_addr, (u32)cmd.key_len);
 	key = cpy_val(cmd.key_addr, cmd.key_len);
 	if (IS_ERR(key)) {
-		printk("failed to cpy cmd key\n");
-		ret = PTR_ERR(key);
+		ret = -ENOMEM;
 		goto out;
 	}
 

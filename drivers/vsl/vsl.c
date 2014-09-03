@@ -349,25 +349,24 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	s = kzalloc(sizeof(struct vsl_stor), GFP_KERNEL);
 	if (!s) {
-		kmem_cache_destroy(_addr_cache);
-		return -ENOMEM;
+		goto err;
 	}
 
 	/* hardcode initialization values until user-space util is avail. */
 	s->type = &vsl_target_rrpc;
 	if (!s->type) {
 		pr_err("vsl: %s doesn't exist.", VSL_TARGET_TYPE);
-		goto err_map;
+		goto err_target;
 	}
 
 	if (dev->ops->identify(dev, &vsl_id))
-		goto err_map;
+		goto err_target;
 
 	s->nr_pools = vsl_id.nchannels;
 
 	/* TODO: We're limited to the same setup for each channel */
 	if (dev->ops->identify_channel(dev, 0, &vsl_id_chnl))
-		goto err_map;
+		goto err_target;
 
 	size = vsl_id_chnl.laddr_end - vsl_id_chnl.laddr_begin + 1;
 
@@ -391,6 +390,11 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 						* s->nr_pages_per_blk;
 	s->nr_pages = s->nr_pools * s->nr_blks_per_pool
 						* s->nr_host_pages_in_blk;
+
+	if (vslkv_init(s, size)) {
+		printk("vslkv_init failed\n");
+		goto err_target;
+	}
 
 	/* Invalid pages in block bitmap is preallocated. */
 	if (s->nr_host_pages_in_blk >
@@ -425,8 +429,13 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	dev->stor = s;
 	return 0;
+
 err_map:
+	vslkv_exit(s);
+err_target:
 	kfree(s);
+err:
+	kmem_cache_destroy(_addr_cache);
 	pr_err("Failed to initialize vsl\n");
 	return -ENOMEM;
 }
@@ -477,10 +486,11 @@ int vsl_ioctl(int *ret, struct block_device *bdev, fmode_t mode,
 	struct vsl_dev *dev = bdev->bd_queue->queuedata;
 
 	switch(cmd) {
-	case VSL_IOCTL_CMD_KV:
-		return vslkv_unpack(dev, (void __user *)arg);
-	default:
+	case VSL_IOCTL_KV:
+		*ret = vslkv_unpack(dev, (void __user *)arg);
 		return 0;
+	default:
+		return VSL_IOCTL_UNHANDLED;
 	}
 }
 

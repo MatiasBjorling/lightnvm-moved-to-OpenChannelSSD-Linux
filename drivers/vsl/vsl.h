@@ -293,6 +293,17 @@ struct vsl_target_type {
 	struct list_head list;
 };
 
+struct vslkv_entry {
+	u64 hash[2];
+	u64 blk_addr;
+};
+
+struct vslkv_tbl {
+	u8 bucket_len;
+	u64 tbl_len;
+	struct vslkv_entry **entries;
+};
+
 /* Main structure */
 struct vsl_stor {
 	struct vsl_dev *dev;
@@ -364,6 +375,8 @@ struct vsl_stor {
 	struct vsl_config config;
 
 	unsigned int per_rq_offset;
+
+	struct vslkv_tbl kv_tbl;
 };
 
 struct per_rq_data_vsl {
@@ -449,9 +462,12 @@ void vsl_gc_kick(struct vsl_stor *s);
 /* vsltgt.c */
 struct vsl_block *vsl_pool_get_block(struct vsl_pool *, int is_gc);
 
-/*kv.c*/
+/*vslkv.c*/
+int vslkv_init(struct vsl_stor *s, unsigned long size);
+void vslkv_exit(struct vsl_stor *s);
 int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd);
 void vsl_pool_put_block(struct vsl_block *);
+
 
 #define vsl_for_each_pool(n, pool, i) \
 		for ((i) = 0, pool = &(n)->pools[0]; \

@@ -587,14 +587,19 @@ static int nvme_submit_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 	return 0;
 }
 
-static int __nvme_queue_rq(struct nvme_queue *nvmeq, struct nvme_ns *ns,
-							struct request *req)
+static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 {
+	struct nvme_ns *ns = hctx->queue->queuedata;
+	struct nvme_queue *nvmeq = hctx->driver_data;
 	struct nvme_cmd_info *cmd = blk_mq_rq_to_pdu(req);
 	struct nvme_iod *iod;
 	enum dma_data_direction dma_dir;
 	int psegs = req->nr_phys_segments;
 	int result = BLK_MQ_RQ_QUEUE_BUSY;
+
+	if (ns->vsl_dev)
+		vsl_queue_rq(ns->vsl_dev, hctx, req);
+
 	/*
 	 * Requeued IO has already been prepped
 	 */
@@ -671,17 +676,6 @@ static int __nvme_queue_rq(struct nvme_queue *nvmeq, struct nvme_ns *ns,
 	nvme_finish_cmd(nvmeq, req->tag, NULL);
 	nvme_free_iod(nvmeq->dev, iod);
 	return result;
-}
-
-static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
-{
-	struct nvme_ns *ns = hctx->queue->queuedata;
-	struct nvme_queue *nvmeq = hctx->driver_data;
-
-	if (ns->vsl_dev)
-		vsl_queue_rq(ns->vsl_dev, hctx, req);
-
-	return __nvme_queue_rq(nvmeq, ns, req);
 }
 
 static int nvme_process_cq(struct nvme_queue *nvmeq)

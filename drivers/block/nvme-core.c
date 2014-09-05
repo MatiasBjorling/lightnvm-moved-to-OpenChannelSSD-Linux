@@ -140,6 +140,7 @@ struct nvme_cmd_info {
 	void *ctx;
 	int aborted;
 	struct nvme_queue *nvmeq;
+	struct nvme_ns *ns;
 };
 
 static __le32 host_lba(struct nvme_command *cmd)
@@ -422,7 +423,7 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
 	nvme_free_iod(nvmeq->dev, iod);
 
 	if (nvmeq->dev->oacs & NVME_CTRL_OACS_LIGHTNVM)
-		vsl_complete_request(req->q->queuedata, req);
+		vsl_complete_request(cmd_rq->ns->vsl_dev, req);
 	else
 		blk_mq_complete_request(req);
 }
@@ -609,6 +610,7 @@ static int __nvme_queue_rq(struct nvme_queue *nvmeq, struct nvme_ns *ns,
 	req->special = iod;
 
 	nvme_set_info(cmd, iod, req_completion);
+	cmd->ns = ns;
 
 	if (req->cmd_flags & REQ_DISCARD) {
 		void *range;
@@ -677,7 +679,7 @@ static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 	struct nvme_queue *nvmeq = hctx->driver_data;
 
 	if (ns->vsl_dev)
-		vsl_queue_rq(req->q->queuedata, hctx, req);
+		vsl_queue_rq(ns->vsl_dev, hctx, req);
 
 	return __nvme_queue_rq(nvmeq, ns, req);
 }
@@ -2013,10 +2015,7 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	queue_flag_clear_unlocked(QUEUE_FLAG_IO_STAT, ns->queue);
 	ns->dev = dev;
 
-	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM)
-		ns->queue->queuedata = vsl_dev;
-	else
-		ns->queue->queuedata = ns;
+	ns->queue->queuedata = ns;
 
 	disk = alloc_disk_node(0, node);
 	if (!disk)

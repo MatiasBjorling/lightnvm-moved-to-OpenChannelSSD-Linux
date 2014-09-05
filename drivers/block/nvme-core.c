@@ -1456,14 +1456,6 @@ static struct vsl_dev_ops nvme_vsl_dev_ops = {
 	.set_responsibility	= nvme_vsl_set_rsp,
 };
 
-static struct blk_mq_ops nvme_vsl_mq_ops = {
-	.queue_rq	= nvme_queue_rq,
-	.map_queue	= blk_mq_map_queue,
-	.init_hctx	= nvme_init_hctx,
-	.init_request	= nvme_init_request,
-	.timeout	= nvme_timeout,
-};
-
 static struct blk_mq_ops nvme_mq_ops = {
 	.queue_rq	= nvme_queue_rq,
 	.map_queue	= blk_mq_map_queue,
@@ -2235,12 +2227,10 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	 * either be moved toward the nvme_queue_rq function, or allow per ns
 	 * queue_rq function to be specified.
 	 */
-	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM) {
-		dev->tagset.ops = &nvme_vsl_mq_ops;
+	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM)
 		dev->tagset.cmd_size += vsl_cmd_size();
-	} else {
+	else
 		dev->tagset.ops = &nvme_mq_ops;
-	}
 
 	if (blk_mq_alloc_tag_set(&dev->tagset))
 		goto out;

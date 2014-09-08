@@ -26,6 +26,7 @@ struct nullb_queue {
 	unsigned int queue_depth;
 
 	struct nullb_cmd *cmds;
+	struct nullb *nb;
 };
 
 struct nullb {
@@ -187,7 +188,7 @@ static void end_cmd(struct nullb_cmd *cmd)
 		blk_mq_end_io(cmd->rq, 0);
 		return;
 	case NULL_Q_VSL:
-		vsl_end_io(cmd->rq->q->queuedata, cmd->rq, 0);
+		vsl_end_io(cmd->nq->nb->vsl_dev, cmd->rq, 0);
 		return;
 	case NULL_Q_RQ:
 		INIT_LIST_HEAD(&cmd->rq->queuelist);
@@ -249,11 +250,9 @@ static inline void null_handle_cmd(struct nullb_cmd *cmd)
 	switch (irqmode) {
 	case NULL_IRQ_SOFTIRQ:
 		switch (queue_mode)  {
+		case NULL_Q_VSL:
 		case NULL_Q_MQ:
 			blk_mq_complete_request(cmd->rq);
-			break;
-		case NULL_Q_VSL:
-			vsl_complete_request(cmd->rq->q->queuedata, cmd->rq);
 			break;
 		case NULL_Q_RQ:
 			blk_complete_request(cmd->rq);
@@ -366,26 +365,20 @@ static int null_vsl_set_rsp(struct vsl_dev *dev, u8 rsp, u8 val)
 	return VSL_RID_NOT_CHANGEABLE | VSL_DNR;
 }
 
-static int __null_queue_rq(struct request *rq, void *driver_data)
+static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 {
 	struct nullb_cmd *cmd = blk_mq_rq_to_pdu(rq);
+	struct nullb_queue *nq = hctx->driver_data;
+	struct vsl_dev *vsl_dev = nq->nb->vsl_dev;
+
+	if (vsl_dev)
+		vsl_queue_rq(vsl_dev, hctx, rq);
 
 	cmd->rq = rq;
-	cmd->nq = driver_data;
+	cmd->nq = nq;
 
 	null_handle_cmd(cmd);
 	return BLK_MQ_RQ_QUEUE_OK;
-}
-
-static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
-{
-	return __null_queue_rq(rq, hctx->driver_data);
-}
-
-static int null_vsl_queue_rq(struct vsl_dev *vsl_dev,
-				struct blk_mq_hw_ctx *hctx, struct request *rq)
-{
-	return __null_queue_rq(rq, vsl_dev->driver_data);
 }
 
 static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
@@ -395,6 +388,7 @@ static void null_init_queue(struct nullb *nullb, struct nullb_queue *nq)
 
 	init_waitqueue_head(&nq->wait);
 	nq->queue_depth = nullb->queue_depth;
+	nq->nb = nullb;
 }
 
 static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
@@ -415,8 +409,6 @@ static struct vsl_dev_ops null_vsl_dev_ops = {
 	.identify_channel	= null_vsl_id_chnl,
 	.get_features		= null_vsl_get_features,
 	.set_responsibility	= null_vsl_set_rsp,
-
-	.vsl_queue_rq		= null_vsl_queue_rq,
 };
 
 static struct blk_mq_ops null_mq_ops = {
@@ -594,10 +586,7 @@ static int null_add_dev(void)
 		init_driver_queues(nullb);
 	}
 
-	if (queue_mode == NULL_Q_VSL)
-		nullb->q->queuedata = vsl_dev;
-	else
-		nullb->q->queuedata = nullb;
+	nullb->q->queuedata = nullb;
 
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, nullb->q);
 
@@ -617,6 +606,7 @@ static int null_add_dev(void)
 	disk->first_minor	= nullb->index;
 	disk->fops		= &null_fops;
 	disk->queue		= nullb->q;
+	disk->private_data = nullb;
 
 	if (vsl_dev) {
 		vsl_dev->q = nullb->q;
@@ -626,9 +616,7 @@ static int null_add_dev(void)
 			goto out_cleanup_vsl;
 
 		nullb->vsl_dev = vsl_dev;
-		disk->private_data = vsl_dev;
-	} else
-		disk->private_data = nullb;
+	}
 
 	mutex_lock(&lock);
 	list_add_tail(&nullb->list, &nullb_list);

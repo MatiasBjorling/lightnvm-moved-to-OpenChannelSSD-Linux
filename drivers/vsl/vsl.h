@@ -25,6 +25,7 @@
 #include <linux/percpu_ida.h>
 #include <linux/openvsl.h>
 #include <linux/blk-mq.h>
+#include <linux/slab.h>
 
 #ifdef VSL_DEBUG
 /*Wrap BUG_ON to allow additional checks in debug mode without
@@ -293,15 +294,24 @@ struct vsl_target_type {
 	struct list_head list;
 };
 
-struct vslkv_entry {
-	u64 hash[2];
-	u64 blk_addr;
-};
+struct kv_entry;
 
 struct vslkv_tbl {
 	u8 bucket_len;
 	u64 tbl_len;
-	struct vslkv_entry **entries;
+	struct kv_entry *entries;
+	spinlock_t lock;
+};
+
+struct vslkv_inflight {
+	struct kmem_cache *entry_pool;
+	spinlock_t lock;
+	struct list_head list;
+};
+
+struct vslkv {
+	struct vslkv_tbl tbl;
+	struct vslkv_inflight inflight;
 };
 
 /* Main structure */
@@ -376,7 +386,7 @@ struct vsl_stor {
 
 	unsigned int per_rq_offset;
 
-	struct vslkv_tbl kv_tbl;
+	struct vslkv kv;
 };
 
 struct per_rq_data_vsl {

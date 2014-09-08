@@ -212,6 +212,9 @@ int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	struct vsl_addr *p;
 	sector_t l_addr;
 
+	if (rq->cmd_flags && REQ_VSL_PASSTHRU)
+		return BLK_MQ_RQ_QUEUE_OK;
+
 	l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
 	vsl_lock_laddr_range(s, l_addr, 1);
@@ -265,5 +268,8 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 int vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 							struct request *rq)
 {
-	return __vsl_write_rq(s, hctx, rq, 0, NULL, NULL, s->trans_map);
+	if (rq->cmd_flags && REQ_VSL_PASSTHRU)
+		return BLK_MQ_RQ_QUEUE_OK;
+	else
+		return __vsl_write_rq(s, hctx, rq, 0, NULL, NULL, s->trans_map);
 }

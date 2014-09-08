@@ -108,7 +108,9 @@ EXPORT_SYMBOL_GPL(vsl_end_io);
 
 void vsl_complete_request(struct vsl_dev *vsl_dev, struct request *rq)
 {
-	vsl_endio(vsl_dev, rq, 0);
+	if ( (rq->cmd_flags && REQ_VSL_PASSTHRU) == 0)
+		vsl_endio(vsl_dev, rq, 0);
+
 	blk_mq_complete_request(rq);
 }
 EXPORT_SYMBOL_GPL(vsl_complete_request);

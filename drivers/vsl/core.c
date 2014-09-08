@@ -171,12 +171,6 @@ void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 	mempool_free(pb->addr, s->addr_pool);
 }
 
-static void vsl_rq_zero_end(struct request *rq)
-{
-	/* TODO: fill rq with zeroes */
-	blk_mq_end_io(rq, 0);
-}
-
 /* remember to lock l_add before calling vsl_submit_rq */
 void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 			struct request *rq,
@@ -184,7 +178,6 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 			struct completion *sync,
 			struct vsl_addr *trans_map)
 {
-	struct vsl_dev *dev = s->dev;
 	struct vsl_block *block = p->block;
 	struct vsl_ap *ap;
 	struct per_rq_data *pb;
@@ -211,9 +204,6 @@ int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 {
 	struct vsl_addr *p;
 	sector_t l_addr;
-
-	if (rq->cmd_flags && REQ_VSL_PASSTHRU)
-		return BLK_MQ_RQ_QUEUE_OK;
 
 	l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
@@ -268,8 +258,5 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 int vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 							struct request *rq)
 {
-	if (rq->cmd_flags && REQ_VSL_PASSTHRU)
-		return BLK_MQ_RQ_QUEUE_OK;
-	else
-		return __vsl_write_rq(s, hctx, rq, 0, NULL, NULL, s->trans_map);
+	return __vsl_write_rq(s, hctx, rq, 0, NULL, NULL, s->trans_map);
 }

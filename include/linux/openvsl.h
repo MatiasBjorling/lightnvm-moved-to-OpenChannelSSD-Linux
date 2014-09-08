@@ -98,16 +98,16 @@ struct vsl_dev_ops {
 };
 
 struct vsl_dev {
-	struct request_queue *q;
-
 	struct vsl_dev_ops *ops;
 
+	struct request_queue *q;
 	struct gendisk *disk;
 
 	unsigned int drv_cmd_size;
 
 	void *driver_data;
 	void *stor;
+
 };
 
 /* OpenVSL configuration */

@@ -85,6 +85,9 @@ int vsl_queue_rq(struct vsl_dev *dev,
 {
 	struct vsl_stor *s = dev->stor;
 
+	if (rq->cmd_flags & REQ_VSL_PASSTHRU)
+		return BLK_MQ_RQ_QUEUE_OK;
+
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
 		pr_err("Illegal vsl address: %ld",
 						blk_rq_pos(rq) / NR_PHY_IN_LOG);
@@ -100,15 +103,16 @@ EXPORT_SYMBOL_GPL(vsl_queue_rq);
 
 void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 {
-	printk("error: %d\n", error);
-	vsl_endio(vsl_dev, rq, error);
+	if (!(rq->cmd_flags & REQ_VSL_PASSTHRU))
+		vsl_endio(vsl_dev, rq, error);
+
 	blk_mq_end_io(rq, error);
 }
 EXPORT_SYMBOL_GPL(vsl_end_io);
 
 void vsl_complete_request(struct vsl_dev *vsl_dev, struct request *rq)
 {
-	if ( (rq->cmd_flags && REQ_VSL_PASSTHRU) == 0)
+	if (!(rq->cmd_flags & REQ_VSL_PASSTHRU))
 		vsl_endio(vsl_dev, rq, 0);
 
 	blk_mq_complete_request(rq);

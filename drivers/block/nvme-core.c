@@ -143,12 +143,6 @@ struct nvme_cmd_info {
 	struct nvme_ns *ns;
 };
 
-static __le32 host_lba(struct nvme_command *cmd)
-{
-	return (cmd->common.cdw10[3] && 0xffffff00) |
-		((cmd->common.cdw10[2] >> 16) & 0xff);
-}
-
 static void host_lba_set(struct nvme_command *cmd, u32 val)
 {
 	__le32 *cdw12 = &cmd->common.cdw10[2];

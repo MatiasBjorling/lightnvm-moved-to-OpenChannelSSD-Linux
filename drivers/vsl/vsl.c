@@ -486,11 +486,9 @@ void vsl_exit(struct vsl_dev *dev)
 	pr_info("vsl: successfully unloaded");
 }
 
-int vsl_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
+int vsl_ioctl(struct vsl_dev *dev, fmode_t mode, unsigned int cmd,
 							unsigned long arg)
 {
-	struct vsl_dev *dev = bdev->bd_queue->queuedata;
-
 	switch(cmd) {
 	case VSL_IOCTL_KV:
 		return vslkv_unpack(dev, (void __user *)arg);

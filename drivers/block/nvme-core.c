@@ -574,6 +574,8 @@ static int nvme_submit_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 	cmnd->rw.control = cpu_to_le16(control);
 	cmnd->rw.dsmgmt = cpu_to_le32(dsmgmt);
 
+	printk("nvme_submit_iod: rw.length(%u) blk_rq_bytes(%u), ns->lba_shift(%d)\n",
+		(unsigned)le16_to_cpu(cmnd->rw.length),  blk_rq_bytes(req), ns->lba_shift);
 	if (++nvmeq->sq_tail == nvmeq->q_depth)
 		nvmeq->sq_tail = 0;
 	writel(nvmeq->sq_tail, nvmeq->q_db);
@@ -1828,7 +1830,7 @@ static int nvme_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
 	int ret;
 
 	if (ns->vsl_dev) {
-		ret = vsl_ioctl(bdev, mode, cmd, arg);
+		ret = vsl_ioctl(ns->vsl_dev, mode, cmd, arg);
 		if (ret != -ENOTTY)
 			return ret;
 	}
@@ -1858,7 +1860,7 @@ static int nvme_compat_ioctl(struct block_device *bdev, fmode_t mode,
 	int ret;
 
 	if (ns->vsl_dev) {
-		ret = vsl_ioctl(bdev, mode, cmd, arg);
+		ret = vsl_ioctl(ns->vsl_dev, mode, cmd, arg);
 		if (ret != -ENOTTY)
 			return ret;
 	}

@@ -2023,6 +2023,7 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	disk->major = nvme_major;
 	disk->first_minor = 0;
 	disk->fops = &nvme_fops;
+	disk->private_data = ns;
 	disk->queue = ns->queue;
 	disk->driverfs_dev = &dev->pci_dev->dev;
 	disk->flags = GENHD_FL_EXT_DEVT;
@@ -2042,7 +2043,6 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 		ns->vsl_dev = vsl_dev;
 	}
 
-	disk->private_data = ns;
 	return ns;
  out_put_disk:
 	put_disk(disk);
@@ -2214,6 +2214,7 @@ static int nvme_dev_add(struct nvme_dev *dev)
 			dev->max_hw_sectors = max_hw_sectors;
 	}
 
+	dev->tagset.ops = &nvme_mq_ops;
 	dev->tagset.nr_hw_queues = dev->online_queues - 1;
 	dev->tagset.timeout = NVME_IO_TIMEOUT;
 	dev->tagset.numa_node = dev_to_node(&dev->pci_dev->dev);
@@ -2221,6 +2222,7 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	dev->tagset.cmd_size = sizeof(struct nvme_cmd_info);
 	dev->tagset.flags = BLK_MQ_F_SHOULD_MERGE;
 	dev->tagset.driver_data = dev;
+
 	/* LightNVM is actually per ns, but as the tagset is defined with a set
 	 * of operations for the hole device. It currently is either all or
 	 * no lightnvm compatible name-spaces for a given device. This should
@@ -2229,8 +2231,6 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	 */
 	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM)
 		dev->tagset.cmd_size += vsl_cmd_size();
-	else
-		dev->tagset.ops = &nvme_mq_ops;
 
 	if (blk_mq_alloc_tag_set(&dev->tagset))
 		goto out;

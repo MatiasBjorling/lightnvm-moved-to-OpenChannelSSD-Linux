@@ -99,7 +99,6 @@ struct vsl_dev_ops {
 
 struct vsl_dev {
 	struct request_queue *q;
-	struct request_queue *admin_q;
 
 	struct vsl_dev_ops *ops;
 

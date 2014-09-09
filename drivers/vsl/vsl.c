@@ -400,7 +400,7 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	if (s->nr_pages_per_blk >
 				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
-		pr_err("lightnvm: Num. pages per block too high");
+		pr_err("lightnvm: Num. pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
 		return -EINVAL;
 	}
 

@@ -334,6 +334,81 @@ static struct vsl_block *acquire_block(struct vsl_stor *s)
 	return block;
 }
 
+
+#define err(msg) printk("ERR<%s>%d: " msg, __FUNCTION__, __LINE__)
+static void __dump_mem(void *b, unsigned len)
+{
+	unsigned *c = (unsigned *)b;
+	unsigned off, end;
+
+	end = len / sizeof(unsigned);
+	for (off = 0; off < end; off++, c++)
+		printk("%x", (unsigned)*c);
+	printk("\n");
+}
+#define dump_mem(p, len) \
+	printk("\nDUMP " #len " bytes OF '" #p "'\n"); \
+	__dump_mem((p), (len));
+
+static int verify_io(struct vsl_stor *s, u64 blk_addr)
+{
+	struct vsl_dev *dev = s->dev;
+	struct bio *b;
+	struct request *rq;
+	struct request_queue *q = dev->q;
+	struct page *page;
+	void *buf;
+	int ret = 0;
+
+	printk("verify_io begin------------------\n");
+	b = bio_alloc(GFP_NOIO, 1);
+	if (!b) {
+		err("couldn't alloc bio\n");
+		ret = -ENOMEM;
+		goto err_balloc;
+	}
+	b->bi_iter.bi_sector = blk_addr * NR_PHY_IN_LOG;
+	
+	page = mempool_alloc(s->page_pool, GFP_NOIO);
+	if (!page) {
+		err("failed to allocate a page!!!\n");
+		goto err_palloc;
+	}
+	buf = page_address(page);
+	memset(buf, 0x00, EXPOSED_PAGE_SIZE);
+	dump_mem(buf, 100);
+
+	ret = bio_add_pc_page(q, b, page, EXPOSED_PAGE_SIZE, 0);
+	if (ret == 0) {
+		err("failed to add anything\n");
+		goto err_addpage;
+	}
+
+	rq = blk_mq_alloc_request(q, READ, GFP_KERNEL, false);
+	if (!rq) {
+		mempool_free(page, s->page_pool);
+		err("failed to alloc verify io request\n");
+		goto err_rqalloc;
+	}
+	blk_init_request_from_bio(rq, b);
+
+	ret = blk_execute_rq(q, dev->disk, rq, 0);
+	if (ret) {
+		err("-EIO from blk_execute_rq\n");
+	}
+	buf = page_address(page);
+	dump_mem(buf, 100);
+
+	blk_put_request(rq);
+err_rqalloc:
+	mempool_free(page, s->page_pool);
+err_addpage:
+err_palloc:
+	bio_put(b);
+err_balloc:
+	return ret;
+}
+
 static int update_entry(struct vsl_stor *s, struct vsl_cmd_kv *cmd,
 			struct kv_entry *entry, int existing)
 {
@@ -352,6 +427,8 @@ static int update_entry(struct vsl_stor *s, struct vsl_cmd_kv *cmd,
 	}
 	printk("[KV> found a block to write to...! (pre do_io)(id:%u,%lu)\n", block->id, block_to_addr(block));
 	printk("[KV> update_entry, cmd->val_addr [u64](%llx)\n", cmd->val_addr);
+	//printk("[KV>verify_io **PRE UPDATE**\n");
+	//verify_io(s, block_to_addr(block));
 	ret = do_io(s, WRITE, block_to_addr(block),
 		(void __user *)cmd->val_addr, cmd->val_len);
 	if (ret) {
@@ -364,6 +441,8 @@ static int update_entry(struct vsl_stor *s, struct vsl_cmd_kv *cmd,
 		s->type->pool_put_blk(entry->blk);
 	entry->blk = block;
 
+	printk("[KV>verify_io **POST UPDATE**\n");
+	verify_io(s, block_to_addr(block));
 	return ret;
 io_err:
 	s->type->pool_put_blk(block);

@@ -250,7 +250,6 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 		p->addr = LTOP_EMPTY;
 
 		r->addr = 0xDEADBEEF;
-		r->trans_map = NULL;
 	}
 
 	s->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);

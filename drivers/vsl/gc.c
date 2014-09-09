@@ -150,7 +150,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 
 
 		init_completion(&sync);
-	//	__vsl_write_rq(s, hctx, src_rq, 1, NULL, &sync, rev->trans_map);
+	//	__vsl_write_rq(s, hctx, src_rq, 1, &sync);
 		wait_for_completion(&sync);
 
 overwritten:

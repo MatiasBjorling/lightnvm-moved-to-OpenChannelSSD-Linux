@@ -25,7 +25,7 @@ void invalidate_block_page(struct vsl_stor *s, struct vsl_addr *p)
 }
 
 void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
-					int is_gc, struct vsl_addr *trans_map)
+					int is_gc)
 {
 	struct vsl_addr *gp;
 	struct vsl_rev_addr *rev;
@@ -33,7 +33,7 @@ void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 	BUG_ON(l_addr >= s->nr_pages);
 	BUG_ON(p->addr >= s->nr_pages);
 
-	gp = &trans_map[l_addr];
+	gp = &s->trans_map[l_addr];
 	spin_lock(&s->rev_lock);
 	if (gp->block) {
 		invalidate_block_page(s, gp);
@@ -45,7 +45,6 @@ void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 
 	rev = &s->rev_trans_map[p->addr];
 	rev->addr = l_addr;
-	rev->trans_map = trans_map;
 	spin_unlock(&s->rev_lock);
 }
 
@@ -175,8 +174,7 @@ void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 			struct request *rq,
 			struct vsl_addr *p, sector_t l_addr,
-			struct completion *sync,
-			struct vsl_addr *trans_map)
+			struct completion *sync)
 {
 	struct vsl_block *block = p->block;
 	struct vsl_ap *ap;
@@ -192,7 +190,6 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	pb->addr = p;
 	pb->l_addr = l_addr;
 	pb->event = sync;
-	pb->trans_map = trans_map;
 
 	/* We allow counting to be semi-accurate as theres
 	 * no lock for accounting. */
@@ -222,14 +219,12 @@ int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	if (!p->block)
 		rq->__sector = 0;
 
-	vsl_submit_rq(s, hctx, rq, p, l_addr, READ, s->trans_map);
+	vsl_submit_rq(s, hctx, rq, p, l_addr, READ);
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
 int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
-			struct request *rq, int is_gc,
-			void *private, struct completion *sync,
-			struct vsl_addr *trans_map)
+		   struct request *rq, int is_gc, struct completion *sync)
 {
 	struct vsl_addr *p;
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
@@ -250,7 +245,7 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	 */
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
 
-	vsl_submit_rq(s, hctx, rq, p, l_addr, sync, trans_map);
+	vsl_submit_rq(s, hctx, rq, p, l_addr, sync);
 
 	return BLK_MQ_RQ_QUEUE_OK;
 }
@@ -258,5 +253,5 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 int vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 							struct request *rq)
 {
-	return __vsl_write_rq(s, hctx, rq, 0, NULL, NULL, s->trans_map);
+	return __vsl_write_rq(s, hctx, rq, 0, NULL);
 }

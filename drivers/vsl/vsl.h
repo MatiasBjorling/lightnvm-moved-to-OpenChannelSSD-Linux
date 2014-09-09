@@ -146,7 +146,6 @@ struct vsl_addr {
 /* Physical to logical mapping */
 struct vsl_rev_addr {
 	sector_t addr;
-	struct vsl_addr *trans_map;
 };
 
 struct vsl_pool {
@@ -403,7 +402,6 @@ struct per_rq_data {
 	struct completion *event;
 	unsigned int sync;
 	unsigned int ref_put;
-	struct vsl_addr *trans_map;
 };
 
 /* reg.c */
@@ -428,8 +426,6 @@ void vsl_gc_recycle_block(struct work_struct *);
 /* Allocation of physical addresses from block
  * when increasing responsibility. */
 struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *, int is_gc);
-struct vsl_addr *vsl_map_ltop_rr(struct vsl_stor *, sector_t l_addr, int is_gc,
-				struct vsl_addr *trans_map, void *private);
 
 /* Gets an address from nvm->trans_map and take a ref count on the blocks usage.
  * Remember to put later */
@@ -444,16 +440,14 @@ struct request *vsl_write_init_rq(struct vsl_stor *, struct request *,
 /* FIXME: Shorten */
 int vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *);
 int __vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
-			int, void *, struct completion *, struct vsl_addr *);
+			int, struct completion *);
 int vsl_read_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *rq);
 
 /* FIXME: Shorten */
-void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
-					int is_gc, struct vsl_addr *trans_map);
+void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p, int is_gc);
 /* FIXME: Shorten */
 void vsl_submit_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
-		   struct vsl_addr *, sector_t, struct completion *,
-		   struct vsl_addr *);
+		   struct vsl_addr *, sector_t, struct completion *);
 
 /*   VSL device related */
 void vsl_block_release(struct kref *);

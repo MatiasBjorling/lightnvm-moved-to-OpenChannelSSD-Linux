@@ -222,7 +222,7 @@ finished:
 
 	spin_unlock(&ap->lock);
 	if (p)
-		vsl_update_map(s, l_addr, p, is_gc, s->trans_map);
+		vsl_update_map(s, l_addr, p, is_gc);
 	return p;
 }
 

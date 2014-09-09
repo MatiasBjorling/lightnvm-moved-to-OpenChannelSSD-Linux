@@ -31,6 +31,8 @@ void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 	struct vsl_rev_addr *rev;
 
 	BUG_ON(l_addr >= s->nr_pages);
+	if (p->addr >= s->nr_pages)
+		printk("%lu %lu\n", p->addr, s->nr_pages);
 	BUG_ON(p->addr >= s->nr_pages);
 
 	gp = &s->trans_map[l_addr];
@@ -82,9 +84,10 @@ static sector_t __vsl_alloc_phys_addr(struct vsl_block *block)
 	if (block_is_full(block))
 		goto out;
 
-	block->next_page++;
 
 	addr = block_to_addr(block) + block->next_page;
+
+	block->next_page++;
 
 	if (s->type->alloc_phys_addr)
 		s->type->alloc_phys_addr(s, block);

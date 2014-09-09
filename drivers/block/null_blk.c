@@ -370,14 +370,19 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	struct nullb_cmd *cmd = blk_mq_rq_to_pdu(rq);
 	struct nullb_queue *nq = hctx->driver_data;
 	struct vsl_dev *vsl_dev = nq->nb->vsl_dev;
+	int ret = BLK_MQ_RQ_QUEUE_OK;
 
-	if (vsl_dev)
-		vsl_queue_rq(vsl_dev, rq);
+	if (vsl_dev) {
+		ret = vsl_queue_rq(vsl_dev, rq);
+		if (ret)
+			goto out;
+	}
 
 	cmd->rq = rq;
 	cmd->nq = nq;
 
 	null_handle_cmd(cmd);
+out:
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 

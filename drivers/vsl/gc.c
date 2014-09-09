@@ -93,7 +93,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		page = mempool_alloc(s->page_pool, GFP_NOIO);
 
 		/* TODO: may fail whem EXP_PG_SIZE > PAGE_SIZE */
-		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
+		bio_add_pc_page(q, src_bio, page, EXPOSED_PAGE_SIZE, 0);
 
 		src_rq = blk_mq_alloc_request(q, READ, GFP_KERNEL, false);
 		if (!src_rq) {

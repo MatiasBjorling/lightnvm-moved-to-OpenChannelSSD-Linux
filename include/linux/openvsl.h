@@ -126,7 +126,7 @@ void vsl_end_io(struct vsl_dev *, struct request *, int);
 void vsl_complete_request(struct vsl_dev *, struct request *);
 
 int vsl_ioctl(struct vsl_dev *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
-int vsl_compat_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd, unsigned long arg);
+int vsl_compat_ioctl(struct vsl_dev *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
 
 struct vsl_cmd_kv {
 	u8	opcode;

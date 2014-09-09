@@ -382,11 +382,8 @@ enum {
 struct per_rq_data {
 	struct vsl_ap *ap;
 	struct vsl_addr *addr;
-
 	sector_t l_addr;
 	unsigned int flags;
-
-	unsigned int ref_put;
 };
 
 /* reg.c */

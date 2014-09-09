@@ -80,8 +80,7 @@ void vsl_unregister_target(struct vsl_target_type *t)
 	up_write(&_lock);
 }
 
-int vsl_queue_rq(struct vsl_dev *dev,
-				struct blk_mq_hw_ctx *hctx, struct request *rq)
+int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 {
 	struct vsl_stor *s = dev->stor;
 
@@ -95,9 +94,9 @@ int vsl_queue_rq(struct vsl_dev *dev,
 	};
 
 	if (rq_data_dir(rq) == WRITE)
-		return s->type->write_rq(s, hctx, rq);
+		return s->type->write_rq(s, rq);
 	else
-		return s->type->read_rq(s, hctx, rq);
+		return s->type->read_rq(s, rq);
 }
 EXPORT_SYMBOL_GPL(vsl_queue_rq);
 

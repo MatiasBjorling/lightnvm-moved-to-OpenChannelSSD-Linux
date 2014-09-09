@@ -80,8 +80,7 @@ typedef int (vsl_id_fn)(struct vsl_dev *dev, struct vsl_id *);
 typedef int (vsl_id_chnl_fn)(struct vsl_dev *dev, int chnl_num, struct vsl_id_chnl *);
 typedef int (vsl_get_features_fn)(struct vsl_dev *dev, struct vsl_get_features *);
 typedef int (vsl_set_rsp_fn)(struct vsl_dev *dev, u8 rsp, u8 val);
-typedef int (vsl_queue_rq_fn)(struct vsl_dev *, struct blk_mq_hw_ctx *hctx,
-							struct request *);
+typedef int (vsl_queue_rq_fn)(struct vsl_dev *, struct request *);
 typedef int (vsl_erase_blk_fn)(struct vsl_dev *, sector_t);
 
 struct vsl_dev_ops {
@@ -122,7 +121,7 @@ int vsl_add_sysfs(struct vsl_dev *);
 void vsl_remove_sysfs(struct vsl_dev *);
 
 /* OpenVSL blk-mq request management */
-int vsl_queue_rq(struct vsl_dev *, struct blk_mq_hw_ctx *, struct request *);
+int vsl_queue_rq(struct vsl_dev *, struct request *);
 void vsl_end_io(struct vsl_dev *, struct request *, int);
 void vsl_complete_request(struct vsl_dev *, struct request *);
 

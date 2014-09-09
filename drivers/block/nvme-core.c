@@ -574,8 +574,6 @@ static int nvme_submit_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 	cmnd->rw.control = cpu_to_le16(control);
 	cmnd->rw.dsmgmt = cpu_to_le32(dsmgmt);
 
-	printk("nvme_submit_iod: rw.length(%u) blk_rq_bytes(%u), ns->lba_shift(%d)\n",
-		(unsigned)le16_to_cpu(cmnd->rw.length),  blk_rq_bytes(req), ns->lba_shift);
 	if (++nvmeq->sq_tail == nvmeq->q_depth)
 		nvmeq->sq_tail = 0;
 	writel(nvmeq->sq_tail, nvmeq->q_db);
@@ -594,7 +592,7 @@ static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 	int result = BLK_MQ_RQ_QUEUE_BUSY;
 
 	if (ns->vsl_dev)
-		vsl_queue_rq(ns->vsl_dev, hctx, req);
+		vsl_queue_rq(ns->vsl_dev, req);
 
 	/*
 	 * Requeued IO has already been prepped

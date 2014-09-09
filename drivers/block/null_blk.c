@@ -372,7 +372,7 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	struct vsl_dev *vsl_dev = nq->nb->vsl_dev;
 
 	if (vsl_dev)
-		vsl_queue_rq(vsl_dev, hctx, rq);
+		vsl_queue_rq(vsl_dev, rq);
 
 	cmd->rq = rq;
 	cmd->nq = nq;

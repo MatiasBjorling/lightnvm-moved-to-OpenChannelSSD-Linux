@@ -67,7 +67,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 	struct vsl_addr src;
 	struct vsl_rev_addr *rev;
 	struct bio *src_bio;
-	struct request *src_rq, *dst_rq;
+	struct request *src_rq, *dst_rq = NULL;
 	struct page *page;
 	int slot;
 	DECLARE_COMPLETION(sync);
@@ -85,17 +85,22 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		BUG_ON(src.addr >= s->nr_pages);
 
 		src_bio = bio_alloc(GFP_NOIO, 1);
-		if (!src_bio)
+		if (!src_bio) {
 			pr_err("vsl: failed to alloc gc bio request");
+			break;
+		}
 		src_bio->bi_iter.bi_sector = src.addr * NR_PHY_IN_LOG;
 		page = mempool_alloc(s->page_pool, GFP_NOIO);
 
-		/* TODO: may fail with EXP_PG_SIZE > PAGE_SIZE */
+		/* TODO: may fail whem EXP_PG_SIZE > PAGE_SIZE */
 		bio_add_page(src_bio, page, EXPOSED_PAGE_SIZE, 0);
 
 		src_rq = blk_mq_alloc_request(q, READ, GFP_KERNEL, false);
-		if (!src_rq)
+		if (!src_rq) {
+			mempool_free(page, s->page_pool);
 			pr_err("vsl: failed to alloc gc request");
+			break;
+		}
 
 		blk_init_request_from_bio(src_rq, src_bio);
 
@@ -122,14 +127,11 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		__vsl_lock_laddr_range(s, 1, rev->addr, 1);
 		spin_unlock(&s->rev_lock);
 
-		init_completion(&sync);
-		/*vsl_submit_rq(s, src_rq, &src, rev->addr,
-							&sync, rev->trans_map); */
-		wait_for_completion(&sync);
-
+		vsl_setup_rq(s, src_rq, &src, rev->addr, VSL_RQ_GC);
+		blk_execute_rq(q, dev->disk, src_rq, 0);
 		blk_put_request(src_rq);
-		dst_rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
 
+		dst_rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
 		blk_init_request_from_bio(dst_rq, src_bio);
 
 		/* ok, now fix the write and make sure that it haven't been
@@ -146,18 +148,18 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 
 		/* again, unlocked by vsl_endio */
 		__vsl_lock_laddr_range(s, 1, rev->addr, 1);
+
 		spin_unlock(&s->rev_lock);
 
-
-		init_completion(&sync);
-	//	__vsl_write_rq(s, hctx, src_rq, 1, &sync);
-		wait_for_completion(&sync);
+		__vsl_write_rq(s, dst_rq, 1);
+		blk_execute_rq(q, dev->disk, dst_rq, 0);
 
 overwritten:
 		blk_put_request(dst_rq);
 		bio_put(src_bio);
 		mempool_free(page, s->page_pool);
 	}
+
 	WARN_ON(!bitmap_full(block->invalid_pages, s->nr_pages_per_blk));
 }
 

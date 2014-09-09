@@ -139,22 +139,17 @@ void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 		}
 	}
 
-	if (pb->event) {
-		complete(pb->event);
-		/* all submitted requests allocate their own addr,
-		 * except GC reads */
-		if (rq_data_dir(rq) == READ)
-			return;
-	}
+	/* all submitted requests allocate their own addr,
+	 * except GC reads */
+	if (pb->flags & VSL_RQ_GC)
+		return;
 
 	mempool_free(pb->addr, s->addr_pool);
 }
 
 /* remember to lock l_add before calling vsl_submit_rq */
-void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
-			struct request *rq,
-			struct vsl_addr *p, sector_t l_addr,
-			struct completion *sync)
+void vsl_setup_rq(struct vsl_stor *s, struct request *rq, struct vsl_addr *p,
+		  sector_t l_addr, unsigned int flags)
 {
 	struct vsl_block *block = p->block;
 	struct vsl_ap *ap;
@@ -169,11 +164,10 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	pb->ap = ap;
 	pb->addr = p;
 	pb->l_addr = l_addr;
-	pb->event = sync;
+	pb->flags = flags;
 }
 
-int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
-							struct request *rq)
+int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 {
 	struct vsl_addr *p;
 	sector_t l_addr;
@@ -195,12 +189,11 @@ int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	if (!p->block)
 		rq->__sector = 0;
 
-	vsl_submit_rq(s, hctx, rq, p, l_addr, READ);
+	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
-		   struct request *rq, int is_gc, struct completion *sync)
+int __vsl_write_rq(struct vsl_stor *s, struct request *rq, int is_gc)
 {
 	struct vsl_addr *p;
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
@@ -221,13 +214,12 @@ int __vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	 */
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
 
-	vsl_submit_rq(s, hctx, rq, p, l_addr, sync);
+	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
 
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-int vsl_write_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
-							struct request *rq)
+int vsl_write_rq(struct vsl_stor *s, struct request *rq)
 {
-	return __vsl_write_rq(s, hctx, rq, 0, NULL);
+	return __vsl_write_rq(s, rq, 0);
 }

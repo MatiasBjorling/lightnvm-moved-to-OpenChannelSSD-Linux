@@ -234,10 +234,8 @@ typedef struct vsl_addr *(*vsl_map_ltop_page_fn)(struct vsl_stor *, sector_t,
 						int);
 typedef struct vsl_block *(*vsl_map_ltop_block_fn)(struct vsl_stor *, sector_t,
 						int);
-typedef int (*vsl_write_rq_fn)(struct vsl_stor *,
-				struct blk_mq_hw_ctx *, struct request *);
-typedef int (*vsl_read_rq_fn)(struct vsl_stor *,
-				struct blk_mq_hw_ctx *, struct request *);
+typedef int (*vsl_write_rq_fn)(struct vsl_stor *, struct request *);
+typedef int (*vsl_read_rq_fn)(struct vsl_stor *, struct request *);
 typedef void (*vsl_alloc_phys_addr_fn)(struct vsl_stor *, struct vsl_block *);
 typedef struct vsl_block *(*vsl_pool_get_blk_fn)(struct vsl_pool *pool,
 						int is_gc);
@@ -376,15 +374,18 @@ struct per_rq_data_vsl {
 	struct vsl_dev *dev;
 };
 
+enum {
+	VSL_RQ_NONE = 0,
+	VSL_RQ_GC = 1,
+};
+
 struct per_rq_data {
 	struct vsl_ap *ap;
 	struct vsl_addr *addr;
-	struct timespec start_tv;
 
 	sector_t l_addr;
+	unsigned int flags;
 
-	struct completion *event;
-	unsigned int sync;
 	unsigned int ref_put;
 };
 
@@ -412,16 +413,12 @@ struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *, int is_gc);
 
 /*   I/O request related */
 /* FIXME: Shorten */
-int vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *);
-int __vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
-			int, struct completion *);
-int vsl_read_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *rq);
+int vsl_write_rq(struct vsl_stor *, struct request *);
+int __vsl_write_rq(struct vsl_stor *, struct request *, int);
+int vsl_read_rq(struct vsl_stor *, struct request *rq);
 
-/* FIXME: Shorten */
 void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p, int is_gc);
-/* FIXME: Shorten */
-void vsl_submit_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
-		   struct vsl_addr *, sector_t, struct completion *);
+void vsl_setup_rq(struct vsl_stor *, struct request *, struct vsl_addr *, sector_t, unsigned int flags);
 
 /*   VSL device related */
 void vsl_block_release(struct kref *);

@@ -381,7 +381,7 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	s->nr_blks_per_pool = size / s->gran_blk / vsl_id.nchannels;
 	/*FIXME: gran_{read,write} may differ */
-	s->nr_pages_per_blk = s->gran_blk / s->gran_read;
+	s->nr_pages_per_blk = s->gran_blk / s->gran_read * (s->gran_read / EXPOSED_PAGE_SIZE);
 
 	s->nr_aps_per_pool = APS_PER_POOL;
 	/* s->config.flags = VSL_OPT_* */
@@ -391,18 +391,14 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 	s->config.t_erase = vsl_id_chnl.t_e / 1000;
 
 	/* Constants */
-	s->nr_host_pages_in_blk = NR_HOST_PAGES_IN_FLASH_PAGE
-						* s->nr_pages_per_blk;
-	s->nr_pages = s->nr_pools * s->nr_blks_per_pool
-						* s->nr_host_pages_in_blk;
+	s->nr_pages = s->nr_pools * s->nr_blks_per_pool * s->nr_pages_per_blk;
 
 	if (vslkv_init(s, size)) {
 		printk("vslkv_init failed\n");
 		goto err_target;
 	}
 
-	/* Invalid pages in block bitmap is preallocated. */
-	if (s->nr_host_pages_in_blk >
+	if (s->nr_pages_per_blk >
 				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
 		pr_err("lightnvm: Num. pages per block too high");
 		return -EINVAL;
@@ -427,8 +423,8 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 	/*pr_info("vsl: disk logical sector size=%d",
 		bdev_logical_block_size(s->dev->bdev));
 	pr_info("vsl: disk physical sector size=%d",
-		bdev_physical_block_size(s->dev->bdev));*/
-	pr_info("vsl: disk flash page size=%d\n", FLASH_PAGE_SIZE);
+		bdev_physical_block_size(s->dev->bdev)); */
+	pr_info("vsl: disk flash size=%d map size=%d\n", s->gran_read, EXPOSED_PAGE_SIZE);
 	pr_info("vsl: allocated %lu physical pages (%lu KB)\n",
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
 

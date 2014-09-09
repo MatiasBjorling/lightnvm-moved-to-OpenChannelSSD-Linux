@@ -10,7 +10,7 @@ inline void __invalidate_block_page(struct vsl_stor *s,
 	VSL_ASSERT(spin_is_locked(&s->rev_lock));
 	VSL_ASSERT(spin_is_locked(&block->lock));
 
-	page_offset = p->addr % s->nr_host_pages_in_blk;
+	page_offset = p->addr % s->nr_pages_per_blk;
 	WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 	block->nr_invalid_pages++;
 }
@@ -57,10 +57,9 @@ inline void vsl_reset_block(struct vsl_block *block)
 
 	s = block->pool->s;
 	spin_lock(&block->lock);
-	bitmap_zero(block->invalid_pages, s->nr_host_pages_in_blk);
+	bitmap_zero(block->invalid_pages, s->nr_pages_per_blk);
 	block->ap = NULL;
 	block->next_page = 0;
-	block->next_offset = 0;
 	block->nr_invalid_pages = 0;
 	atomic_set(&block->gc_running, 0);
 	atomic_set(&block->data_size, 0);
@@ -69,8 +68,7 @@ inline void vsl_reset_block(struct vsl_block *block)
 }
 
 
-static sector_t __vsl_alloc_phys_addr(struct vsl_block *block,
-							vsl_page_special_fn ps)
+static sector_t __vsl_alloc_phys_addr(struct vsl_block *block)
 {
 	struct vsl_stor *s;
 	sector_t addr = LTOP_EMPTY;
@@ -84,21 +82,9 @@ static sector_t __vsl_alloc_phys_addr(struct vsl_block *block,
 	if (block_is_full(block))
 		goto out;
 
-	/* If there is multiple host pages within a flash page, we add the
-	 * the offset to the address, instead of requesting a new page
-	 * from the physical block */
-	if (block->next_offset == NR_HOST_PAGES_IN_FLASH_PAGE) {
-		if (ps && !ps(s, block->next_page + 1))
-			goto out;
+	block->next_page++;
 
-		block->next_offset = 0;
-		block->next_page++;
-	}
-
-	addr = block_to_addr(block) +
-			(block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
-			block->next_offset;
-	block->next_offset++;
+	addr = block_to_addr(block) + block->next_page;
 
 	if (s->type->alloc_phys_addr)
 		s->type->alloc_phys_addr(s, block);
@@ -108,15 +94,9 @@ out:
 	return addr;
 }
 
-sector_t vsl_alloc_phys_addr_special(struct vsl_block *block,
-						vsl_page_special_fn ps)
-{
-	return __vsl_alloc_phys_addr(block, ps);
-}
-
 sector_t vsl_alloc_phys_addr(struct vsl_block *block)
 {
-	return __vsl_alloc_phys_addr(block, NULL);
+	return __vsl_alloc_phys_addr(block);
 }
 
 /* requires ap->lock taken */
@@ -153,7 +133,7 @@ void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 	if (rq_data_dir(rq) == WRITE) {
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
-		if (data_cnt == s->nr_host_pages_in_blk) {
+		if (data_cnt == s->nr_pages_per_blk) {
 			/*defer scheduling of the block for recycling*/
 			queue_work(s->kgc_wq, &block->ws_eio);
 		}

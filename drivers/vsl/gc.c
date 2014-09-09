@@ -72,12 +72,12 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 	int slot;
 	DECLARE_COMPLETION(sync);
 
-	if (bitmap_full(block->invalid_pages, s->nr_host_pages_in_blk))
+	if (bitmap_full(block->invalid_pages, s->nr_pages_per_blk))
 		return;
 
 	while ((slot = find_first_zero_bit(block->invalid_pages,
-					   s->nr_host_pages_in_blk)) <
-						s->nr_host_pages_in_blk) {
+					   s->nr_pages_per_blk)) <
+						s->nr_pages_per_blk) {
 		/* Perform read */
 		src.addr = block_to_addr(block) + slot;
 		src.block = block;
@@ -158,7 +158,7 @@ overwritten:
 		bio_put(src_bio);
 		mempool_free(page, s->page_pool);
 	}
-	WARN_ON(!bitmap_full(block->invalid_pages, s->nr_host_pages_in_blk));
+	WARN_ON(!bitmap_full(block->invalid_pages, s->nr_pages_per_blk));
 }
 
 void vsl_gc_collect(struct work_struct *work)

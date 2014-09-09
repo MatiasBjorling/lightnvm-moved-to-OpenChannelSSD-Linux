@@ -46,17 +46,10 @@
  * Configuration:
  * EXPOSED_PAGE_SIZE - the page size of which we tell the layers above the
  * driver to issue. This usually is 512 bytes for 4K for simplivity.
- * FLASH_PAGE_SIZE - the flash size of the individual flash pages. These should
- * match the hardware flash chips. Currently only the same page size as
- * EXPOSED_PAGE_SIZE is supported.
- *
  */
 
 #define EXPOSED_PAGE_SIZE 4096
-#define FLASH_PAGE_SIZE 8192
 
-/* Useful shorthands */
-#define NR_HOST_PAGES_IN_FLASH_PAGE (FLASH_PAGE_SIZE / EXPOSED_PAGE_SIZE)
 /* We currently assume that we the lightnvm device is accepting data in 512
  * bytes chunks. This should be set to the smallest command size available for a
  * given device.
@@ -105,12 +98,8 @@ enum target_flags {
 struct vsl_block {
 	struct {
 		spinlock_t lock;
-		/* points to the next writable flash page within a block */
+		/* points to the next writable page within a block */
 		unsigned int next_page;
-		/* if a flash page can have multiple host pages,
-		   fill up the flash page before going to the next
-		   writable flash page */
-		unsigned char next_offset;
 		/* number of pages that are invalid, wrt host page size */
 		unsigned int nr_invalid_pages;
 #define MAX_INVALID_PAGES_STORAGE 8
@@ -262,8 +251,6 @@ typedef void (*vsl_exit_fn)(struct vsl_stor *);
 typedef void (*vsl_endio_fn)(struct vsl_stor *, struct request *,
 				struct per_rq_data *, unsigned long *delay);
 
-typedef int (*vsl_page_special_fn)(struct vsl_stor *, unsigned int);
-
 struct vsl_target_type {
 	const char *name;
 	unsigned int version[3];
@@ -356,7 +343,6 @@ struct vsl_stor {
 	unsigned gran_write;
 
 	/* Calculated values */
-	unsigned int nr_host_pages_in_blk;
 	unsigned long nr_pages;
 
 	unsigned int next_collect_pool;
@@ -415,7 +401,6 @@ void __invalidate_block_page(struct vsl_stor *, struct vsl_addr *);
 void invalidate_block_page(struct vsl_stor *, struct vsl_addr *);
 void vsl_set_ap_cur(struct vsl_ap *, struct vsl_block *);
 sector_t vsl_alloc_phys_addr(struct vsl_block *);
-sector_t vsl_alloc_phys_addr_special(struct vsl_block *, vsl_page_special_fn);
 
 /*   Naive implementations */
 void vsl_delayed_bio_submit(struct work_struct *);
@@ -486,7 +471,7 @@ void vsl_pool_put_block(struct vsl_block *);
 #define block_for_each_page(b, p) \
 	for((p)->addr = block_to_addr((b)), (p)->block = (b); \
 		(p)->addr < block_to_addr((b)) \
-			+ (b)->pool->s->nr_host_pages_in_blk; \
+			+ (b)->pool->s->nr_pages_per_blk; \
 		(p)->addr++)
 
 static inline struct vsl_ap *get_next_ap(struct vsl_stor *s)
@@ -498,15 +483,14 @@ static inline int block_is_full(struct vsl_block *block)
 {
 	struct vsl_stor *s = block->pool->s;
 
-	return (block->next_page * NR_HOST_PAGES_IN_FLASH_PAGE) +
-			block->next_offset == s->nr_host_pages_in_blk;
+	return block->next_page == s->nr_pages_per_blk;
 }
 
 static inline sector_t block_to_addr(struct vsl_block *block)
 {
 	struct vsl_stor *s = block->pool->s;
 
-	return block->id * s->nr_host_pages_in_blk;
+	return block->id * s->nr_pages_per_blk;
 }
 
 static inline struct vsl_pool *paddr_to_pool(struct vsl_stor *s,
@@ -529,8 +513,7 @@ static inline struct vsl_ap *block_to_ap(struct vsl_stor *s,
 
 static inline int physical_to_slot(struct vsl_stor *s, sector_t phys)
 {
-	return (phys % (s->nr_pages_per_blk * NR_HOST_PAGES_IN_FLASH_PAGE)) /
-		NR_HOST_PAGES_IN_FLASH_PAGE;
+	return phys % s->nr_pages_per_blk;
 }
 
 static inline void *get_per_rq_data(struct vsl_dev *dev, struct request *rq)

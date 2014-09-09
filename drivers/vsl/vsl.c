@@ -492,10 +492,10 @@ int vsl_ioctl(struct vsl_dev *dev, fmode_t mode, unsigned int cmd,
 }
 
 #ifdef CONFIG_COMPAT
-int vsl_compat_ioctl(struct block_device *bdev, fmode_t mode,
+int vsl_compat_ioctl(struct vsl_dev *dev, fmode_t mode,
 		unsigned int cmd, unsigned long arg)
 {
-	return vsl_ioctl(bdev, mode, cmd, arg);
+	return vsl_ioctl(dev, mode, cmd, arg);
 }
 #else
 #define vsl_compat_ioctl	NULL

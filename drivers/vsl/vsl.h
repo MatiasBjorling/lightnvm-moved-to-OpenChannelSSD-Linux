@@ -196,7 +196,6 @@ struct vsl_ap {
 	unsigned long t_erase;
 
 	unsigned long io_delayed;
-	unsigned long io_accesses[2];
 
 	/* Private field for submodules */
 	void *private;

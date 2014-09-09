@@ -170,10 +170,6 @@ void vsl_submit_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,
 	pb->addr = p;
 	pb->l_addr = l_addr;
 	pb->event = sync;
-
-	/* We allow counting to be semi-accurate as theres
-	 * no lock for accounting. */
-	ap->io_accesses[rq_data_dir(rq)]++;
 }
 
 int vsl_read_rq(struct vsl_stor *s, struct blk_mq_hw_ctx *hctx,

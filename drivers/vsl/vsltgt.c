@@ -62,8 +62,9 @@ void vsl_pool_put_block(struct vsl_block *block)
 	spin_unlock_irqrestore(&pool->lock, flags);
 }
 
-struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *s, sector_t l_addr,
-				     struct vsl_addr *map, void *private)
+/* lookup the primary translation table. If there isn't an associated block to
+ * the addr. We assume that there is no data and doesn't take a ref */
+struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *s, sector_t l_addr)
 {
 	struct vsl_addr *gp, *p;
 
@@ -73,7 +74,7 @@ struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *s, sector_t l_addr,
 	if (!p)
 		return NULL;
 
-	gp = &map[l_addr];
+	gp = &s->trans_map[l_addr];
 
 	p->addr = gp->addr;
 	p->block = gp->block;
@@ -87,20 +88,11 @@ struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *s, sector_t l_addr,
 			goto err;
 	}
 
-	p->private = private;
-
 	return p;
 err:
 	mempool_free(p, s->addr_pool);
 	return NULL;
 
-}
-
-/* lookup the primary translation table. If there isn't an associated block to
- * the addr. We assume that there is no data and doesn't take a ref */
-struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *s, sector_t l_addr)
-{
-	return vsl_lookup_ltop_map(s, l_addr, s->trans_map, NULL);
 }
 
 static inline unsigned int vsl_rq_sectors(const struct request *rq)
@@ -215,7 +207,6 @@ finished:
 
 	p->addr = p_addr;
 	p->block = p_block;
-	p->private = NULL;
 
 	if (!p_block)
 		WARN_ON(is_gc);
@@ -233,6 +224,7 @@ struct vsl_target_type vsl_target_rrpc = {
 	.lookup_ltop	= vsl_lookup_ltop,
 	.map_page	= vsl_map_page_rr,
 	.map_block	= vsl_map_block_rr,
+
 	.write_rq	= vsl_write_rq,
 	.read_rq	= vsl_read_rq,
 

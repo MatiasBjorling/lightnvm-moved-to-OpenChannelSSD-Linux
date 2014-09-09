@@ -129,7 +129,6 @@ struct vsl_block {
 struct vsl_addr {
 	sector_t addr;
 	struct vsl_block *block;
-	void *private;
 };
 
 /* Physical to logical mapping */
@@ -412,12 +411,6 @@ void vsl_gc_recycle_block(struct work_struct *);
  * when increasing responsibility. */
 struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *, int is_gc);
 
-/* Gets an address from nvm->trans_map and take a ref count on the blocks usage.
- * Remember to put later */
-struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *, sector_t l_addr,
-				struct vsl_addr *l2p_map, void *private);
-struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *, sector_t l_addr);
-
 /*   I/O request related */
 /* FIXME: Shorten */
 int vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *);
@@ -467,7 +460,6 @@ void vsl_pool_put_block(struct vsl_block *);
 		for ((i) = 0, b = &(p)->blocks[0]; \
 			(i) < (p)->nr_blocks; (i)++, b = &(p)->blocks[(i)])
 
-/* FIXME: does not copy p->private, should it ? */
 #define block_for_each_page(b, p) \
 	for((p)->addr = block_to_addr((b)), (p)->block = (b); \
 		(p)->addr < block_to_addr((b)) \

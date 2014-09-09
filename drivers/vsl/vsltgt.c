@@ -153,11 +153,11 @@ static struct vsl_block *vsl_map_block_rr(struct vsl_stor *s, sector_t l_addr,
 static struct vsl_addr *vsl_map_page_rr(struct vsl_stor *s, sector_t l_addr,
 					int is_gc)
 {
-	struct vsl_ap *ap = NULL;
-	struct vsl_pool *pool = NULL;
-	struct vsl_block *p_block = NULL;
+	struct vsl_addr *p;
+	struct vsl_ap *ap;
+	struct vsl_pool *pool;
+	struct vsl_block *p_block;
 	sector_t p_addr;
-	struct vsl_addr *p = NULL;
 
 	p = mempool_alloc(s->addr_pool, GFP_ATOMIC);
 	if (!p)

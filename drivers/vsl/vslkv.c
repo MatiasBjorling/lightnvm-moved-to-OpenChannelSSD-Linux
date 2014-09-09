@@ -255,19 +255,18 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 		ret = -ENOMEM;
 		goto out;
 	}
-	printk("[KV> do_io blk_rq_map_user(q, rq, map_data, ubuf:%llx, len:%lu, GFP_KERNEL\n",
+	printk("[KV> do_io blk_rq_map_user(q, rq, map_data, ubuf:%llx, len:%lu, GFP_ATOMIC\n",
 		(u64)ubuf, len);
-	ret = blk_rq_map_user(q, rq, &map_data, ubuf, len, GFP_KERNEL);
-	rq->cmd_flags |= REQ_VSL_PASSTHRU;
+	ret = blk_rq_map_user(q, rq, &map_data, ubuf, len, GFP_ATOMIC);
 	if (ret) {
 		pr_err("[KV]do_io: failed to map userspace memory into request (err:%d)\n", ret);
 		goto err_umap;
 	}
 
+	rq->cmd_flags |= REQ_VSL_PASSTHRU;
 	rq->__sector = blk_addr * NR_PHY_IN_LOG;
-	printk("[KV> do_io -- issuing I/O against addr:%llu(PHY:%lu)\n", blk_addr, rq->__sector);
-
 	rq->errors = 0;
+	printk("[KV> do_io -- issuing I/O against addr:%llu(PHY:%lu)\n", blk_addr, rq->__sector);
 
 	printk("[KV> do_io blk_execute_rq\n");
 	ret = blk_execute_rq(q, dev->disk, rq, 0);

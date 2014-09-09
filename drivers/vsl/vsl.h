@@ -433,10 +433,7 @@ struct vsl_addr *vsl_lookup_ltop_map(struct vsl_stor *, sector_t l_addr,
 				struct vsl_addr *l2p_map, void *private);
 struct vsl_addr *vsl_lookup_ltop(struct vsl_stor *, sector_t l_addr);
 
-/*   I/O bio related */
-struct vsl_addr *vsl_get_trans_map(struct vsl_stor *, void *private);
-struct request *vsl_write_init_rq(struct vsl_stor *, struct request *,
-							struct vsl_addr *);
+/*   I/O request related */
 /* FIXME: Shorten */
 int vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *);
 int __vsl_write_rq(struct vsl_stor *, struct blk_mq_hw_ctx *, struct request *,
@@ -466,7 +463,7 @@ void vsl_gc_kick(struct vsl_stor *s);
 /* vsltgt.c */
 struct vsl_block *vsl_pool_get_block(struct vsl_pool *, int is_gc);
 
-/*vslkv.c*/
+/* vslkv.c */
 int vslkv_init(struct vsl_stor *s, unsigned long size);
 void vslkv_exit(struct vsl_stor *s);
 int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd);
@@ -485,12 +482,13 @@ void vsl_pool_put_block(struct vsl_block *);
 		for ((i) = 0, b = &(p)->blocks[0]; \
 			(i) < (p)->nr_blocks; (i)++, b = &(p)->blocks[(i)])
 
-/*FIXME: does not copy p->private, should it ?*/
+/* FIXME: does not copy p->private, should it ? */
 #define block_for_each_page(b, p) \
 	for((p)->addr = block_to_addr((b)), (p)->block = (b); \
 		(p)->addr < block_to_addr((b)) \
 			+ (b)->pool->s->nr_host_pages_in_blk; \
 		(p)->addr++)
+
 static inline struct vsl_ap *get_next_ap(struct vsl_stor *s)
 {
 	return &s->aps[atomic_inc_return(&s->next_write_ap) % s->nr_aps];

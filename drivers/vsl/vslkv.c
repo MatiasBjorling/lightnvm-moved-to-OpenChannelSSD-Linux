@@ -35,13 +35,13 @@ struct vslkv_io {
 };
 
 enum KVIO {
-	KVIO_READ	= 0,
-	KVIO_WRITE	= 1,
+        KVIO_READ	= 0,
+        KVIO_WRITE	= 1,
 };
 
 enum LOOKUP_TYPE {
-	EXISTING_ENTRY	= 0,
-	NEW_ENTRY	= 1,
+        EXISTING_ENTRY	= 0,
+        NEW_ENTRY	= 1,
 };
 
 static inline unsigned bucket_idx(struct vslkv_tbl *tbl, u32 hash)
@@ -51,7 +51,7 @@ static inline unsigned bucket_idx(struct vslkv_tbl *tbl, u32 hash)
 
 /*TODO FIXME - no locks can be held while executing this*/
 static void inflight_lock(struct vslkv_inflight *ilist,
-			struct kv_inflight *ientry)
+                          struct kv_inflight *ientry)
 {
 	struct kv_inflight *lentry;
 	unsigned long flags;
@@ -94,7 +94,7 @@ out:
 /*TODO reserving '0' for empty entries is technically a no-go as it could be
   a hash value.*/
 static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
-			enum LOOKUP_TYPE type)
+                         enum LOOKUP_TYPE type)
 {
 	unsigned b_idx = bucket_idx(tbl, h1);
 	unsigned idx = BUCKET_LEN * b_idx;
@@ -102,7 +102,7 @@ static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
 	struct kv_entry *entry = &tbl->entries[idx];
 
 	printk("__tbl_get_idx: looking in bucket %u (of %llu) (t:%s)\n",
-		b_idx, tbl->tbl_len/BUCKET_LEN, (type == NEW_ENTRY ? "NEW" : "EXISTING"));
+	       b_idx, tbl->tbl_len/BUCKET_LEN, (type == NEW_ENTRY ? "NEW" : "EXISTING"));
 	for (i = 0; i < BUCKET_LEN; i++, entry++) {
 		printk("\t__tbl_get_idx(%d/%d)\n", i, BUCKET_LEN);
 		printk("\t\th2[0](%llu) - e->h2[0](%llu)\n", h2[0], entry->hash[0]);
@@ -122,7 +122,7 @@ static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
 }
 
 static int tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
-		enum LOOKUP_TYPE type)
+                       enum LOOKUP_TYPE type)
 {
 	unsigned long flags;
 	int idx;
@@ -172,12 +172,14 @@ static inline void hash2(void *dst, void *src, size_t src_len)
 static inline void *cpy_val(u64 addr, size_t len)
 {
 	void *buf = NULL;
+
 	buf = kmalloc(len, GFP_KERNEL);
 	if (!buf) {
 		printk("cpy_val: -ENOMEM #1\n");
 		return ERR_PTR(-ENOMEM);
 	}
-	if(copy_from_user(buf, (void*)addr, len)) {
+
+	if (copy_from_user(buf, (void*)addr, len)) {
 		printk("cpy_val: -EFAULT #1\n");
 		kfree(buf);
 		return ERR_PTR(-EFAULT);
@@ -240,12 +242,13 @@ static void unmap_user_io(struct vslkv_io *vkv_io)
 }
 
 static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
-		unsigned long len)
+                 unsigned long len)
 {
 	struct vsl_dev *dev = s->dev;
 	struct request_queue *q = dev->q;
 	struct rq_map_data map_data;
 	struct request *rq;
+	char *data;
 	int ret;
 
 	printk("[KV> do_io start\n");
@@ -256,8 +259,21 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 		goto out;
 	}
 	printk("[KV> do_io blk_rq_map_user(q, rq, map_data, ubuf:%llx, len:%lu, GFP_ATOMIC\n",
-		(u64)ubuf, len);
-	ret = blk_rq_map_user(q, rq, &map_data, ubuf, len, GFP_ATOMIC);
+	       (u64)ubuf, len);
+
+	printk("kernel addr: %p\n", (void *) ubuf);
+	printk("kernel addr: %p\n", (void __user *) ubuf);
+	data = kmalloc(sizeof(char) * 4096, GFP_KERNEL);
+
+	if (copy_from_user(data, ubuf, 4096))
+		printk("larlar WRONG!\n");
+
+	printk("TEST: %x %x %x %x\n", data[0], data[1], data[2], data[3]);
+	ret = blk_rq_map_user(q, rq, NULL, ubuf, len, GFP_KERNEL);
+
+	printk("len %u\n", len);
+	if (rq->bio)
+		printk("larlar %u\n", rq->bio->bi_iter.bi_size);
 	if (ret) {
 		pr_err("[KV]do_io: failed to map userspace memory into request (err:%d)\n", ret);
 		goto err_umap;
@@ -275,6 +291,10 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 	else
 		pr_info("[KV]do_io: omgeeee write worked without a hitch!\n");
 
+	if (copy_from_user(data, ubuf, 4096))
+		printk("larlar WRONG!\n");
+
+	printk("TEST2: %x %x %x %x\n", data[0], data[1], data[2], data[3]);
 	printk("[KV> do_io blk_rq_unmap_user\n");
 	blk_rq_unmap_user(rq->bio);
 
@@ -310,8 +330,8 @@ static int get(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
 		return -1;
 	}
 
-	ret = do_io(s, READ, block_to_addr(entry->blk),
-		(void __user *)cmd->val_addr, cmd->val_len);
+	ret = do_io(s, READ, 0 /*block_to_addr(entry->blk) */,
+	            (void __user *)cmd->val_addr, cmd->val_len);
 
 	return ret;
 }
@@ -368,7 +388,7 @@ static int verify_io(struct vsl_stor *s, u64 blk_addr)
 		goto err_balloc;
 	}
 	b->bi_iter.bi_sector = blk_addr * NR_PHY_IN_LOG;
-	
+
 	page = mempool_alloc(s->page_pool, GFP_NOIO);
 	if (!page) {
 		err("failed to allocate a page!!!\n");
@@ -410,7 +430,7 @@ err_balloc:
 }
 
 static int update_entry(struct vsl_stor *s, struct vsl_cmd_kv *cmd,
-			struct kv_entry *entry, int existing)
+                        struct kv_entry *entry, int existing)
 {
 	struct vsl_block *block;
 	int ret;
@@ -429,8 +449,8 @@ static int update_entry(struct vsl_stor *s, struct vsl_cmd_kv *cmd,
 	printk("[KV> update_entry, cmd->val_addr [u64](%llx)\n", cmd->val_addr);
 	//printk("[KV>verify_io **PRE UPDATE**\n");
 	//verify_io(s, block_to_addr(block));
-	ret = do_io(s, WRITE, block_to_addr(block),
-		(void __user *)cmd->val_addr, cmd->val_len);
+	ret = do_io(s, WRITE, 0 /*block_to_addr(block)*/,
+	            (void __user *)cmd->val_addr, cmd->val_len);
 	if (ret) {
 		printk("[KV]update_entry: failed to write entry\n");
 		ret = -EIO;
@@ -568,7 +588,7 @@ int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd)
 	void *key;
 	int ret = 0;
 
-	if(copy_from_user(&cmd, ucmd, sizeof(cmd)))
+	if (copy_from_user(&cmd, ucmd, sizeof(cmd)))
 		return -EFAULT;
 
 	key = cpy_val(cmd.key_addr, cmd.key_len);
@@ -624,13 +644,13 @@ int vslkv_init(struct vsl_stor *s, unsigned long size)
 	int ret = 0;
 
 	unsigned long buckets = num_entries(s, size)
-		/ (BUCKET_LEN / BUCKET_OCCUPANCY_AVG);
+	                        / (BUCKET_LEN / BUCKET_OCCUPANCY_AVG);
 
 	tbl->bucket_len = BUCKET_LEN;
 	tbl->tbl_len = buckets * tbl->bucket_len;
 
 	tbl->entries = vzalloc(
-		tbl->tbl_len * sizeof(struct kv_entry));
+	                       tbl->tbl_len * sizeof(struct kv_entry));
 	if (!tbl->entries) {
 		printk("vslkv_init: failed to allocate KV table :'(\n");
 		ret = -ENOMEM;
@@ -638,9 +658,9 @@ int vslkv_init(struct vsl_stor *s, unsigned long size)
 	}
 
 	inflight->entry_pool = kmem_cache_create("vslkv_inflight_pool",
-			sizeof(struct kv_inflight), 0,
-			SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD,
-			NULL);
+	                       sizeof(struct kv_inflight), 0,
+	                       SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD,
+	                       NULL);
 	if (!inflight->entry_pool) {
 		ret = -ENOMEM;
 		goto err_inflight_pool;

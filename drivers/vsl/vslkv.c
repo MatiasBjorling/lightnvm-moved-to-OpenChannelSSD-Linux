@@ -248,7 +248,7 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 	struct request_queue *q = dev->q;
 	struct rq_map_data map_data;
 	struct request *rq;
-	struct bio *bio;
+	struct bio *orig_bio;
 	char *data;
 	int ret;
 
@@ -272,6 +272,7 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 
 	printk("TEST: %x %x %x %x\n", data[0], data[1], data[2], data[3]);
 	ret = blk_rq_map_user(q, rq, NULL, ubuf, len, GFP_KERNEL);
+	orig_bio = rq->bio;
 
 	printk("len %u\n", len);
 	if (rq->bio)
@@ -296,11 +297,12 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 		pr_info("[KV]do_io: omgeeee write worked without a hitch!\n");
 
 	printk("[KV> do_io blk_rq_unmap_user\n");
-	blk_rq_unmap_user(bio);
+	blk_rq_unmap_user(orig_bio);
 
 	if (copy_from_user(data, ubuf, 4096))
 		printk("larlar WRONG!\n");
 	printk("TEST2: %x %x %x %x\n", data[0], data[1], data[2], data[3]);
+	printk("[KV> do_io blk_rq_unmap_user\n");
 
 err_umap:
 	blk_put_request(rq);

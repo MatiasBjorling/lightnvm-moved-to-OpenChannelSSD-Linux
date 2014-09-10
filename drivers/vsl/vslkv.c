@@ -200,8 +200,6 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 		goto out;
 	}
 
-	printk("rq: %u %u\n", blk_rq_bytes(rq), blk_rq_pos(rq));
-
 	ret = blk_rq_map_user(q, rq, NULL, ubuf, len, GFP_KERNEL);
 	if (ret) {
 		pr_err("<%s>%d: failed to map userspace memory into request\n",

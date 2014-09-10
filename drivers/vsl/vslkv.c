@@ -248,6 +248,7 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 	struct request_queue *q = dev->q;
 	struct rq_map_data map_data;
 	struct request *rq;
+	struct bio *bio;
 	char *data;
 	int ret;
 
@@ -263,6 +264,7 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 
 	printk("kernel addr: %p\n", (void *) ubuf);
 	printk("kernel addr: %p\n", (void __user *) ubuf);
+
 	data = kmalloc(sizeof(char) * 4096, GFP_KERNEL);
 
 	if (copy_from_user(data, ubuf, 4096))
@@ -282,6 +284,8 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 	rq->cmd_flags |= REQ_VSL_PASSTHRU;
 	rq->__sector = blk_addr * NR_PHY_IN_LOG;
 	rq->errors = 0;
+	bio = rq->bio;
+
 	printk("[KV> do_io -- issuing I/O against addr:%llu(PHY:%lu)\n", blk_addr, rq->__sector);
 
 	printk("[KV> do_io blk_execute_rq\n");
@@ -291,12 +295,12 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 	else
 		pr_info("[KV]do_io: omgeeee write worked without a hitch!\n");
 
+	printk("[KV> do_io blk_rq_unmap_user\n");
+	blk_rq_unmap_user(bio);
+
 	if (copy_from_user(data, ubuf, 4096))
 		printk("larlar WRONG!\n");
-
 	printk("TEST2: %x %x %x %x\n", data[0], data[1], data[2], data[3]);
-	printk("[KV> do_io blk_rq_unmap_user\n");
-	blk_rq_unmap_user(rq->bio);
 
 err_umap:
 	blk_put_request(rq);
@@ -330,7 +334,7 @@ static int get(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
 		return -1;
 	}
 
-	ret = do_io(s, READ, 0 /*block_to_addr(entry->blk) */,
+	ret = do_io(s, READ, block_to_addr(entry->blk),
 	            (void __user *)cmd->val_addr, cmd->val_len);
 
 	return ret;
@@ -449,7 +453,7 @@ static int update_entry(struct vsl_stor *s, struct vsl_cmd_kv *cmd,
 	printk("[KV> update_entry, cmd->val_addr [u64](%llx)\n", cmd->val_addr);
 	//printk("[KV>verify_io **PRE UPDATE**\n");
 	//verify_io(s, block_to_addr(block));
-	ret = do_io(s, WRITE, 0 /*block_to_addr(block)*/,
+	ret = do_io(s, WRITE, block_to_addr(block),
 	            (void __user *)cmd->val_addr, cmd->val_len);
 	if (ret) {
 		printk("[KV]update_entry: failed to write entry\n");

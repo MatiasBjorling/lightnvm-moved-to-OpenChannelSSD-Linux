@@ -101,12 +101,7 @@ static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
 	unsigned i;
 	struct kv_entry *entry = &tbl->entries[idx];
 
-	printk("__tbl_get_idx: looking in bucket %u (of %llu) (t:%s)\n",
-	       b_idx, tbl->tbl_len/BUCKET_LEN, (type == NEW_ENTRY ? "NEW" : "EXISTING"));
 	for (i = 0; i < BUCKET_LEN; i++, entry++) {
-		printk("\t__tbl_get_idx(%d/%d)\n", i, BUCKET_LEN);
-		printk("\t\th2[0](%llu) - e->h2[0](%llu)\n", h2[0], entry->hash[0]);
-		printk("\t\th2[1](%llu) - e->h2[1](%llu)\n", h2[1], entry->hash[1]);
 		if (memcmp(entry->hash, h2, sizeof(u64)*2) == 0) {
 			if (type == NEW_ENTRY)
 				entry->hash[0] = 1;
@@ -126,8 +121,6 @@ static int tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
 {
 	unsigned long flags;
 	int idx;
-
-	printk("tbl_get_idx start\n");
 
 	spin_lock_irqsave(&tbl->lock, flags);
 	idx = __tbl_get_idx(tbl, h1, h2, type);
@@ -175,70 +168,18 @@ static inline void *cpy_val(u64 addr, size_t len)
 
 	buf = kmalloc(len, GFP_KERNEL);
 	if (!buf) {
-		printk("cpy_val: -ENOMEM #1\n");
+		pr_err("<%s>%d: failed to copy userspace memory (-ENOMEM)\n",
+		       __func__, __LINE__);
 		return ERR_PTR(-ENOMEM);
 	}
 
 	if (copy_from_user(buf, (void*)addr, len)) {
-		printk("cpy_val: -EFAULT #1\n");
+		pr_err("<%s>%d: failed to copy userspace memory (-EFAULT)\n",
+		       __func__, __LINE__);
 		kfree(buf);
 		return ERR_PTR(-EFAULT);
 	}
 	return buf;
-}
-
-static struct vslkv_io *map_user_io(u64 addr, unsigned length, enum KVIO do_write)
-{
-	int offset, pcount, ret, i;
-	struct page **pages;
-	struct vslkv_io *vkv_io = NULL;
-
-	if (addr & 3)
-		return ERR_PTR(-EINVAL);
-	if (!length || length > INT_MAX - PAGE_SIZE)
-		return ERR_PTR(-EINVAL); /*TODO cap @ blk erase size minus key size*/
-
-	offset = offset_in_page(addr);
-	pcount = DIV_ROUND_UP(offset + length, PAGE_SIZE);
-	pages = kcalloc(pcount, sizeof(*pages), GFP_KERNEL);
-	if (!pages)
-		return ERR_PTR(-ENOMEM);
-
-	ret = get_user_pages_fast(addr, pcount, do_write, pages);
-	if (ret < pcount) {
-		pcount = ret;
-		ret = -EFAULT;
-		goto put_pages;
-	}
-
-	vkv_io = kmalloc(sizeof(vkv_io), GFP_KERNEL);
-	if (!vkv_io) {
-		ret = -ENOMEM;
-		goto put_pages;
-	}
-
-	vkv_io->offset = offset;
-	vkv_io->npages = pcount;
-	vkv_io->length = length;
-	vkv_io->pages = pages;
-	vkv_io->write = do_write;
-	return vkv_io;
-
-put_pages:
-	for (i = 0; i < pcount; i++)
-		put_page(pages[i]);
-	kfree(pages);
-	return ERR_PTR(ret);
-}
-
-static void unmap_user_io(struct vslkv_io *vkv_io)
-{
-	int i;
-	for (i = 0; i < vkv_io->npages; i++)
-		put_page(vkv_io->pages[i]);
-
-	kfree(vkv_io->pages);
-	kfree(vkv_io);
 }
 
 static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
@@ -246,63 +187,36 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 {
 	struct vsl_dev *dev = s->dev;
 	struct request_queue *q = dev->q;
-	struct rq_map_data map_data;
 	struct request *rq;
 	struct bio *orig_bio;
-	char *data;
 	int ret;
 
-	printk("[KV> do_io start\n");
 	rq = blk_mq_alloc_request(q, rw, GFP_KERNEL, false);
 	if (!rq) {
-		pr_err("[KV]do_io: failed to allocate request\n");
+		pr_err("<%s>%d: failed to allocate request\n",
+		       __func__, __LINE__);
 		ret = -ENOMEM;
 		goto out;
 	}
-	printk("[KV> do_io blk_rq_map_user(q, rq, map_data, ubuf:%llx, len:%lu, GFP_ATOMIC\n",
-	       (u64)ubuf, len);
 
-	printk("kernel addr: %p\n", (void *) ubuf);
-	printk("kernel addr: %p\n", (void __user *) ubuf);
-
-	data = kmalloc(sizeof(char) * 4096, GFP_KERNEL);
-
-	if (copy_from_user(data, ubuf, 4096))
-		printk("larlar WRONG!\n");
-
-	printk("TEST: %x %x %x %x\n", data[0], data[1], data[2], data[3]);
 	ret = blk_rq_map_user(q, rq, NULL, ubuf, len, GFP_KERNEL);
-	orig_bio = rq->bio;
-
-	printk("len %u\n", len);
-	if (rq->bio)
-		printk("larlar %u\n", rq->bio->bi_iter.bi_size);
 	if (ret) {
-		pr_err("[KV]do_io: failed to map userspace memory into request (err:%d)\n", ret);
+		pr_err("<%s>%d: failed to map userspace memory into request\n",
+		       __func__, __LINE__);
 		goto err_umap;
 	}
+	orig_bio = rq->bio;
 
 	rq->cmd_flags |= REQ_VSL_PASSTHRU;
 	rq->__sector = blk_addr * NR_PHY_IN_LOG;
 	rq->errors = 0;
-	bio = rq->bio;
 
-	printk("[KV> do_io -- issuing I/O against addr:%llu(PHY:%lu)\n", blk_addr, rq->__sector);
-
-	printk("[KV> do_io blk_execute_rq\n");
 	ret = blk_execute_rq(q, dev->disk, rq, 0);
 	if (ret)
-		pr_err("[KV]do_io: failed to execute request..\n");
-	else
-		pr_info("[KV]do_io: omgeeee write worked without a hitch!\n");
+		pr_err("<%s>%d: failed to execute request..\n",
+		       __func__, __LINE__);
 
-	printk("[KV> do_io blk_rq_unmap_user\n");
 	blk_rq_unmap_user(orig_bio);
-
-	if (copy_from_user(data, ubuf, 4096))
-		printk("larlar WRONG!\n");
-	printk("TEST2: %x %x %x %x\n", data[0], data[1], data[2], data[3]);
-	printk("[KV> do_io blk_rq_unmap_user\n");
 
 err_umap:
 	blk_put_request(rq);
@@ -329,10 +243,10 @@ static int get(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 	hash2(&h2, key, cmd->key_len);
 
 	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
-		printk("[KV]get: found entry\n");
 		entry = &tbl->entries[ret];
 	} else {
-		printk("[KV]get: could not find entry!\n");
+		pr_debug("<%s>%d: could not find entry\n",
+		         __func__, __LINE__);
 		return -1;
 	}
 
@@ -360,81 +274,6 @@ static struct vsl_block *acquire_block(struct vsl_stor *s)
 	return block;
 }
 
-
-#define err(msg) printk("ERR<%s>%d: " msg, __FUNCTION__, __LINE__)
-static void __dump_mem(void *b, unsigned len)
-{
-	unsigned *c = (unsigned *)b;
-	unsigned off, end;
-
-	end = len / sizeof(unsigned);
-	for (off = 0; off < end; off++, c++)
-		printk("%x", (unsigned)*c);
-	printk("\n");
-}
-#define dump_mem(p, len) \
-	printk("\nDUMP " #len " bytes OF '" #p "'\n"); \
-	__dump_mem((p), (len));
-
-static int verify_io(struct vsl_stor *s, u64 blk_addr)
-{
-	struct vsl_dev *dev = s->dev;
-	struct bio *b;
-	struct request *rq;
-	struct request_queue *q = dev->q;
-	struct page *page;
-	void *buf;
-	int ret = 0;
-
-	printk("verify_io begin------------------\n");
-	b = bio_alloc(GFP_NOIO, 1);
-	if (!b) {
-		err("couldn't alloc bio\n");
-		ret = -ENOMEM;
-		goto err_balloc;
-	}
-	b->bi_iter.bi_sector = blk_addr * NR_PHY_IN_LOG;
-
-	page = mempool_alloc(s->page_pool, GFP_NOIO);
-	if (!page) {
-		err("failed to allocate a page!!!\n");
-		goto err_palloc;
-	}
-	buf = page_address(page);
-	memset(buf, 0x00, EXPOSED_PAGE_SIZE);
-	dump_mem(buf, 100);
-
-	ret = bio_add_pc_page(q, b, page, EXPOSED_PAGE_SIZE, 0);
-	if (ret == 0) {
-		err("failed to add anything\n");
-		goto err_addpage;
-	}
-
-	rq = blk_mq_alloc_request(q, READ, GFP_KERNEL, false);
-	if (!rq) {
-		mempool_free(page, s->page_pool);
-		err("failed to alloc verify io request\n");
-		goto err_rqalloc;
-	}
-	blk_init_request_from_bio(rq, b);
-
-	ret = blk_execute_rq(q, dev->disk, rq, 0);
-	if (ret) {
-		err("-EIO from blk_execute_rq\n");
-	}
-	buf = page_address(page);
-	dump_mem(buf, 100);
-
-	blk_put_request(rq);
-err_rqalloc:
-	mempool_free(page, s->page_pool);
-err_addpage:
-err_palloc:
-	bio_put(b);
-err_balloc:
-	return ret;
-}
-
 static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
                         struct kv_entry *entry, int existing)
 {
@@ -444,21 +283,20 @@ static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
 	BUG_ON(!s);
 	BUG_ON(!cmd);
 	BUG_ON(!entry);
+	BUG_ON(existing && !entry->blk);
 
 	block = acquire_block(s);
 	if (!block) {
-		printk("[KV]update_entry: failed to acquire a block\n");
+		pr_err("<%s>%d: failed to acquire a block\n",
+		       __func__, __LINE__);
 		ret = -ENOSPC;
 		goto no_block;
 	}
-	printk("[KV> found a block to write to...! (pre do_io)(id:%u,%lu)\n", block->id, block_to_addr(block));
-	printk("[KV> update_entry, cmd->val_addr [u64](%llx)\n", cmd->val_addr);
-	//printk("[KV>verify_io **PRE UPDATE**\n");
-	//verify_io(s, block_to_addr(block));
 	ret = do_io(s, WRITE, block_to_addr(block),
 	            (void __user *)cmd->val_addr, cmd->val_len);
 	if (ret) {
-		printk("[KV]update_entry: failed to write entry\n");
+		pr_err("<%s>%d: failed to write entry\n",
+		       __func__, __LINE__);
 		ret = -EIO;
 		goto io_err;
 	}
@@ -467,8 +305,6 @@ static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
 		s->type->pool_put_blk(entry->blk);
 	entry->blk = block;
 
-	printk("[KV>verify_io **POST UPDATE**\n");
-	verify_io(s, block_to_addr(block));
 	return ret;
 io_err:
 	s->type->pool_put_blk(block);
@@ -493,27 +329,21 @@ static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 	u64 h2[2];
 	int ret = -1;
 	int existing = 0;
-	printk("put start\n");
 
 	hash2(&h2, key, cmd->key_len);
-	printk("put post hash\n");
 
 	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
-		printk("[KV]put: overwriting entry\n");
 		entry = &tbl->entries[ret];
 		existing = 1;
 	} else if ((ret = tbl_new_entry(tbl, h1)) != -1) {
-		printk("[KV]put: inserting new entry\n");
 		entry = &tbl->entries[ret];
-		printk("[KV> ref entry\n");
 		memcpy(entry->hash, &h2, sizeof(entry->hash));
-		printk("[KV> wrote hash\n");
 	} else {
-		printk("[KV]put: FATAL no matching entry, no empty entries!!\n");
+		printk("<%s>%d: no empty entries and bucket is full!!\n",
+			__func__, __LINE__);
 		BUG();
 	}
 
-	printk("[KV> b4 update_entry\n");
 	if ((ret = update_entry(s, cmd, entry, existing)) && !existing) {
 		memset(entry->hash, 0, sizeof(entry->hash));
 	}
@@ -540,10 +370,9 @@ static int update(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32
 	hash2(&h2, key, cmd->key_len);
 
 	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
-		printk("[KV]put: overwriting entry\n");
 		entry = &tbl->entries[ret];
 	} else {
-		printk("[KV]update: no entry - skipping\n");
+		pr_debug("<%s>%d: no entry, skipping\n", __func__, __LINE__);
 		return 0;
 	}
 
@@ -572,12 +401,12 @@ static int del(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 	hash2(&h2, key, cmd->key_len);
 
 	if ((idx = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
-		printk("[KV]del: deleting entry\n");
 		entry = &tbl->entries[idx];
 		s->type->pool_put_blk(entry->blk);
 		memset(entry, 0, sizeof(struct kv_entry));
 	} else {
-		printk("[KV]del: could not find entry!\n");
+		pr_debug("<%s>%d: could not find entry!\n",
+		         __func__, __LINE__);
 	}
 
 	return 0;
@@ -658,7 +487,8 @@ int vslkv_init(struct vsl_stor *s, unsigned long size)
 	tbl->entries = vzalloc(
 	                       tbl->tbl_len * sizeof(struct kv_entry));
 	if (!tbl->entries) {
-		printk("vslkv_init: failed to allocate KV table :'(\n");
+		pr_err("<%s>%d: failed to allocate KV-table\n",
+		       __func__, __LINE__);
 		ret = -ENOMEM;
 		goto err_tbl_entries;
 	}

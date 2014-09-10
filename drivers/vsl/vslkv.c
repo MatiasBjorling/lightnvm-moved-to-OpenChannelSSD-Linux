@@ -34,14 +34,15 @@ struct vslkv_io {
 	int write;
 };
 
-enum KVIO {
-        KVIO_READ	= 0,
-        KVIO_WRITE	= 1,
+enum {
+	KVIO_READ	= 0,
+	KVIO_WRITE	= 1,
 };
 
-enum LOOKUP_TYPE {
-        EXISTING_ENTRY	= 0,
-        NEW_ENTRY	= 1,
+
+enum {
+	EXISTING_ENTRY	= 0,
+	NEW_ENTRY	= 1,
 };
 
 static inline unsigned bucket_idx(struct vslkv_tbl *tbl, u32 hash)
@@ -94,7 +95,7 @@ out:
 /*TODO reserving '0' for empty entries is technically a no-go as it could be
   a hash value.*/
 static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
-                         enum LOOKUP_TYPE type)
+                         unsigned int type)
 {
 	unsigned b_idx = bucket_idx(tbl, h1);
 	unsigned idx = BUCKET_LEN * b_idx;
@@ -117,7 +118,7 @@ static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
 }
 
 static int tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
-                       enum LOOKUP_TYPE type)
+                       unsigned int type)
 {
 	unsigned long flags;
 	int idx;
@@ -199,6 +200,8 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 		goto out;
 	}
 
+	printk("rq: %u %u\n", blk_rq_bytes(rq), blk_rq_pos(rq));
+
 	ret = blk_rq_map_user(q, rq, NULL, ubuf, len, GFP_KERNEL);
 	if (ret) {
 		pr_err("<%s>%d: failed to map userspace memory into request\n",
@@ -242,13 +245,10 @@ static int get(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 
 	hash2(&h2, key, cmd->key_len);
 
-	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
+	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1)
 		entry = &tbl->entries[ret];
-	} else {
-		pr_debug("<%s>%d: could not find entry\n",
-		         __func__, __LINE__);
-		return -1;
-	}
+	else
+		return OPENVSL_KV_ERR_NOKEY;
 
 	ret = do_io(s, READ, block_to_addr(entry->blk),
 	            (void __user *)cmd->val_addr, cmd->val_len);
@@ -455,7 +455,7 @@ int vslkv_unpack(struct vsl_dev *dev, struct openvsl_cmd_kv __user *ucmd)
 		ret = del(s, &cmd, key, h1);
 		break;
 	default:
-		ret = -1;
+		ret = -EINVAL;
 		break;
 	}
 
@@ -464,6 +464,10 @@ int vslkv_unpack(struct vsl_dev *dev, struct openvsl_cmd_kv __user *ucmd)
 err_ientry:
 	kfree(key);
 out:
+	if (ret > 0) {
+		ucmd->errcode = ret;
+		ret = 0;
+	}
 	return ret;
 }
 

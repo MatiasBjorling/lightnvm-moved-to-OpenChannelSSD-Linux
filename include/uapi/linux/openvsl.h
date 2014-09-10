@@ -24,10 +24,15 @@ enum {
 	OPENVSL_KV_DEL		= 0x03,
 };
 
+enum {
+	OPENVSL_KV_ERR_NONE	= 0,
+	OPENVSL_KV_ERR_NOKEY	= 1,
+};
 
 struct openvsl_cmd_kv {
 	__u8		opcode;
-	__u8		res[7];
+	__u8		errcode;
+	__u8		res[6];
 	__u32		key_len;
 	__u32		val_len;
 	__u64		key_addr;

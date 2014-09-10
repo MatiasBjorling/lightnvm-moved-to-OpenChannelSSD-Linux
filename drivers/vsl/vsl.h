@@ -437,7 +437,7 @@ struct vsl_block *vsl_pool_get_block(struct vsl_pool *, int is_gc);
 /* vslkv.c */
 int vslkv_init(struct vsl_stor *s, unsigned long size);
 void vslkv_exit(struct vsl_stor *s);
-int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd);
+int vslkv_unpack(struct vsl_dev *dev, struct openvsl_cmd_kv __user *ucmd);
 void vsl_pool_put_block(struct vsl_block *);
 
 

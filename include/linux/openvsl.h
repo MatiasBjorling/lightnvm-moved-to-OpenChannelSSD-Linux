@@ -1,6 +1,7 @@
 #ifndef OPENVSL_H
 #define OPENVSL_H
 
+#include <uapi/linux/openvsl.h>
 #include <linux/types.h>
 #include <linux/blk-mq.h>
 #include <linux/genhd.h>
@@ -127,25 +128,5 @@ void vsl_complete_request(struct vsl_dev *, struct request *);
 
 int vsl_ioctl(struct vsl_dev *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
 int vsl_compat_ioctl(struct vsl_dev *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
-
-struct vsl_cmd_kv {
-	u8	opcode;
-	u8	res[3];
-	u16	key_len;
-	u16	val_len;
-	u64	key_addr;
-	u64	val_addr;
-};
-
-enum VslKvCommands {
-	VSL_KV_GET	= 0x00,
-	VSL_KV_PUT	= 0x01,
-	VSL_KV_UPDATE	= 0x02,
-	VSL_KV_DEL	= 0x03,
-};
-
-#define VSL_IOC_MAGIC 'O'
-#define VSL_IOCTL_ID		_IO(VSL_IOC_MAGIC, 0x40)
-#define VSL_IOCTL_KV		_IOWR(VSL_IOC_MAGIC, 0x50, struct vsl_cmd_kv)
 
 #endif

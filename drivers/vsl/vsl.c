@@ -484,7 +484,7 @@ int vsl_ioctl(struct vsl_dev *dev, fmode_t mode, unsigned int cmd,
 							unsigned long arg)
 {
 	switch(cmd) {
-	case VSL_IOCTL_KV:
+	case OPENVSL_IOCTL_KV:
 		return vslkv_unpack(dev, (void __user *)arg);
 	default:
 		return -ENOTTY;

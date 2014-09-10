@@ -317,7 +317,7 @@ out:
  *
  *	Fetch value identified by the supplied key.
  */
-static int get(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
+static int get(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
 {
 	struct vslkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
@@ -433,7 +433,7 @@ err_balloc:
 	return ret;
 }
 
-static int update_entry(struct vsl_stor *s, struct vsl_cmd_kv *cmd,
+static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
                         struct kv_entry *entry, int existing)
 {
 	struct vsl_block *block;
@@ -484,7 +484,7 @@ no_block:
  *	Store the supplied value in an entry identified by the
  *	supplied key. Will overwrite existing entry if necessary.
  */
-static int put(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
+static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
 {
 	struct vslkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
@@ -528,7 +528,7 @@ static int put(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
  *	Updates existing value identified by 'k' to the new value.
  *	Operation only succeeds if k points to an existing value.
  */
-static int update(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
+static int update(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
 {
 	struct vslkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
@@ -560,7 +560,7 @@ static int update(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
  *
  *	Removes the value associated the supplied key.
  */
-static int del(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
+static int del(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
 {
 	struct vslkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
@@ -581,9 +581,9 @@ static int del(struct vsl_stor *s, struct vsl_cmd_kv *cmd, void *key, u32 h1)
 	return 0;
 }
 
-int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd)
+int vslkv_unpack(struct vsl_dev *dev, struct openvsl_cmd_kv __user *ucmd)
 {
-	struct vsl_cmd_kv cmd;
+	struct openvsl_cmd_kv cmd;
 	struct vsl_stor *s = dev->stor;
 	struct vslkv_inflight *inflight = &s->kv.inflight;
 
@@ -611,16 +611,16 @@ int vslkv_unpack(struct vsl_dev *dev, struct vsl_cmd_kv __user *ucmd)
 	inflight_lock(inflight, ientry);
 
 	switch(cmd.opcode) {
-	case VSL_KV_GET:
+	case OPENVSL_KV_GET:
 		ret = get(s, &cmd, key, h1);
 		break;
-	case VSL_KV_PUT:
+	case OPENVSL_KV_PUT:
 		ret = put(s, &cmd, key, h1);
 		break;
-	case VSL_KV_UPDATE:
+	case OPENVSL_KV_UPDATE:
 		ret = update(s, &cmd, key, h1);
 		break;
-	case VSL_KV_DEL:
+	case OPENVSL_KV_DEL:
 		ret = del(s, &cmd, key, h1);
 		break;
 	default:

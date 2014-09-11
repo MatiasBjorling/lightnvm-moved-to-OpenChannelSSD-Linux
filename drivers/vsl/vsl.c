@@ -323,10 +323,6 @@ int vsl_queue_init(struct vsl_dev *dev)
 		return false;
 	}
 
-	/* limit requests to 4K */
-	blk_queue_logical_block_size(dev->q, nr_sectors_per_page << 9);
-	blk_queue_max_hw_sectors(dev->q, nr_sectors_per_page);
-
 	return true;
 }
 

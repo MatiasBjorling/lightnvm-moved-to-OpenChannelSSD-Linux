@@ -1,3 +1,4 @@
+#define DEBUG
 #include <linux/crypto.h>
 #include <linux/scatterlist.h>
 #include <linux/jhash.h>
@@ -47,7 +48,7 @@ enum {
 
 static inline unsigned bucket_idx(struct vslkv_tbl *tbl, u32 hash)
 {
-	return (hash % (tbl->tbl_len/BUCKET_LEN));
+	return hash % (tbl->tbl_len / BUCKET_LEN);
 }
 
 /*TODO FIXME - no locks can be held while executing this*/
@@ -94,16 +95,16 @@ out:
 
 /*TODO reserving '0' for empty entries is technically a no-go as it could be
   a hash value.*/
-static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
+static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, const u64 *h2,
                          unsigned int type)
 {
 	unsigned b_idx = bucket_idx(tbl, h1);
 	unsigned idx = BUCKET_LEN * b_idx;
-	unsigned i;
 	struct kv_entry *entry = &tbl->entries[idx];
+	unsigned i;
 
 	for (i = 0; i < BUCKET_LEN; i++, entry++) {
-		if (memcmp(entry->hash, h2, sizeof(u64)*2) == 0) {
+		if (!memcmp(entry->hash, h2, sizeof(u64) * 2)) {
 			if (type == NEW_ENTRY)
 				entry->hash[0] = 1;
 			idx += i;
@@ -117,40 +118,40 @@ static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
 	return idx;
 }
 
-static int tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, u64 *h2,
+static int tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, const u64 *h2,
                        unsigned int type)
 {
-	unsigned long flags;
 	int idx;
 
-	spin_lock_irqsave(&tbl->lock, flags);
+	spin_lock(&tbl->lock);
 	idx = __tbl_get_idx(tbl, h1, h2, type);
-	spin_unlock_irqrestore(&tbl->lock, flags);
+	spin_unlock(&tbl->lock);
 	return idx;
 }
 
+
 static int tbl_new_entry(struct vslkv_tbl *tbl, u32 h1)
 {
-	u64 empty[2] = { 0, 0 };
+	const u64 empty[2] = { 0, 0 };
 	return tbl_get_idx(tbl, h1, empty, NEW_ENTRY);
 }
 
-static inline u32 hash1(void *key, unsigned length)
+static u32 hash1(void *key, unsigned key_len)
 {
-	u32 ret, blocks, tmp;
-	u32 *p = (u32*)key;
-	blocks = length / sizeof(u32);
-	tmp = length % sizeof(u32);
+	u32 hash;
+	u32 *p = (u32*) key;
+	u32 len = key_len / sizeof(u32);
+	u32 offset = key_len % sizeof(u32);
 
-	if (tmp) {
-		memcpy(&tmp, p+blocks, tmp);
-		ret = jhash2(p, blocks, 0);
-		return jhash2(&tmp, 1, ret);
+	if (offset) {
+		memcpy(&offset, p + len, offset);
+		hash = jhash2(p, len, 0);
+		return jhash2(&offset, 1, hash);
 	}
-	return jhash2(p, blocks, 0);
+	return jhash2(p, len, 0);
 }
 
-static inline void hash2(void *dst, void *src, size_t src_len)
+static void hash2(void *dst, void *src, size_t src_len)
 {
 	struct scatterlist sg;
 	struct hash_desc hdesc;
@@ -163,7 +164,7 @@ static inline void hash2(void *dst, void *src, size_t src_len)
 	crypto_free_hash(hdesc.tfm);
 }
 
-static inline void *cpy_val(u64 addr, size_t len)
+static void *cpy_val(u64 addr, size_t len)
 {
 	void *buf = NULL;
 
@@ -239,27 +240,26 @@ static int get(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 	struct vslkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
 	u64 h2[2];
-	int ret = 0;
+	int idx;
 
 	hash2(&h2, key, cmd->key_len);
 
-	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1)
-		entry = &tbl->entries[ret];
-	else
+	idx = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY);
+	if (idx < 0)
 		return OPENVSL_KV_ERR_NOKEY;
 
-	ret = do_io(s, READ, block_to_addr(entry->blk),
-	            (void __user *)cmd->val_addr, cmd->val_len);
+	entry = &tbl->entries[idx];
 
-	return ret;
+	return do_io(s, READ, block_to_addr(entry->blk),
+			(void __user *)cmd->val_addr, cmd->val_len);
 }
 
 static struct vsl_block *acquire_block(struct vsl_stor *s)
 {
-	int i;
-	struct vsl_ap *ap = NULL;
-	struct vsl_pool *pool = NULL;
+	struct vsl_ap *ap;
+	struct vsl_pool *pool;
 	struct vsl_block *block = NULL;
+	int i;
 
 	for(i = 0; i < s->nr_aps; i++) {
 		ap = get_next_ap(s);
@@ -273,7 +273,7 @@ static struct vsl_block *acquire_block(struct vsl_stor *s)
 }
 
 static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
-                        struct kv_entry *entry, int existing)
+			struct kv_entry *entry)
 {
 	struct vsl_block *block;
 	int ret;
@@ -281,7 +281,6 @@ static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
 	BUG_ON(!s);
 	BUG_ON(!cmd);
 	BUG_ON(!entry);
-	BUG_ON(existing && !entry->blk);
 
 	block = acquire_block(s);
 	if (!block) {
@@ -299,8 +298,9 @@ static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
 		goto io_err;
 	}
 
-	if (existing)
+	if (entry->blk)
 		s->type->pool_put_blk(entry->blk);
+
 	entry->blk = block;
 
 	return ret;
@@ -325,16 +325,15 @@ static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 	struct vslkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
 	u64 h2[2];
-	int ret = -1;
-	int existing = 0;
+	int idx, ret;
+	int exist = 0;
 
 	hash2(&h2, key, cmd->key_len);
 
-	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
-		entry = &tbl->entries[ret];
-		existing = 1;
-	} else if ((ret = tbl_new_entry(tbl, h1)) != -1) {
-		entry = &tbl->entries[ret];
+	if ((idx = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
+		entry = &tbl->entries[idx];
+	} else if ((idx = tbl_new_entry(tbl, h1)) != -1) {
+		entry = &tbl->entries[idx];
 		memcpy(entry->hash, &h2, sizeof(entry->hash));
 	} else {
 		printk("<%s>%d: no empty entries and bucket is full!!\n",
@@ -342,9 +341,13 @@ static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 		BUG();
 	}
 
-	if ((ret = update_entry(s, cmd, entry, existing)) && !existing) {
+	ret = update_entry(s, cmd, entry);
+
+	/* If update_entry failed, we reset the entry->hash, as it was updated
+	 * by the previous statements and is no longer valid */
+	if (!entry->blk)
 		memset(entry->hash, 0, sizeof(entry->hash));
-	}
+
 	return ret;
 }
 
@@ -363,20 +366,21 @@ static int update(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32
 	struct vslkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
 	u64 h2[2];
-	int ret = -1;
+	int ret;
 
 	hash2(&h2, key, cmd->key_len);
 
-	if ((ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY)) != -1) {
-		entry = &tbl->entries[ret];
-	} else {
+	ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY);
+	if (ret < 0) {
 		pr_debug("<%s>%d: no entry, skipping\n", __func__, __LINE__);
 		return 0;
 	}
 
-	if ((ret = update_entry(s, cmd, entry, 0))) {
+	entry = &tbl->entries[ret];
+
+	ret = update_entry(s, cmd, entry);
+	if (ret)
 		memset(entry->hash, 0, sizeof(entry->hash));
-	}
 	return ret;
 }
 

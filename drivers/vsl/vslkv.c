@@ -326,7 +326,6 @@ static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 	struct kv_entry *entry;
 	u64 h2[2];
 	int idx, ret;
-	int exist = 0;
 
 	hash2(&h2, key, cmd->key_len);
 

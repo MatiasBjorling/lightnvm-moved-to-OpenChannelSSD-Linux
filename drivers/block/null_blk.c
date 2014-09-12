@@ -338,9 +338,9 @@ static int null_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
 							struct vsl_id_chnl *ic)
 {
 	ic->queue_size = hw_queue_depth;
-	ic->gran_read = 4096;
-	ic->gran_write = 4096;
-	ic->gran_erase = 4096 * 128;
+	ic->gran_read = 8192;
+	ic->gran_write = 8192;
+	ic->gran_erase = 8192 * 128;
 	ic->oob_size = 0;
 	ic->t_r = ic->t_sqr = 25000; /* 25us */
 	ic->t_w = ic->t_sqw = 500000; /* 500us */
@@ -447,10 +447,26 @@ static void null_release(struct gendisk *disk, fmode_t mode)
 {
 }
 
+static int null_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
+							unsigned long arg)
+{
+	struct nullb *nullb = bdev->bd_disk->private_data;
+	int ret;
+
+	if (nullb->vsl_dev) {
+		ret = vsl_ioctl(nullb->vsl_dev, mode, cmd, arg);
+		if (ret != -ENOTTY)
+			return ret;
+	}
+
+	return -ENOTTY;
+};
+
 static const struct block_device_operations null_fops = {
 	.owner =	THIS_MODULE,
 	.open =		null_open,
 	.release =	null_release,
+	.ioctl =	null_ioctl,
 };
 
 static int setup_commands(struct nullb_queue *nq)
@@ -601,6 +617,7 @@ static int null_add_dev(void)
 
 	blk_queue_logical_block_size(nullb->q, bs);
 	blk_queue_physical_block_size(nullb->q, bs);
+	blk_queue_max_hw_sectors(nullb->q, 4096);
 
 	size = gb * 1024 * 1024 * 1024ULL;
 	sector_div(size, bs);

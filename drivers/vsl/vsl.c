@@ -22,6 +22,9 @@
 #include <linux/sem.h>
 #include <linux/types.h>
 #include <linux/openvsl.h>
+
+#include <trace/events/block.h>
+
 #include "vsl.h"
 
 /* Defaults
@@ -83,6 +86,7 @@ void vsl_unregister_target(struct vsl_target_type *t)
 int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 {
 	struct vsl_stor *s = dev->stor;
+	trace_block_rq_lnvm_start(rq->q, rq);
 
 	if (rq->cmd_flags & REQ_VSL_PASSTHRU)
 		return BLK_MQ_RQ_QUEUE_OK;
@@ -97,6 +101,7 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 		return s->type->write_rq(s, rq);
 	else
 		return s->type->read_rq(s, rq);
+	trace_block_rq_lnvm_end(rq->q, rq);
 }
 EXPORT_SYMBOL_GPL(vsl_queue_rq);
 

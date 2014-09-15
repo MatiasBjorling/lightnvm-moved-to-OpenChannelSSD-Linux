@@ -728,6 +728,32 @@ static void blk_add_trace_rq(struct request_queue *q, struct request *rq,
 	}
 }
 
+static void blk_add_trace_rq_lnvm_start(void *ignore, struct request_queue *q,
+					struct request *rq)
+{
+	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_START);
+}
+
+static void blk_add_trace_rq_lnvm_end(void *ignore, struct request_queue *q,
+				      struct request *rq)
+{
+	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_END);
+}
+
+static void blk_add_trace_rq_lnvm_endio_start(void *ignore,
+					      struct request_queue *q,
+					      struct request *rq)
+{
+	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_ENDIO_START);
+}
+
+static void blk_add_trace_rq_lnvm_endio_end(void *ignore,
+					    struct request_queue *q,
+					    struct request *rq)
+{
+	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_ENDIO_END);
+}
+
 static void blk_add_trace_rq_abort(void *ignore,
 				   struct request_queue *q, struct request *rq)
 {
@@ -1025,6 +1051,13 @@ static void blk_register_tracepoints(void)
 	ret = register_trace_block_bio_remap(blk_add_trace_bio_remap, NULL);
 	WARN_ON(ret);
 	ret = register_trace_block_rq_remap(blk_add_trace_rq_remap, NULL);
+	ret = register_trace_block_rq_lnvm_start(blk_add_trace_rq_lnvm_start, NULL);
+	WARN_ON(ret);
+	ret = register_trace_block_rq_lnvm_end(blk_add_trace_rq_lnvm_end, NULL);
+	WARN_ON(ret);
+	ret = register_trace_block_rq_lnvm_endio_start(blk_add_trace_rq_lnvm_endio_start, NULL);
+	WARN_ON(ret);
+	ret = register_trace_block_rq_lnvm_endio_end(blk_add_trace_rq_lnvm_endio_end, NULL);
 	WARN_ON(ret);
 }
 
@@ -1047,6 +1080,10 @@ static void blk_unregister_tracepoints(void)
 	unregister_trace_block_rq_issue(blk_add_trace_rq_issue, NULL);
 	unregister_trace_block_rq_insert(blk_add_trace_rq_insert, NULL);
 	unregister_trace_block_rq_abort(blk_add_trace_rq_abort, NULL);
+	unregister_trace_block_rq_lnvm_start(blk_add_trace_rq_lnvm_start, NULL);
+	unregister_trace_block_rq_lnvm_end(blk_add_trace_rq_lnvm_end, NULL);
+	unregister_trace_block_rq_lnvm_endio_start(blk_add_trace_rq_lnvm_endio_start, NULL);
+	unregister_trace_block_rq_lnvm_endio_end(blk_add_trace_rq_lnvm_endio_end, NULL);
 
 	tracepoint_synchronize_unregister();
 }

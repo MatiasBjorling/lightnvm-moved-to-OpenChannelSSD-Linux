@@ -719,6 +719,7 @@ static void blk_add_trace_rq(struct request_queue *q, struct request *rq,
 
 	if (rq->cmd_type == REQ_TYPE_BLOCK_PC) {
 		what |= BLK_TC_ACT(BLK_TC_PC);
+		printk("BLOCK_PC MODE\n");
 		__blk_add_trace(bt, 0, nr_bytes, rq->cmd_flags,
 				what, rq->errors, rq->cmd_len, rq->cmd);
 	} else  {
@@ -728,30 +729,48 @@ static void blk_add_trace_rq(struct request_queue *q, struct request *rq,
 	}
 }
 
+static void vsl_add_trace_rq(struct request_queue *q, struct request *rq,
+			     unsigned int nr_bytes, u32 what)
+{
+	struct blk_trace *bt = q->blk_trace;
+
+	if (likely(!bt))
+		return;
+	
+	if (rq->cmd_type != REQ_TYPE_BLOCK_PC)  {
+		what |= BLK_TC_ACT(BLK_TC_FS);
+		__blk_add_trace(bt, rq->vsl_hacktrace, nr_bytes,
+				rq->cmd_flags, what, rq->errors, 0, NULL);
+	} else {
+		WARN(rq->cmd_type == REQ_TYPE_BLOCK_PC,
+			"Don't know how to handle & tag BLOCK_PC requests");
+	}
+}
+
 static void blk_add_trace_rq_lnvm_start(void *ignore, struct request_queue *q,
 					struct request *rq)
 {
-	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_START);
+	vsl_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_START);
 }
 
 static void blk_add_trace_rq_lnvm_end(void *ignore, struct request_queue *q,
 				      struct request *rq)
 {
-	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_END);
+	vsl_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_END);
 }
 
 static void blk_add_trace_rq_lnvm_endio_start(void *ignore,
 					      struct request_queue *q,
 					      struct request *rq)
 {
-	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_ENDIO_START);
+	vsl_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_ENDIO_START);
 }
 
 static void blk_add_trace_rq_lnvm_endio_end(void *ignore,
 					    struct request_queue *q,
 					    struct request *rq)
 {
-	blk_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_ENDIO_END);
+	vsl_add_trace_rq(q, rq, blk_rq_bytes(rq), BLK_TA_LNVM_ENDIO_END);
 }
 
 static void blk_add_trace_rq_abort(void *ignore,

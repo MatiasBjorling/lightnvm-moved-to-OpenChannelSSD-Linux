@@ -1393,6 +1393,10 @@ static const struct {
 	[__BLK_TA_SPLIT]	= {{  "X", "split" },	   blk_log_split },
 	[__BLK_TA_BOUNCE]	= {{  "B", "bounce" },	   blk_log_generic },
 	[__BLK_TA_REMAP]	= {{  "A", "remap" },	   blk_log_remap },
+	[__BLK_TA_LNVM_START]	= {{  "L", "VSL-start"},   blk_log_with_error },
+	[__BLK_TA_LNVM_END]	= {{  "N", "VSL-exit"},    blk_log_with_error },
+	[__BLK_TA_LNVM_ENDIO_START] = {{ "V", "VSL-endio-start"}, blk_log_with_error },
+	[__BLK_TA_LNVM_ENDIO_END] = {{"Y", "VSL-endio-end"}, blk_log_with_error },
 };
 
 static enum print_line_t print_one_line(struct trace_iterator *iter,

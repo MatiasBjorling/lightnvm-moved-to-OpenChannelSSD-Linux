@@ -97,20 +97,27 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
 
-	if (rq_data_dir(rq) == WRITE)
-		return s->type->write_rq(s, rq);
-	else
-		return s->type->read_rq(s, rq);
+	if (rq_data_dir(rq) == WRITE) {
+		ret = s->type->write_rq(s, rq);
+	} else {
+		ret =  s->type->read_rq(s, rq);
+	}
+
 	trace_block_rq_lnvm_end(rq->q, rq);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(vsl_queue_rq);
 
 void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 {
+	trace_block_rq_lnvm_endio_start(rq->q, rq);
+
 	if (!(rq->cmd_flags & REQ_VSL_PASSTHRU))
 		vsl_endio(vsl_dev, rq, error);
 
 	blk_mq_end_io(rq, error);
+
+	trace_block_rq_lnvm_endio_end(rq->q, rq);
 }
 EXPORT_SYMBOL_GPL(vsl_end_io);
 

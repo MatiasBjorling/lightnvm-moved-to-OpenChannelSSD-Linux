@@ -1438,7 +1438,7 @@ static int nvme_vsl_id_chnl_static(struct vsl_dev *vsl_dev, int chnl_id,
 							struct vsl_id_chnl *ic)
 {
 	const ulong VSL_PAGES_PER_BLOCK = 128;
-	const ulong VSL_BLOCK_PER_BANK = 256;
+	const ulong VSL_BLOCK_PER_BANK = 128;
 	const ulong VSL_NUM_BANKS = 4;
 	const ulong VSL_SECTORS_PER_PAGE = 32;
 

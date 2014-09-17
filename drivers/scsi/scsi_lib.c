@@ -1887,6 +1887,13 @@ static int scsi_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 	if (!scsi_host_queue_ready(q, shost, sdev))
 		goto out_dec_target_busy;
 
+	if (sdev->vsl_dev && req->cmd_type == REQ_TYPE_FS) {
+		vsl_queue_rq(sdev->vsl_dev, req);
+		cmd->scsi_done = scsi_vsl_done;
+	} else {
+		cmd->scsi_done = scsi_mq_done;
+	}
+
 	if (!(req->cmd_flags & REQ_DONTPREP)) {
 		ret = prep_to_mq(scsi_mq_prep_fn(req));
 		if (ret)
@@ -1894,14 +1901,12 @@ static int scsi_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 		req->cmd_flags |= REQ_DONTPREP;
 	}
 
-	scsi_init_cmd_errh(cmd);
-
-	if (sdev->vsl_dev && req->cmd_type == REQ_TYPE_FS) {
-		vsl_queue_rq(sdev->vsl_dev, req);
+	if (sdev->vsl_dev && req->cmd_type == REQ_TYPE_FS)
 		cmd->scsi_done = scsi_vsl_done;
-	} else {
+	else
 		cmd->scsi_done = scsi_mq_done;
-	}
+
+	scsi_init_cmd_errh(cmd);
 
 	reason = scsi_dispatch_cmd(cmd);
 	if (reason) {

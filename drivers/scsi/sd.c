@@ -2886,9 +2886,9 @@ static int sd_format_disk_name(char *prefix, int index, char *buf, int buflen)
 
 static int scsi_vsl_id(struct vsl_dev *dev, struct vsl_id *vsl_id)
 {
-	vsl_id->ver_id = 0x1;
+	vsl_id->ver_id = 0x2;
 	vsl_id->nvm_type = VSL_NVMT_BLK;
-	vsl_id->nchannels = 1;
+	vsl_id->nchannels = 2;
 	return 0;
 }
 
@@ -2897,8 +2897,8 @@ static int scsi_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
 {
 	const ulong VSL_PAGES_PER_BLOCK = 128;
 	const ulong VSL_BLOCK_PER_BANK = 4096;
-	const ulong VSL_NUM_BANKS = 8;
-	const ulong VSL_SECTORS_PER_PAGE = 16;
+	const ulong VSL_NUM_BANKS = 4;
+	const ulong VSL_SECTORS_PER_PAGE = 32;
 
 	ic->queue_size = 32;
 	ic->gran_read = VSL_SECTORS_PER_PAGE << 9;
@@ -2913,7 +2913,7 @@ static int scsi_vsl_id_chnl(struct vsl_dev *dev, int chnl_num,
 	ic->laddr_end = (VSL_SECTORS_PER_PAGE *
 			 VSL_PAGES_PER_BLOCK *
 			 VSL_BLOCK_PER_BANK *
-			 VSL_NUM_BANKS * 1024) - 1;
+			 VSL_NUM_BANKS * 1024) -1 ;
 	return 0;
 }
 

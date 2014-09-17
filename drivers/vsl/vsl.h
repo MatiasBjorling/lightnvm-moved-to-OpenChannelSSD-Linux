@@ -27,6 +27,8 @@
 #include <linux/blk-mq.h>
 #include <linux/slab.h>
 
+#include "bb_openssd.h" /* OpenSSD specific */
+
 #ifdef VSL_DEBUG
 /*Wrap BUG_ON to allow additional checks in debug mode without
  impacting production performance*/
@@ -368,6 +370,8 @@ struct vsl_stor {
 	unsigned int per_rq_offset;
 
 	struct vslkv kv;
+
+	int internal_bad_blocks;
 };
 
 struct per_rq_data_vsl {

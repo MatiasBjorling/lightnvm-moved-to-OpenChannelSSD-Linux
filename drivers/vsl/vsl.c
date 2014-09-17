@@ -129,7 +129,8 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 	struct vsl_pool *pool;
 	struct vsl_block *block;
 	struct vsl_ap *ap;
-	int i, j;
+	struct vsl_badblocks bb[8];
+	int i, j, bidx = -1;
 
 	spin_lock_init(&s->rev_lock);
 
@@ -179,6 +180,37 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		}
 	}
 
+	/* Remove bad blocks. FIXME: Currently hardcoded for OpenSSD. */
+	vsl_get_bad_blocks(bb);
+	if (s->internal_bad_blocks) {
+		vsl_for_each_pool(s, pool, i)
+		{
+			int cur = 0;
+
+			pool_for_each_block(pool, block, j)
+			{
+				if (j % 4096 == 0) {
+					cur = 0;
+					bidx++;
+				}
+
+				if (bb[bidx].blks[cur] + (4096 * bidx) - 1 == block->id) {
+					cur++;
+
+					list_del(&block->list);
+
+					pool->nr_free_blocks--;
+
+					/* There might be duplicated in the list */
+					if (cur < 511 && bb[bidx].blks[cur] == bb[bidx].blks[cur+1])
+						cur++;
+				}
+
+			}
+			printk("Actual blocks per pool: %u\n", pool->nr_free_blocks);
+		}
+	}
+
 	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;
 	s->aps = kcalloc(s->nr_aps, sizeof(struct vsl_ap), GFP_KERNEL);
 	if (!s->aps)
@@ -190,9 +222,11 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		ap->pool = &s->pools[i / s->nr_aps_per_pool];
 
 		block = s->type->pool_get_blk(ap->pool, 0);
+		printk("first block %u\n", block->id);
 		vsl_set_ap_cur(ap, block);
 		/* Emergency gc block */
 		block = s->type->pool_get_blk(ap->pool, 1);
+		printk("second block %u\n", block->id);
 		ap->gc_cur = block;
 
 		ap->t_read = s->config.t_read;
@@ -363,6 +397,9 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 		goto err_target;
 
 	s->nr_pools = vsl_id.nchannels;
+
+	if (vsl_id.ver_id == 0x2)
+		s->internal_bad_blocks = 1;
 
 	/* TODO: We're limited to the same setup for each channel */
 	if (dev->ops->identify_channel(dev, 0, &vsl_id_chnl))

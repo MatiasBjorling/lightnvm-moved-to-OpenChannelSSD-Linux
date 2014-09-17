@@ -216,6 +216,8 @@ int __vsl_write_rq(struct vsl_stor *s, struct request *rq, int is_gc)
 	 * driver
 	 */
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
+	//printk("vsl: W %llu(%llu) B: %u\n", p->addr, p->addr * NR_PHY_IN_LOG,
+	//		p->block->id);
 
 	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
 

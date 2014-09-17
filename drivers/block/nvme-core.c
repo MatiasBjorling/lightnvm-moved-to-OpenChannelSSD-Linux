@@ -61,6 +61,10 @@ static unsigned char retry_time = 30;
 module_param(retry_time, byte, 0644);
 MODULE_PARM_DESC(retry_time, "time in seconds to retry failed I/O");
 
+static unsigned char use_lightnvm = 0;
+module_param(use_lightnvm, byte, 0644);
+MODULE_PARM_DESC(use_lightnvm, "force initialization of lightnvm");
+
 static int nvme_major;
 module_param(nvme_major, int, 0);
 
@@ -1975,7 +1979,7 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	if (!ns)
 		return NULL;
 
-	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM) {
+	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM || use_lightnvm) {
 		vsl_dev = vsl_alloc();
 		if (!vsl_dev)
 			goto out_free_ns;
@@ -2027,7 +2031,7 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	if (dev->oncs & NVME_CTRL_ONCS_DSM)
 		nvme_config_discard(ns);
 
-	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM) {
+	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM || use_lightnvm) {
 		vsl_dev->q = ns->queue;
 		vsl_dev->disk = disk;
 

@@ -420,7 +420,7 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
 			rq_data_dir(req) ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 	nvme_free_iod(nvmeq->dev, iod);
 
-	if (nvmeq->dev->oacs & NVME_CTRL_OACS_LIGHTNVM)
+	if (nvmeq->dev->oacs & NVME_CTRL_OACS_LIGHTNVM || use_lightnvm)
 		vsl_complete_request(cmd_rq->ns->vsl_dev, req);
 	else
 		blk_mq_complete_request(req);

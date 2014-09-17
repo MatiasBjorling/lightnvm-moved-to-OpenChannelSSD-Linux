@@ -1425,6 +1425,41 @@ static int nvme_vsl_id_chnl(struct vsl_dev *vsl_dev, int chnl_id,
 	return ret;
 }
 
+static int nvme_vsl_id_static(struct vsl_dev *vsl_dev, struct vsl_id *vsl_id)
+{
+	vsl_id->ver_id = 0x1;
+	vsl_id->nvm_type = VSL_NVMT_BLK;
+	vsl_id->nchannels = 1;
+	return 0;
+}
+
+
+static int nvme_vsl_id_chnl_static(struct vsl_dev *vsl_dev, int chnl_id,
+							struct vsl_id_chnl *ic)
+{
+	const ulong VSL_PAGES_PER_BLOCK = 128;
+	const ulong VSL_BLOCK_PER_BANK = 256;
+	const ulong VSL_NUM_BANKS = 4;
+	const ulong VSL_SECTORS_PER_PAGE = 32;
+
+	ic->queue_size = 32;
+	ic->gran_read = VSL_SECTORS_PER_PAGE << 9;
+	ic->gran_write = VSL_SECTORS_PER_PAGE << 9;
+	ic->gran_erase = (VSL_SECTORS_PER_PAGE * VSL_PAGES_PER_BLOCK) << 9;
+	ic->oob_size = 0;
+	ic->t_r = ic->t_sqr = 25000; /* 25us */
+	ic->t_w = ic->t_sqw = 500000; /* 500us */
+	ic->t_e = 1500000; /* 1.500us */
+	ic->io_sched = VSL_IOSCHED_CHANNEL;
+	ic->laddr_begin = 0;
+	ic->laddr_end = (VSL_SECTORS_PER_PAGE *
+			 VSL_PAGES_PER_BLOCK *
+			 VSL_BLOCK_PER_BANK *
+			 VSL_NUM_BANKS * 1024) -1 ;
+	return 0;
+}
+
+
 static int nvme_vsl_get_features(struct vsl_dev *dev,
 						struct vsl_get_features *gf)
 {
@@ -1445,6 +1480,13 @@ static struct blk_mq_ops nvme_mq_admin_ops = {
 	.init_hctx	= nvme_admin_init_hctx,
 	.init_request	= nvme_admin_init_request,
 	.timeout	= nvme_timeout,
+};
+
+static struct vsl_dev_ops nvme_vsl_dev_ops_static = {
+	.identify		= nvme_vsl_id_static,
+	.identify_channel	= nvme_vsl_id_chnl_static,
+	.get_features		= nvme_vsl_get_features,
+	.set_responsibility	= nvme_vsl_set_rsp,
 };
 
 static struct vsl_dev_ops nvme_vsl_dev_ops = {
@@ -1984,7 +2026,11 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 		if (!vsl_dev)
 			goto out_free_ns;
 
-		vsl_dev->ops = &nvme_vsl_dev_ops;
+		if (use_lightnvm)
+			vsl_dev->ops = &nvme_vsl_dev_ops_static;
+		else
+			vsl_dev->ops = &nvme_vsl_dev_ops;
+
 		vsl_dev->driver_data = ns;
 		vsl_dev->drv_cmd_size = dev->tagset.cmd_size - vsl_cmd_size();
 	}

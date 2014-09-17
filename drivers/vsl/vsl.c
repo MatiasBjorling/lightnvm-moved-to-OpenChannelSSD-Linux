@@ -129,9 +129,8 @@ void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 	if (!(rq->cmd_flags & REQ_VSL_PASSTHRU))
 		vsl_endio(vsl_dev, rq, error);
 
-	blk_mq_end_io(rq, error);
-
 	trace_block_rq_lnvm_endio_end(rq->q, rq);
+	blk_mq_end_io(rq, error);
 }
 EXPORT_SYMBOL_GPL(vsl_end_io);
 

@@ -22,6 +22,10 @@
 #include <linux/sem.h>
 #include <linux/types.h>
 #include <linux/openvsl.h>
+
+#include <linux/ktime.h>
+#include <trace/events/block.h>
+
 #include "vsl.h"
 
 /* Defaults
@@ -80,9 +84,23 @@ void vsl_unregister_target(struct vsl_target_type *t)
 	up_write(&_lock);
 }
 
+static inline unsigned long time_taken(struct timespec end,
+				       struct timespec start)
+{
+	struct timespec ts;
+	ts = timespec_sub(end, start);
+	BUG_ON(ts.tv_sec); /*processing time should never exceed 999us*/
+	return ts.tv_nsec;
+}
+
 int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 {
 	struct vsl_stor *s = dev->stor;
+	int ret;
+
+	rq->vsl_hacktrace = blk_rq_pos(rq);
+
+	trace_block_rq_lnvm_start(rq->q, rq);
 
 	if (rq->cmd_flags & REQ_VSL_PASSTHRU)
 		return BLK_MQ_RQ_QUEUE_OK;
@@ -93,18 +111,25 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
 
-	if (rq_data_dir(rq) == WRITE)
-		return s->type->write_rq(s, rq);
-	else
-		return s->type->read_rq(s, rq);
+	if (rq_data_dir(rq) == WRITE) {
+		ret = s->type->write_rq(s, rq);
+	} else {
+		ret =  s->type->read_rq(s, rq);
+	}
+
+	trace_block_rq_lnvm_end(rq->q, rq);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(vsl_queue_rq);
 
 void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 {
+	trace_block_rq_lnvm_endio_start(rq->q, rq);
+
 	if (!(rq->cmd_flags & REQ_VSL_PASSTHRU))
 		vsl_endio(vsl_dev, rq, error);
 
+	trace_block_rq_lnvm_endio_end(rq->q, rq);
 	blk_mq_end_io(rq, error);
 }
 EXPORT_SYMBOL_GPL(vsl_end_io);

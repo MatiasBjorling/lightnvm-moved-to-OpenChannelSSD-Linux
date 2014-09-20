@@ -2273,7 +2273,7 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	 * either be moved toward the nvme_queue_rq function, or allow per ns
 	 * queue_rq function to be specified.
 	 */
-	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM)
+	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM || use_lightnvm)
 		dev->tagset.cmd_size += vsl_cmd_size();
 
 	if (blk_mq_alloc_tag_set(&dev->tagset))

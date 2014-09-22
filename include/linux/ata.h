@@ -802,6 +802,8 @@ static inline bool ata_id_has_ncq_send_and_recv(const u16 *id)
 
 static inline bool ata_id_has_lightnvm(const u16 *id)
 {
+  printk("ata_id_has_lightnvm -- forcing VSL OFF\n");
+  return false;
 	printk("vsl: ata_id_major_version %u dsm vsl %u\n", ata_id_major_version(id), id[ATA_ID_DATA_SET_MGMT] & 0x2);
 	if (id[ATA_ID_CUR_HEADS] == 0) {
 		printk("vsl: we detected an openssd device. Force vsl\n");

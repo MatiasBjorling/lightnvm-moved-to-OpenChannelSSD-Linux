@@ -1,4 +1,5 @@
 #include <linux/openvsl.h>
+#include <trace/events/block.h>
 #include "vsl.h"
 
 inline void __invalidate_block_page(struct vsl_stor *s,
@@ -170,6 +171,11 @@ void vsl_setup_rq(struct vsl_stor *s, struct request *rq, struct vsl_addr *p,
 	pb->flags = flags;
 }
 
+static inline void trace_rq_remap(struct vsl_dev *dev, struct request *rq, sector_t l_addr)
+{
+	trace_block_rq_remap(rq->q, rq, disk_devt(dev->disk), l_addr * NR_PHY_IN_LOG);
+}
+
 int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 {
 	struct vsl_addr *p;
@@ -191,6 +197,7 @@ int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 
 	if (!p->block)
 		rq->__sector = 0;
+	trace_rq_remap(s->dev, rq, l_addr);
 
 	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
 	return BLK_MQ_RQ_QUEUE_OK;
@@ -218,6 +225,7 @@ int __vsl_write_rq(struct vsl_stor *s, struct request *rq, int is_gc)
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
 	//printk("vsl: W %llu(%llu) B: %u\n", p->addr, p->addr * NR_PHY_IN_LOG,
 	//		p->block->id);
+	trace_rq_remap(s->dev, rq, l_addr);
 
 	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
 

@@ -804,12 +804,14 @@ static inline bool ata_id_has_lightnvm(const u16 *id)
 {
 	printk("vsl: ata_id_major_version %u dsm vsl %u\n", ata_id_major_version(id), id[ATA_ID_DATA_SET_MGMT] & 0x2);
 	if (id[ATA_ID_CUR_HEADS] == 0) {
-		printk("vsl: we detected an openssd device. Force vsl\n");
+		printk("vsl: we detected an openssd device. Force VSÆ ON\n");
 		return true;
 	}
 	if (ata_id_major_version(id) >= 7 &&
-		(id[ATA_ID_DATA_SET_MGMT] & 0x2))
-			return true;
+		(id[ATA_ID_DATA_SET_MGMT] & 0x2)) {
+    printk("vsl: Detected a VSL-capable device. Force VSL ON\n");
+    return true;
+  }
 	return false;
 }
 

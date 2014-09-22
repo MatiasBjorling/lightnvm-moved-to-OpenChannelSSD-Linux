@@ -52,6 +52,10 @@ enum blktrace_act {
 	__BLK_TA_REMAP,			/* bio was remapped */
 	__BLK_TA_ABORT,			/* request aborted */
 	__BLK_TA_DRV_DATA,		/* driver-specific binary data */
+	__BLK_TA_LNVM_START,		/*request entered VSL layer*/
+	__BLK_TA_LNVM_END,		/*request exited VSL layer*/
+	__BLK_TA_LNVM_ENDIO_START,	/*request VSL completion processing begun*/
+	__BLK_TA_LNVM_ENDIO_END,	/*request VSL completion processing ended*/
 };
 
 /*
@@ -84,6 +88,11 @@ enum blktrace_notify {
 #define BLK_TA_REMAP		(__BLK_TA_REMAP | BLK_TC_ACT(BLK_TC_QUEUE))
 #define BLK_TA_ABORT		(__BLK_TA_ABORT | BLK_TC_ACT(BLK_TC_QUEUE))
 #define BLK_TA_DRV_DATA	(__BLK_TA_DRV_DATA | BLK_TC_ACT(BLK_TC_DRV_DATA))
+
+#define BLK_TA_LNVM_START	(__BLK_TA_LNVM_START | BLK_TC_ACT(BLK_TC_QUEUE))
+#define BLK_TA_LNVM_END	(__BLK_TA_LNVM_END | BLK_TC_ACT(BLK_TC_QUEUE))
+#define BLK_TA_LNVM_ENDIO_START (__BLK_TA_LNVM_ENDIO_START | BLK_TC_ACT(BLK_TC_QUEUE))
+#define BLK_TA_LNVM_ENDIO_END	(__BLK_TA_LNVM_ENDIO_END | BLK_TC_ACT(BLK_TC_QUEUE))
 
 #define BLK_TN_PROCESS		(__BLK_TN_PROCESS | BLK_TC_ACT(BLK_TC_NOTIFY))
 #define BLK_TN_TIMESTAMP	(__BLK_TN_TIMESTAMP | BLK_TC_ACT(BLK_TC_NOTIFY))

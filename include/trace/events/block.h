@@ -667,6 +667,63 @@ TRACE_EVENT(block_rq_remap,
 		  (unsigned long long)__entry->old_sector, __entry->nr_bios)
 );
 
+/**
+ * block_rq_lnvm_start - queue request entered VSL layer for mapping & processing
+ * @q: queue holding operation
+ * @rq: block IO operation request
+ */
+DEFINE_EVENT(block_rq_with_error, block_rq_lnvm_start,
+
+	TP_PROTO(struct request_queue *q, struct request *rq),
+
+	TP_ARGS(q, rq)
+);
+
+/**
+ * block_rq_lnvm_end - queue request exits VSL layer after mapping & processing
+ * @q: queue holding operation
+ * @rq: block IO operation request
+ *
+ * The block operation request @rq has been processed by the VSL layer 
+ * and is properly mapped. Return control to underlying device driver.
+ */
+DEFINE_EVENT(block_rq_with_error, block_rq_lnvm_end,
+
+	TP_PROTO(struct request_queue *q, struct request *rq),
+
+	TP_ARGS(q, rq)
+);
+
+/**
+ * block_rq_lnvm_endio_start - request is handed off for completion within VSL layer
+ * @q: queue holding operation
+ * @rq: block IO operation request
+ *
+ * The block operation request @rq has been completed by the device driver,
+ * @rq is passed off to VSL to that VSL may handle any post-completion processing.
+ */
+DEFINE_EVENT(block_rq_with_error, block_rq_lnvm_endio_start,
+
+	TP_PROTO(struct request_queue *q, struct request *rq),
+
+	TP_ARGS(q, rq)
+);
+
+/**
+ * block_rq_lnvm_endio_end - request completion has been processed by VSL layer
+ * @q: queue holding operation
+ * @rq: block IO operation request
+ *
+ * The block operation request @rq has undergone VSL-specific post-completion
+ * processing..
+ */
+DEFINE_EVENT(block_rq_with_error, block_rq_lnvm_endio_end,
+
+	TP_PROTO(struct request_queue *q, struct request *rq),
+
+	TP_ARGS(q, rq)
+);
+
 #endif /* _TRACE_BLOCK_H */
 
 /* This part must be outside protection */

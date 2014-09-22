@@ -41,6 +41,8 @@
 #define LTOP_EMPTY -1
 #define LTOP_POISON 0xD3ADB33F
 
+#define VSLRQ_MAPPED (REQ_VSL | REQ_VSL_MAPPED)
+
 /*
  * For now we hardcode some of the configuration for the OpenVSL device that we
  * have. In the future this should be made configurable.

@@ -208,6 +208,7 @@ struct request {
 
 	/* for bidi */
 	struct request *next_rq;
+	sector_t vsl_hacktrace;
 };
 
 static inline unsigned short req_get_ioprio(struct request *req)

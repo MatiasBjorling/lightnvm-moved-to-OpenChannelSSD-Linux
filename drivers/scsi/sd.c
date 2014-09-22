@@ -2999,6 +2999,11 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 
 			if (vsl_init(gd, sdp->vsl_dev))
 				printk("failed VSL initialization\n");
+			blk_queue_max_hw_sectors(sdp->vsl_dev->q, 4096);
+			blk_queue_physical_block_size(sdp->vsl_dev->q, 4096);
+			blk_queue_logical_block_size(sdp->vsl_dev->q, 4096);
+			blk_queue_io_min(sdp->vsl_dev->q, 4096);
+			blk_queue_io_opt(sdp->vsl_dev->q, 4096);
 		}
 
 	}
@@ -3011,7 +3016,7 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 	sd_revalidate_disk(gd);
 
 	if (sdp->use_lightnvm) {
-		blk_queue_max_hw_sectors(sdp->vsl_dev->q, 8);
+		blk_queue_max_hw_sectors(sdp->vsl_dev->q, 4096);
 		blk_queue_physical_block_size(sdp->vsl_dev->q, 4096);
 		blk_queue_logical_block_size(sdp->vsl_dev->q, 4096);
 		blk_queue_io_min(sdp->vsl_dev->q, 4096);

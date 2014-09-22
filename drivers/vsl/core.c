@@ -254,7 +254,7 @@ void copy_to_disk(struct vsl_stor *s, struct request *rq)
 	if (blk_rq_sectors(rq) != 8)
 		printk("I GIVE UP %u\n", blk_rq_sectors(rq));
 	bio_for_each_segment(bvec, bio, iter) {
-		src = kmap_atomic(bvec.bv_page);
+		src = kmap_atomic(bvec.bv_page) + bvec.bv_offset;
 		dst = kmap_atomic(page);
 
 		memcpy(dst, src, bvec.bv_len);
@@ -282,7 +282,7 @@ void copy_from_disk(struct vsl_stor *s, struct request *rq)
 
 	bio_for_each_segment(bvec, bio, iter) {
 		src = kmap_atomic(page);
-		dst = kmap_atomic(bvec.bv_page);
+		dst = kmap_atomic(bvec.bv_page) + bvec.bv_offset;
 
 		memcpy(dst, src, bvec.bv_len);
 

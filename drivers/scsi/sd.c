@@ -3001,6 +3001,9 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 				printk("failed VSL initialization\n");
 		}
 
+		blk_queue_max_hw_sectors(vsl_dev->q, 8);
+		blk_queue_physical_block_size(vsl_dev->q, 8);
+
 	}
 	add_disk(gd);
 	if (sdp->use_lightnvm)

@@ -124,6 +124,8 @@ void vsl_erase_block(struct vsl_block *block)
 	/* Send erase command to device. */
 }
 
+void copy_from_disk(struct vsl_stor *s, struct request *rq);
+
 void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 {
 	struct vsl_stor *s = vsl_dev->stor;
@@ -132,6 +134,7 @@ void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 	struct vsl_block *block = p->block;
 	unsigned int data_cnt;
 
+	//printk("p: %p s: %llu l: %u pp:%p e:%u (%u)\n", p, p->addr, pb->l_addr, p, err, rq_data_dir(rq));
 	vsl_unlock_laddr_range(s, pb->l_addr, 1);
 
 	if (rq_data_dir(rq) == WRITE) {
@@ -141,6 +144,11 @@ void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 			/*defer scheduling of the block for recycling*/
 			queue_work(s->kgc_wq, &block->ws_eio);
 		}
+	} else {
+		if (s->internal_bad_blocks) {
+			copy_from_disk(s, rq);
+		}
+
 	}
 
 	/* all submitted requests allocate their own addr,
@@ -167,6 +175,7 @@ void vsl_setup_rq(struct vsl_stor *s, struct request *rq, struct vsl_addr *p,
 	pb = get_per_rq_data(s->dev, rq);
 	pb->ap = ap;
 	pb->addr = p;
+
 	pb->l_addr = l_addr;
 	pb->flags = flags;
 }
@@ -174,6 +183,112 @@ void vsl_setup_rq(struct vsl_stor *s, struct request *rq, struct vsl_addr *p,
 static inline void trace_rq_remap(struct vsl_dev *dev, struct request *rq, sector_t l_addr)
 {
 	trace_block_rq_remap(rq->q, rq, disk_devt(dev->disk), l_addr * NR_PHY_IN_LOG);
+}
+
+static struct page *vsl_lookup_page(struct vsl_stor *s, sector_t sector)
+{
+	pgoff_t idx;
+	struct page *page;
+
+	rcu_read_lock();
+	idx = sector >> 9;
+	page = radix_tree_lookup(&s->disk_tree, idx);
+	rcu_read_unlock();
+
+	BUG_ON(page && page->index != idx);
+
+	return page;
+}
+
+static struct page *vsl_insert_page(struct vsl_stor *s, sector_t sector)
+{
+	pgoff_t idx;
+	struct page *page;
+	gfp_t gfp_flags;
+
+	page = vsl_lookup_page(s, sector);
+	if (page)
+		return page;
+
+	gfp_flags = GFP_NOIO | __GFP_ZERO;
+	gfp_flags |= __GFP_HIGHMEM;
+
+	page = alloc_page(gfp_flags);
+	if (!page)
+		return NULL;
+
+	if (radix_tree_preload(GFP_NOIO)) {
+		__free_page(page);
+		return NULL;
+	}
+
+	spin_lock(&s->disk_lock);
+	idx = sector >> 9;
+	page->index = idx;
+	if (radix_tree_insert(&s->disk_tree, idx, page)) {
+		__free_page(page);
+		page = radix_tree_lookup(&s->disk_tree, idx);
+		BUG_ON(!page);
+		BUG_ON(page->index != idx);
+	}
+	spin_unlock(&s->disk_lock);
+
+	radix_tree_preload_end();
+
+	return page;
+}
+
+void copy_to_disk(struct vsl_stor *s, struct request *rq)
+{
+	struct bio *bio = rq->bio;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+	struct page *page;
+	void *src, *dst;
+
+	if (!s->internal_bad_blocks)
+		return;
+
+	page = vsl_insert_page(s, blk_rq_pos(rq));
+
+	if (blk_rq_sectors(rq) != 8)
+		printk("I GIVE UP %u\n", blk_rq_sectors(rq));
+	bio_for_each_segment(bvec, bio, iter) {
+		src = kmap_atomic(bvec.bv_page);
+		dst = kmap_atomic(page);
+
+		memcpy(dst, src, bvec.bv_len);
+
+		kunmap_atomic(dst);
+		kunmap_atomic(src);
+	}
+}
+
+void copy_from_disk(struct vsl_stor *s, struct request *rq)
+{
+	struct bio *bio = rq->bio;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+	struct page *page;
+	void *src, *dst;
+
+	if (!s->internal_bad_blocks)
+		return;
+
+	page = vsl_lookup_page(s, blk_rq_pos(rq));
+
+	if (!page)
+		return;
+
+	bio_for_each_segment(bvec, bio, iter) {
+		src = kmap_atomic(page);
+		dst = kmap_atomic(bvec.bv_page);
+
+		memcpy(dst, src, bvec.bv_len);
+
+		kunmap_atomic(dst);
+		kunmap_atomic(src);
+	}
 }
 
 int vsl_read_rq(struct vsl_stor *s, struct request *rq)
@@ -203,6 +318,7 @@ int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
+
 int __vsl_write_rq(struct vsl_stor *s, struct request *rq, int is_gc)
 {
 	struct vsl_addr *p;
@@ -223,11 +339,13 @@ int __vsl_write_rq(struct vsl_stor *s, struct request *rq, int is_gc)
 	 * driver
 	 */
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
-	//printk("vsl: W %llu(%llu) B: %u\n", p->addr, p->addr * NR_PHY_IN_LOG,
-	//		p->block->id);
+	/*printk("vsl: W %llu(%llu) B: %u\n", p->addr, p->addr * NR_PHY_IN_LOG,
+			p->block->id);*/
 	trace_rq_remap(s->dev, rq, l_addr);
 
 	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
+
+	copy_to_disk(s, rq);
 
 	return BLK_MQ_RQ_QUEUE_OK;
 }

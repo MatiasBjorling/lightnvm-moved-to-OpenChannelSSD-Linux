@@ -374,6 +374,10 @@ struct vsl_stor {
 	struct vslkv kv;
 
 	int internal_bad_blocks;
+
+
+	spinlock_t	disk_lock;
+	struct radix_tree_root disk_tree;
 };
 
 struct per_rq_data_vsl {

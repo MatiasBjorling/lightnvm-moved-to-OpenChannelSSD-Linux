@@ -22,6 +22,7 @@
 #include <linux/sem.h>
 #include <linux/types.h>
 #include <linux/openvsl.h>
+#include <linux/radix-tree.h>
 
 #include <linux/ktime.h>
 #include <trace/events/block.h>
@@ -102,21 +103,21 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 
 	trace_block_rq_lnvm_start(rq->q, rq);
 
-	if (rq->cmd_flags & REQ_VSL && !(rq->cmd_flags & REQ_VSL_MAPPED))
+	if (rq->cmd_flags & REQ_VSL && rq->cmd_flags & REQ_VSL_MAPPED)
 		return BLK_MQ_RQ_QUEUE_OK;
 
-	rq->cmd_flags |= REQ_VSL;
-
-	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
-		pr_err("Illegal vsl address: %ld",
-						blk_rq_pos(rq) / NR_PHY_IN_LOG);
+	if (blk_rq_pos(rq) / NR_PHY_IN_LOG > s->nr_pages) {
+		pr_err("Illegal vsl address: %llu %ld %u %u",
+					blk_rq_pos(rq), blk_rq_pos(rq) / NR_PHY_IN_LOG, blk_rq_bytes(rq), rq_data_dir(rq) == READ);
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
+
+	rq->cmd_flags |= (REQ_VSL|REQ_VSL_MAPPED);
 
 	if (rq_data_dir(rq) == WRITE) {
 		ret = s->type->write_rq(s, rq);
 	} else {
-		ret =  s->type->read_rq(s, rq);
+		ret = s->type->read_rq(s, rq);
 	}
 
 	trace_block_rq_lnvm_end(rq->q, rq);
@@ -231,17 +232,24 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 					bidx++;
 				}
 
-				if (bb[bidx].blks[cur] + (4096 * bidx) - 1 == block->id) {
-					cur++;
-
+				if (j < 2000) {
+				
 					list_del(&block->list);
 
 					pool->nr_free_blocks--;
-
-					/* There might be duplicated in the list */
-					if (cur < 511 && bb[bidx].blks[cur] == bb[bidx].blks[cur+1])
-						cur++;
 				}
+
+				/* if (bb[bidx].blks[cur] + (4096 * bidx) - 1 == block->id) { */
+				/* 	cur++; */
+
+					/* list_del(&block->list); */
+
+					/* pool->nr_free_blocks--; */
+
+				/* 	#<{(| There might be duplicated in the list |)}># */
+				/* 	if (cur < 511 && bb[bidx].blks[cur] == bb[bidx].blks[cur+1]) */
+				/* 		cur++; */
+				/* } */
 
 			}
 			printk("Actual blocks per pool: %u\n", pool->nr_free_blocks);
@@ -435,8 +443,11 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	s->nr_pools = vsl_id.nchannels;
 
-	if (vsl_id.ver_id == 0x2)
+	if (vsl_id.ver_id == 0x2) {
+		spin_lock_init(&s->disk_lock);
+		INIT_RADIX_TREE(&s->disk_tree, GFP_ATOMIC);
 		s->internal_bad_blocks = 1;
+	}
 
 	/* TODO: We're limited to the same setup for each channel */
 	if (dev->ops->identify_channel(dev, 0, &vsl_id_chnl))
@@ -511,6 +522,39 @@ err:
 }
 EXPORT_SYMBOL_GPL(vsl_init);
 
+#define FREE_BATCH 16
+static void vsl_free_pages(struct vsl_stor *s)
+{
+	unsigned long pos = 0;
+	struct page *pages[FREE_BATCH];
+	int nr_pages;
+
+	do {
+		int i;
+
+		nr_pages = radix_tree_gang_lookup(&s->disk_tree,
+				(void **)pages, pos, FREE_BATCH);
+
+		for (i = 0; i < nr_pages; i++) {
+			void *ret;
+
+			BUG_ON(pages[i]->index < pos);
+			pos = pages[i]->index;
+			ret = radix_tree_delete(&s->disk_tree, pos);
+			BUG_ON(!ret || ret != pages[i]);
+			__free_page(pages[i]);
+		}
+
+		pos++;
+
+		/*
+		 * This assumes radix_tree_gang_lookup always returns as
+		 * many pages as possible. If the radix-tree code changes,
+		 * so will this have to.
+		 */
+	} while (nr_pages == FREE_BATCH);
+}
+
 void vsl_exit(struct vsl_dev *dev)
 {
 	struct vsl_stor *s = dev->stor;
@@ -528,6 +572,9 @@ void vsl_exit(struct vsl_dev *dev)
 	/* TODO: remember outstanding block refs, waiting to be erased... */
 	vsl_for_each_pool(s, pool, i)
 		kfree(pool->blocks);
+
+	if (s->internal_bad_blocks)
+		vsl_free_pages(s);
 
 	kfree(s->pools);
 	kfree(s->aps);

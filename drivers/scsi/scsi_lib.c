@@ -1889,9 +1889,6 @@ static int scsi_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 
 	if (sdev->vsl_dev && req->cmd_type == REQ_TYPE_FS) {
 		vsl_queue_rq(sdev->vsl_dev, req);
-		cmd->scsi_done = scsi_vsl_done;
-	} else {
-		cmd->scsi_done = scsi_mq_done;
 	}
 
 	if (!(req->cmd_flags & REQ_DONTPREP)) {

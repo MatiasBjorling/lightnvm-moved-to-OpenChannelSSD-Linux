@@ -142,7 +142,7 @@ EXPORT_SYMBOL_GPL(vsl_end_io);
 
 void vsl_complete_request(struct vsl_dev *vsl_dev, struct request *rq)
 {
-        trace_block_rq_lnvm_endio_start(rq->q, rq);
+	trace_block_rq_lnvm_endio_start(rq->q, rq);
 
 	if (rq->cmd_flags & VSLRQ_MAPPED)
 		vsl_endio(vsl_dev, rq, 0);

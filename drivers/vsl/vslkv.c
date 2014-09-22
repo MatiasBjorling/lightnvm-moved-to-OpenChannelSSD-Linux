@@ -209,7 +209,7 @@ static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 	}
 	orig_bio = rq->bio;
 
-	rq->cmd_flags |= REQ_VSL_PASSTHRU;
+	rq->cmd_flags |= REQ_VSL;
 	rq->__sector = blk_addr * NR_PHY_IN_LOG;
 	rq->errors = 0;
 

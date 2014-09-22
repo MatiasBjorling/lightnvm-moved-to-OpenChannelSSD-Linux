@@ -102,8 +102,10 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 
 	trace_block_rq_lnvm_start(rq->q, rq);
 
-	if (rq->cmd_flags & REQ_VSL_PASSTHRU)
+	if (rq->cmd_flags & REQ_VSL && !(rq->cmd_flags & REQ_VSL_MAPPED))
 		return BLK_MQ_RQ_QUEUE_OK;
+
+	rq->cmd_flags |= REQ_VSL;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG >= s->nr_pages) {
 		pr_err("Illegal vsl address: %ld",
@@ -126,10 +128,14 @@ void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 {
 	trace_block_rq_lnvm_endio_start(rq->q, rq);
 
-	if (!(rq->cmd_flags & REQ_VSL_PASSTHRU))
+	if (rq->cmd_flags & VSLRQ_MAPPED)
 		vsl_endio(vsl_dev, rq, error);
 
 	trace_block_rq_lnvm_endio_end(rq->q, rq);
+
+	if (!(rq->cmd_flags & REQ_VSL))
+		pr_info("Request submitted outside vsl_queue_rq detected!\n");
+
 	blk_mq_end_io(rq, error);
 }
 EXPORT_SYMBOL_GPL(vsl_end_io);
@@ -138,11 +144,13 @@ void vsl_complete_request(struct vsl_dev *vsl_dev, struct request *rq)
 {
         trace_block_rq_lnvm_endio_start(rq->q, rq);
 
-	if (!(rq->cmd_flags & REQ_VSL_PASSTHRU))
+	if (rq->cmd_flags & VSLRQ_MAPPED)
 		vsl_endio(vsl_dev, rq, 0);
 
-        trace_block_rq_lnvm_endio_end(rq->q, rq);
+	trace_block_rq_lnvm_endio_end(rq->q, rq);
 
+	if (!(rq->cmd_flags & REQ_VSL))
+		pr_info("Request submitted outside vsl_queue_rq detected!\n");
 	blk_mq_complete_request(rq);
 }
 EXPORT_SYMBOL_GPL(vsl_complete_request);

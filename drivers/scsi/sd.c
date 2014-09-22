@@ -2888,7 +2888,7 @@ static int scsi_vsl_id(struct vsl_dev *dev, struct vsl_id *vsl_id)
 {
 	vsl_id->ver_id = 0x2;
 	vsl_id->nvm_type = VSL_NVMT_BLK;
-	vsl_id->nchannels = 2;
+	vsl_id->nchannels = 8;
 	return 0;
 }
 

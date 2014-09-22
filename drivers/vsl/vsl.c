@@ -103,7 +103,7 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 
 	trace_block_rq_lnvm_start(rq->q, rq);
 
-	if (rq->cmd_flags & REQ_VSL && rq->cmd_flags & REQ_VSL_MAPPED)
+	if (rq->cmd_flags & REQ_VSL_MAPPED)
 		return BLK_MQ_RQ_QUEUE_OK;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG > s->nr_pages) {
@@ -112,7 +112,6 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
 
-	rq->cmd_flags |= (REQ_VSL|REQ_VSL_MAPPED);
 
 	if (rq_data_dir(rq) == WRITE) {
 		ret = s->type->write_rq(s, rq);
@@ -120,6 +119,8 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 		ret = s->type->read_rq(s, rq);
 	}
 
+	if (ret == BLK_MQ_RQ_QUEUE_OK)
+		rq->cmd_flags |= (REQ_VSL|REQ_VSL_MAPPED);
 	trace_block_rq_lnvm_end(rq->q, rq);
 	return ret;
 }
@@ -129,7 +130,7 @@ void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 {
 	trace_block_rq_lnvm_endio_start(rq->q, rq);
 
-	if (rq->cmd_flags & VSLRQ_MAPPED)
+	if (rq->cmd_flags & (REQ_VSL|REQ_VSL_MAPPED))
 		vsl_endio(vsl_dev, rq, error);
 
 	trace_block_rq_lnvm_endio_end(rq->q, rq);
@@ -145,7 +146,7 @@ void vsl_complete_request(struct vsl_dev *vsl_dev, struct request *rq)
 {
 	trace_block_rq_lnvm_endio_start(rq->q, rq);
 
-	if (rq->cmd_flags & VSLRQ_MAPPED)
+	if (rq->cmd_flags & (REQ_VSL|REQ_VSL_MAPPED))
 		vsl_endio(vsl_dev, rq, 0);
 
 	trace_block_rq_lnvm_endio_end(rq->q, rq);

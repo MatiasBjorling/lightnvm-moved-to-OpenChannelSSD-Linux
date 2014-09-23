@@ -3004,6 +3004,7 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 			blk_queue_logical_block_size(sdp->vsl_dev->q, 4096);
 			blk_queue_io_min(sdp->vsl_dev->q, 4096);
 			blk_queue_io_opt(sdp->vsl_dev->q, 4096);
+			blk_queue_chunk_sectors(sdp->vsl_dev->q, 8);
 		}
 
 	}
@@ -3021,6 +3022,7 @@ static void sd_probe_async(void *data, async_cookie_t cookie)
 		blk_queue_logical_block_size(sdp->vsl_dev->q, 4096);
 		blk_queue_io_min(sdp->vsl_dev->q, 4096);
 		blk_queue_io_opt(sdp->vsl_dev->q, 4096);
+		blk_queue_chunk_sectors(sdp->vsl_dev->q, 8);
 	}
 
 	sd_printk(KERN_NOTICE, sdkp, "Attached SCSI %sdisk\n",

@@ -24,9 +24,45 @@ void vsl_gc_cb(unsigned long data)
 			jiffies + msecs_to_jiffies(s->config.gc_time));
 }
 
-static void __erase_block(struct vsl_block *block)
+static void __erase_block(struct vsl_stor *s, struct vsl_block *block)
 {
-	/* TODO: Perform device flash erase */
+	struct vsl_dev *dev = s->dev;
+	struct request_queue *q = dev->q;
+	struct request *rq;
+	struct bio *bio;
+	struct page *page;
+	unsigned int ret;
+
+	if (!s->internal_bad_blocks)
+		return;
+
+	printk("erase block %u\n", block->id);
+
+	rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
+	if (!rq)
+		printk("could not send erase\n");
+
+	bio = bio_alloc(GFP_KERNEL, 1);
+	if (!bio)
+		printk("No mem\n");
+
+	bio->bi_iter.bi_sector = block->id;
+	bio->bi_rw = REQ_WRITE;
+	page = mempool_alloc(s->page_pool, GFP_KERNEL);
+
+	bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
+
+	blk_init_request_from_bio(rq, bio);
+
+	rq->cmd_flags |= (REQ_VSL);
+	rq->errors = 0;
+
+	ret = blk_execute_rq(q, dev->disk, rq, 0);
+	if (ret)
+		pr_err("Could not execute erase request\n");
+
+	blk_put_request(rq);
+	mempool_free(page, s->page_pool);
 }
 
 /* the block with highest number of invalid pages, will be in the beginning
@@ -212,7 +248,7 @@ void vsl_gc_block(struct work_struct *work)
 	/* TODO: move outside lock to allow multiple pages
 	 * in parallel to be erased. */
 	vsl_move_valid_pages(s, block);
-	__erase_block(block);
+	__erase_block(s, block);
 	s->type->pool_put_blk(block);
 }
 

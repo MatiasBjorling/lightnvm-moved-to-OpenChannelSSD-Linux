@@ -233,7 +233,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 					bidx++;
 				}
 
-				if (j < 2000) {
+				if (j < 2000 || j > 2500) {
 				
 					list_del(&block->list);
 

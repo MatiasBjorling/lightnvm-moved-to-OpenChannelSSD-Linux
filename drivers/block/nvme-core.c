@@ -61,9 +61,9 @@ static unsigned char retry_time = 30;
 module_param(retry_time, byte, 0644);
 MODULE_PARM_DESC(retry_time, "time in seconds to retry failed I/O");
 
-static unsigned char use_lightnvm = 0;
-module_param(use_lightnvm, byte, 0644);
-MODULE_PARM_DESC(use_lightnvm, "force initialization of lightnvm");
+static unsigned char force_lightnvm = 0;
+module_param(force_lightnvm, byte, 0644);
+MODULE_PARM_DESC(force_lightnvm, "force initialization of lightnvm");
 
 static int nvme_major;
 module_param(nvme_major, int, 0);
@@ -420,7 +420,7 @@ static void req_completion(struct nvme_queue *nvmeq, void *ctx,
 			rq_data_dir(req) ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 	nvme_free_iod(nvmeq->dev, iod);
 
-	if (nvmeq->dev->oacs & NVME_CTRL_OACS_LIGHTNVM || use_lightnvm)
+	if (nvmeq->dev->oacs & NVME_CTRL_OACS_LIGHTNVM || force_lightnvm)
 		vsl_complete_request(cmd_rq->ns->vsl_dev, req);
 	else
 		blk_mq_complete_request(req);
@@ -2021,12 +2021,12 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	if (!ns)
 		return NULL;
 
-	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM || use_lightnvm) {
+	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM || force_lightnvm) {
 		vsl_dev = vsl_alloc();
 		if (!vsl_dev)
 			goto out_free_ns;
 
-		if (use_lightnvm)
+		if (force_lightnvm)
 			vsl_dev->ops = &nvme_vsl_dev_ops_static;
 		else
 			vsl_dev->ops = &nvme_vsl_dev_ops;
@@ -2077,7 +2077,7 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	if (dev->oncs & NVME_CTRL_ONCS_DSM)
 		nvme_config_discard(ns);
 
-	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM || use_lightnvm) {
+	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM || force_lightnvm) {
 		vsl_dev->q = ns->queue;
 		vsl_dev->disk = disk;
 
@@ -2273,7 +2273,7 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	 * either be moved toward the nvme_queue_rq function, or allow per ns
 	 * queue_rq function to be specified.
 	 */
-	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM || use_lightnvm)
+	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM || force_lightnvm)
 		dev->tagset.cmd_size += vsl_cmd_size();
 
 	if (blk_mq_alloc_tag_set(&dev->tagset))

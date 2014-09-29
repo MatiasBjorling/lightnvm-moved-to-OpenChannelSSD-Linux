@@ -107,17 +107,16 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 		return BLK_MQ_RQ_QUEUE_OK;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG > s->nr_pages) {
-		pr_err("Illegal vsl address: %llu %ld %u %u",
-					blk_rq_pos(rq), blk_rq_pos(rq) / NR_PHY_IN_LOG, blk_rq_bytes(rq), rq_data_dir(rq) == READ);
+		pr_err("Illegal vsl address: %llu",
+					(unsigned long long) blk_rq_pos(rq));
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	};
 
 
-	if (rq_data_dir(rq) == WRITE) {
+	if (rq_data_dir(rq) == WRITE)
 		ret = s->type->write_rq(s, rq);
-	} else {
+	else
 		ret = s->type->read_rq(s, rq);
-	}
 
 	if (ret == BLK_MQ_RQ_QUEUE_OK)
 		rq->cmd_flags |= (REQ_VSL|REQ_VSL_MAPPED);
@@ -168,8 +167,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 	struct vsl_pool *pool;
 	struct vsl_block *block;
 	struct vsl_ap *ap;
-	struct vsl_badblocks bb[8];
-	int i, j, bidx = -1;
+	int i, j;
 
 	spin_lock_init(&s->rev_lock);
 
@@ -178,7 +176,6 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		goto err_pool;
 
 	vsl_for_each_pool(s, pool, i) {
-		printk("i %d\n", i);
 		spin_lock_init(&pool->lock);
 		spin_lock_init(&pool->waiting_lock);
 
@@ -219,44 +216,6 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		}
 	}
 
-	/* Remove bad blocks. FIXME: Currently hardcoded for OpenSSD. */
-	vsl_get_bad_blocks(bb);
-	if (s->internal_bad_blocks) {
-		vsl_for_each_pool(s, pool, i)
-		{
-			int cur = 0;
-
-			pool_for_each_block(pool, block, j)
-			{
-				if (j % 4096 == 0) {
-					cur = 0;
-					bidx++;
-				}
-
-				if (j < 2000 || j > 2500) {
-				
-					list_del(&block->list);
-
-					pool->nr_free_blocks--;
-				}
-
-				/* if (bb[bidx].blks[cur] + (4096 * bidx) - 1 == block->id) { */
-				/* 	cur++; */
-
-					/* list_del(&block->list); */
-
-					/* pool->nr_free_blocks--; */
-
-				/* 	#<{(| There might be duplicated in the list |)}># */
-				/* 	if (cur < 511 && bb[bidx].blks[cur] == bb[bidx].blks[cur+1]) */
-				/* 		cur++; */
-				/* } */
-
-			}
-			printk("Actual blocks per pool: %u\n", pool->nr_free_blocks);
-		}
-	}
-
 	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;
 	s->aps = kcalloc(s->nr_aps, sizeof(struct vsl_ap), GFP_KERNEL);
 	if (!s->aps)
@@ -268,11 +227,9 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 		ap->pool = &s->pools[i / s->nr_aps_per_pool];
 
 		block = s->type->pool_get_blk(ap->pool, 0);
-		printk("first block %u\n", block->id);
 		vsl_set_ap_cur(ap, block);
 		/* Emergency gc block */
 		block = s->type->pool_get_blk(ap->pool, 1);
-		printk("second block %u\n", block->id);
 		ap->gc_cur = block;
 
 		ap->t_read = s->config.t_read;

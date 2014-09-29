@@ -27,8 +27,6 @@
 #include <linux/blk-mq.h>
 #include <linux/slab.h>
 
-#include "bb_openssd.h" /* OpenSSD specific */
-
 #ifdef VSL_DEBUG
 /*Wrap BUG_ON to allow additional checks in debug mode without
  impacting production performance*/

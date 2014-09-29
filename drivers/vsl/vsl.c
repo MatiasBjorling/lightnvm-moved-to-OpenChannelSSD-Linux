@@ -99,10 +99,6 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 	struct vsl_stor *s = dev->stor;
 	int ret;
 
-	rq->vsl_hacktrace = blk_rq_pos(rq);
-
-	trace_block_rq_lnvm_start(rq->q, rq);
-
 	if (rq->cmd_flags & REQ_VSL_MAPPED)
 		return BLK_MQ_RQ_QUEUE_OK;
 
@@ -120,19 +116,15 @@ int vsl_queue_rq(struct vsl_dev *dev, struct request *rq)
 
 	if (ret == BLK_MQ_RQ_QUEUE_OK)
 		rq->cmd_flags |= (REQ_VSL|REQ_VSL_MAPPED);
-	trace_block_rq_lnvm_end(rq->q, rq);
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vsl_queue_rq);
 
 void vsl_end_io(struct vsl_dev *vsl_dev, struct request *rq, int error)
 {
-	trace_block_rq_lnvm_endio_start(rq->q, rq);
-
 	if (rq->cmd_flags & (REQ_VSL|REQ_VSL_MAPPED))
 		vsl_endio(vsl_dev, rq, error);
-
-	trace_block_rq_lnvm_endio_end(rq->q, rq);
 
 	if (!(rq->cmd_flags & REQ_VSL))
 		pr_info("Request submitted outside vsl_queue_rq detected!\n");
@@ -143,12 +135,8 @@ EXPORT_SYMBOL_GPL(vsl_end_io);
 
 void vsl_complete_request(struct vsl_dev *vsl_dev, struct request *rq)
 {
-	trace_block_rq_lnvm_endio_start(rq->q, rq);
-
 	if (rq->cmd_flags & (REQ_VSL|REQ_VSL_MAPPED))
 		vsl_endio(vsl_dev, rq, 0);
-
-	trace_block_rq_lnvm_endio_end(rq->q, rq);
 
 	if (!(rq->cmd_flags & REQ_VSL))
 		pr_info("Request submitted outside vsl_queue_rq detected!\n");

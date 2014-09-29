@@ -33,9 +33,6 @@ static void __erase_block(struct vsl_stor *s, struct vsl_block *block)
 	struct page *page;
 	unsigned int ret;
 
-	if (!s->internal_bad_blocks)
-		return;
-
 	printk("erase block %u\n", block->id);
 
 	rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);

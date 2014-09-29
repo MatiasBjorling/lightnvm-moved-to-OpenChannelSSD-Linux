@@ -216,6 +216,7 @@ static int vsl_pool_init(struct vsl_stor *s, struct vsl_dev *dev)
 
 		block = s->type->pool_get_blk(ap->pool, 0);
 		vsl_set_ap_cur(ap, block);
+
 		/* Emergency gc block */
 		block = s->type->pool_get_blk(ap->pool, 1);
 		ap->gc_cur = block;
@@ -272,7 +273,6 @@ static int vsl_stor_init(struct vsl_dev *dev, struct vsl_stor *s)
 		struct vsl_rev_addr *r = &s->rev_trans_map[i];
 
 		p->addr = LTOP_EMPTY;
-
 		r->addr = 0xDEADBEEF;
 	}
 
@@ -389,12 +389,6 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 
 	s->nr_pools = vsl_id.nchannels;
 
-	if (vsl_id.ver_id == 0x2) {
-		spin_lock_init(&s->disk_lock);
-		INIT_RADIX_TREE(&s->disk_tree, GFP_ATOMIC);
-		s->internal_bad_blocks = 1;
-	}
-
 	/* TODO: We're limited to the same setup for each channel */
 	if (dev->ops->identify_channel(dev, 0, &vsl_id_chnl))
 		goto err_target;
@@ -446,10 +440,6 @@ int vsl_init(struct gendisk *disk, struct vsl_dev *dev)
 			s->config.t_write,
 			s->config.t_erase);
 	pr_info("vsl: target sector size=%d\n", s->sector_size);
-	/*pr_info("vsl: disk logical sector size=%d",
-		bdev_logical_block_size(s->dev->bdev));
-	pr_info("vsl: disk physical sector size=%d",
-		bdev_physical_block_size(s->dev->bdev)); */
 	pr_info("vsl: disk flash size=%d map size=%d\n", s->gran_read, EXPOSED_PAGE_SIZE);
 	pr_info("vsl: allocated %lu physical pages (%lu KB)\n",
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
@@ -468,39 +458,6 @@ err:
 }
 EXPORT_SYMBOL_GPL(vsl_init);
 
-#define FREE_BATCH 16
-static void vsl_free_pages(struct vsl_stor *s)
-{
-	unsigned long pos = 0;
-	struct page *pages[FREE_BATCH];
-	int nr_pages;
-
-	do {
-		int i;
-
-		nr_pages = radix_tree_gang_lookup(&s->disk_tree,
-				(void **)pages, pos, FREE_BATCH);
-
-		for (i = 0; i < nr_pages; i++) {
-			void *ret;
-
-			BUG_ON(pages[i]->index < pos);
-			pos = pages[i]->index;
-			ret = radix_tree_delete(&s->disk_tree, pos);
-			BUG_ON(!ret || ret != pages[i]);
-			__free_page(pages[i]);
-		}
-
-		pos++;
-
-		/*
-		 * This assumes radix_tree_gang_lookup always returns as
-		 * many pages as possible. If the radix-tree code changes,
-		 * so will this have to.
-		 */
-	} while (nr_pages == FREE_BATCH);
-}
-
 void vsl_exit(struct vsl_dev *dev)
 {
 	struct vsl_stor *s = dev->stor;
@@ -518,9 +475,6 @@ void vsl_exit(struct vsl_dev *dev)
 	/* TODO: remember outstanding block refs, waiting to be erased... */
 	vsl_for_each_pool(s, pool, i)
 		kfree(pool->blocks);
-
-	if (s->internal_bad_blocks)
-		vsl_free_pages(s);
 
 	kfree(s->pools);
 	kfree(s->aps);

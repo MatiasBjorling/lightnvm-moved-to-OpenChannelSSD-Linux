@@ -191,8 +191,8 @@ enum rq_flag_bits {
 	__REQ_END,		/* last of chain of requests */
 	__REQ_HASHED,		/* on IO scheduler merge hash */
 	__REQ_MQ_INFLIGHT,	/* track inflight for MQ */
-	__REQ_VSL,		/* request is queued via VSL */
-	__REQ_VSL_MAPPED,	/* VSL mapped this request */
+	__REQ_NVM,		/* request is queued via lightnvm */
+	__REQ_NVM_MAPPED,	/* lightnvm mapped this request */
 	__REQ_NR_BITS,		/* stops here */
 };
 
@@ -247,7 +247,7 @@ enum rq_flag_bits {
 #define REQ_END			(1ULL << __REQ_END)
 #define REQ_HASHED		(1ULL << __REQ_HASHED)
 #define REQ_MQ_INFLIGHT		(1ULL << __REQ_MQ_INFLIGHT)
-#define REQ_VSL		(1ULL << __REQ_VSL)
-#define REQ_VSL_MAPPED		(1ULL << __REQ_VSL_MAPPED)
+#define REQ_NVM			(1ULL << __REQ_NVM)
+#define REQ_NVM_MAPPED		(1ULL << __REQ_NVM_MAPPED)
 
 #endif /* __LINUX_BLK_TYPES_H */

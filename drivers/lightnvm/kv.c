@@ -209,7 +209,7 @@ static int do_io(struct nvm_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 	}
 	orig_bio = rq->bio;
 
-	rq->cmd_flags |= REQ_VSL;
+	rq->cmd_flags |= REQ_NVM;
 	rq->__sector = blk_addr * NR_PHY_IN_LOG;
 	rq->errors = 0;
 
@@ -229,7 +229,7 @@ out:
 /**
  *	get	-	get value from KV store
  *	@s: nvm stor
- *	@cmd: VSL KV command
+ *	@cmd: LightNVM KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
  *
@@ -313,7 +313,7 @@ no_block:
 /**
  *	put	-	put/update value in KV store
  *	@s: nvm stor
- *	@cmd: VSL KV command
+ *	@cmd: LightNVM KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
  *
@@ -353,7 +353,7 @@ static int put(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h
 /**
  *	update	-	 update existing entry
  *	@s: nvm stor
- *	@cmd: VSL KV command
+ *	@cmd: LightNVM KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
  *
@@ -386,7 +386,7 @@ static int update(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u3
 /**
  *	del	 -	 delete entry.
  *	@s: nvm stor
- *	@cmd: VSL KV command
+ *	@cmd: LightNVM KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
  *

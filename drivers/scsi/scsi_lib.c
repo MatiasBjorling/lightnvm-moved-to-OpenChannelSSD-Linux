@@ -22,7 +22,7 @@
 #include <linux/hardirq.h>
 #include <linux/scatterlist.h>
 #include <linux/blk-mq.h>
-#include <linux/openvsl.h>
+#include <linux/lightnvm.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -1850,11 +1850,11 @@ static int scsi_mq_prep_fn(struct request *req)
 	return scsi_setup_cmnd(sdev, req);
 }
 
-static void scsi_vsl_done(struct scsi_cmnd *cmd)
+static void scsi_nvm_done(struct scsi_cmnd *cmd)
 {
 	struct scsi_device *sdp = cmd->device;
 	trace_scsi_dispatch_cmd_done(cmd);
-	vsl_complete_request(sdp->vsl_dev, cmd->request);
+	nvm_complete_request(sdp->nvm_dev, cmd->request);
 }
 
 static void scsi_mq_done(struct scsi_cmnd *cmd)
@@ -1887,8 +1887,8 @@ static int scsi_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 	if (!scsi_host_queue_ready(q, shost, sdev))
 		goto out_dec_target_busy;
 
-	if (sdev->vsl_dev && req->cmd_type == REQ_TYPE_FS) {
-		vsl_queue_rq(sdev->vsl_dev, req);
+	if (sdev->nvm_dev && req->cmd_type == REQ_TYPE_FS) {
+		nvm_queue_rq(sdev->nvm_dev, req);
 	}
 
 	if (!(req->cmd_flags & REQ_DONTPREP)) {
@@ -1898,8 +1898,8 @@ static int scsi_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *req)
 		req->cmd_flags |= REQ_DONTPREP;
 	}
 
-	if (sdev->vsl_dev && req->cmd_type == REQ_TYPE_FS)
-		cmd->scsi_done = scsi_vsl_done;
+	if (sdev->nvm_dev && req->cmd_type == REQ_TYPE_FS)
+		cmd->scsi_done = scsi_nvm_done;
 	else
 		cmd->scsi_done = scsi_mq_done;
 
@@ -2089,7 +2089,7 @@ int scsi_mq_setup_tags(struct Scsi_Host *shost)
 	shost->tag_set.ops = &scsi_mq_ops;
 	shost->tag_set.nr_hw_queues = 1;
 	shost->tag_set.queue_depth = shost->can_queue;
-	shost->tag_set.cmd_size = cmd_size + vsl_cmd_size();
+	shost->tag_set.cmd_size = cmd_size + nvm_cmd_size();
 	shost->tag_set.numa_node = NUMA_NO_NODE;
 	shost->tag_set.flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_SG_MERGE;
 	shost->tag_set.driver_data = shost;

@@ -1,32 +1,32 @@
 #include <linux/lightnvm.h>
-#include "vsl.h"
+#include "nvm.h"
 
 /* Run only GC if less than 1/X blocks are free */
 #define GC_LIMIT_INVERSE 10
 
-static void queue_pool_gc(struct vsl_pool *pool)
+static void queue_pool_gc(struct nvm_pool *pool)
 {
-	struct vsl_stor *s = pool->s;
+	struct nvm_stor *s = pool->s;
 
 	queue_work(s->krqd_wq, &pool->gc_ws);
 }
 
-void vsl_gc_cb(unsigned long data)
+void nvm_gc_cb(unsigned long data)
 {
-	struct vsl_stor *s = (struct vsl_stor *)data;
-	struct vsl_pool *pool;
+	struct nvm_stor *s = (struct nvm_stor *)data;
+	struct nvm_pool *pool;
 	int i;
 
-	vsl_for_each_pool(s, pool, i)
+	nvm_for_each_pool(s, pool, i)
 		queue_pool_gc(pool);
 
 	mod_timer(&s->gc_timer,
 			jiffies + msecs_to_jiffies(s->config.gc_time));
 }
 
-static void __erase_block(struct vsl_stor *s, struct vsl_block *block)
+static void __erase_block(struct nvm_stor *s, struct nvm_block *block)
 {
-	struct vsl_dev *dev = s->dev;
+	struct nvm_dev *dev = s->dev;
 	struct request_queue *q = dev->q;
 	struct request *rq;
 	struct bio *bio;
@@ -51,7 +51,7 @@ static void __erase_block(struct vsl_stor *s, struct vsl_block *block)
 
 	blk_init_request_from_bio(rq, bio);
 
-	rq->cmd_flags |= (REQ_VSL);
+	rq->cmd_flags |= (REQ_NVM);
 	rq->errors = 0;
 
 	ret = blk_execute_rq(q, dev->disk, rq, 0);
@@ -64,8 +64,8 @@ static void __erase_block(struct vsl_stor *s, struct vsl_block *block)
 
 /* the block with highest number of invalid pages, will be in the beginning
  * of the list */
-static struct vsl_block *block_max_invalid(struct vsl_block *a,
-					   struct vsl_block *b)
+static struct nvm_block *block_max_invalid(struct nvm_block *a,
+					   struct nvm_block *b)
 {
 	BUG_ON(!a || !b);
 
@@ -77,14 +77,14 @@ static struct vsl_block *block_max_invalid(struct vsl_block *a,
 
 /* linearly find the block with highest number of invalid pages
  * requires pool->lock */
-static struct vsl_block *block_prio_find_max(struct vsl_pool *pool)
+static struct nvm_block *block_prio_find_max(struct nvm_pool *pool)
 {
 	struct list_head *list = &pool->prio_list;
-	struct vsl_block *block, *max;
+	struct nvm_block *block, *max;
 
 	BUG_ON(list_empty(list));
 
-	max = list_first_entry(list, struct vsl_block, prio);
+	max = list_first_entry(list, struct nvm_block, prio);
 	list_for_each_entry(block, list, prio)
 		max = block_max_invalid(max, block);
 
@@ -93,12 +93,12 @@ static struct vsl_block *block_prio_find_max(struct vsl_pool *pool)
 
 /* Move data away from flash block to be erased. Additionally update the
  * l to p and p to l mappings. */
-static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
+static void nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
 {
-	struct vsl_dev *dev = s->dev;
+	struct nvm_dev *dev = s->dev;
 	struct request_queue *q = dev->q;
-	struct vsl_addr src;
-	struct vsl_rev_addr *rev;
+	struct nvm_addr src;
+	struct nvm_rev_addr *rev;
 	struct bio *src_bio;
 	struct request *src_rq, *dst_rq = NULL;
 	struct page *page;
@@ -119,7 +119,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 
 		src_bio = bio_alloc(GFP_NOIO, 1);
 		if (!src_bio) {
-			pr_err("vsl: failed to alloc gc bio request");
+			pr_err("nvm: failed to alloc gc bio request");
 			break;
 		}
 		src_bio->bi_iter.bi_sector = src.addr * NR_PHY_IN_LOG;
@@ -131,7 +131,7 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 		src_rq = blk_mq_alloc_request(q, READ, GFP_KERNEL, false);
 		if (!src_rq) {
 			mempool_free(page, s->page_pool);
-			pr_err("vsl: failed to alloc gc request");
+			pr_err("nvm: failed to alloc gc request");
 			break;
 		}
 
@@ -156,11 +156,11 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 			goto overwritten;
 		}
 
-		/* unlocked by vsl_submit_bio vsl_endio */
-		__vsl_lock_laddr_range(s, 1, rev->addr, 1);
+		/* unlocked by nvm_submit_bio nvm_endio */
+		__nvm_lock_laddr_range(s, 1, rev->addr, 1);
 		spin_unlock(&s->rev_lock);
 
-		vsl_setup_rq(s, src_rq, &src, rev->addr, VSL_RQ_GC);
+		nvm_setup_rq(s, src_rq, &src, rev->addr, NVM_RQ_GC);
 		blk_execute_rq(q, dev->disk, src_rq, 0);
 		blk_put_request(src_rq);
 
@@ -179,12 +179,12 @@ static void vsl_move_valid_pages(struct vsl_stor *s, struct vsl_block *block)
 
 		src_bio->bi_iter.bi_sector = rev->addr * NR_PHY_IN_LOG;
 
-		/* again, unlocked by vsl_endio */
-		__vsl_lock_laddr_range(s, 1, rev->addr, 1);
+		/* again, unlocked by nvm_endio */
+		__nvm_lock_laddr_range(s, 1, rev->addr, 1);
 
 		spin_unlock(&s->rev_lock);
 
-		__vsl_write_rq(s, dst_rq, 1);
+		__nvm_write_rq(s, dst_rq, 1);
 		blk_execute_rq(q, dev->disk, dst_rq, 0);
 
 overwritten:
@@ -196,11 +196,11 @@ overwritten:
 	WARN_ON(!bitmap_full(block->invalid_pages, s->nr_pages_per_blk));
 }
 
-void vsl_gc_collect(struct work_struct *work)
+void nvm_gc_collect(struct work_struct *work)
 {
-	struct vsl_pool *pool = container_of(work, struct vsl_pool, gc_ws);
-	struct vsl_stor *s = pool->s;
-	struct vsl_block *block;
+	struct nvm_pool *pool = container_of(work, struct nvm_pool, gc_ws);
+	struct nvm_stor *s = pool->s;
+	struct nvm_block *block;
 	unsigned int nr_blocks_need;
 	unsigned long flags;
 
@@ -237,22 +237,22 @@ void vsl_gc_collect(struct work_struct *work)
 	/* TODO: Hint that request queue can be started again */
 }
 
-void vsl_gc_block(struct work_struct *work)
+void nvm_gc_block(struct work_struct *work)
 {
-	struct vsl_block *block = container_of(work, struct vsl_block, ws_gc);
-	struct vsl_stor *s = block->pool->s;
+	struct nvm_block *block = container_of(work, struct nvm_block, ws_gc);
+	struct nvm_stor *s = block->pool->s;
 
 	/* TODO: move outside lock to allow multiple pages
 	 * in parallel to be erased. */
-	vsl_move_valid_pages(s, block);
+	nvm_move_valid_pages(s, block);
 	__erase_block(s, block);
 	s->type->pool_put_blk(block);
 }
 
-void vsl_gc_recycle_block(struct work_struct *work)
+void nvm_gc_recycle_block(struct work_struct *work)
 {
-	struct vsl_block *block = container_of(work, struct vsl_block, ws_eio);
-	struct vsl_pool *pool = block->pool;
+	struct nvm_block *block = container_of(work, struct nvm_block, ws_eio);
+	struct nvm_pool *pool = block->pool;
 
 	spin_lock(&pool->lock);
 	list_add_tail(&block->prio, &pool->prio_list);
@@ -260,13 +260,13 @@ void vsl_gc_recycle_block(struct work_struct *work)
 }
 
 
-void vsl_gc_kick(struct vsl_stor *s)
+void nvm_gc_kick(struct nvm_stor *s)
 {
-	struct vsl_pool *pool;
+	struct nvm_pool *pool;
 	unsigned int i;
 
 	BUG_ON(!s);
 
-	vsl_for_each_pool(s, pool, i)
+	nvm_for_each_pool(s, pool, i)
 		queue_pool_gc(pool);
 }

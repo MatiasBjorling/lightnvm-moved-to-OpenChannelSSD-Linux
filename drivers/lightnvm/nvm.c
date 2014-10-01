@@ -98,7 +98,7 @@ int nvm_queue_rq(struct nvm_dev *dev, struct request *rq)
 	struct nvm_stor *s = dev->stor;
 	int ret;
 
-	if (rq->cmd_flags & REQ_VSL_MAPPED)
+	if (rq->cmd_flags & REQ_NVM_MAPPED)
 		return BLK_MQ_RQ_QUEUE_OK;
 
 	if (blk_rq_pos(rq) / NR_PHY_IN_LOG > s->nr_pages) {
@@ -114,7 +114,7 @@ int nvm_queue_rq(struct nvm_dev *dev, struct request *rq)
 		ret = s->type->read_rq(s, rq);
 
 	if (ret == BLK_MQ_RQ_QUEUE_OK)
-		rq->cmd_flags |= (REQ_VSL|REQ_VSL_MAPPED);
+		rq->cmd_flags |= (REQ_NVM|REQ_NVM_MAPPED);
 
 	return ret;
 }
@@ -122,10 +122,10 @@ EXPORT_SYMBOL_GPL(nvm_queue_rq);
 
 void nvm_end_io(struct nvm_dev *nvm_dev, struct request *rq, int error)
 {
-	if (rq->cmd_flags & (REQ_VSL|REQ_VSL_MAPPED))
+	if (rq->cmd_flags & (REQ_NVM|REQ_NVM_MAPPED))
 		nvm_endio(nvm_dev, rq, error);
 
-	if (!(rq->cmd_flags & REQ_VSL))
+	if (!(rq->cmd_flags & REQ_NVM))
 		pr_info("Request submitted outside nvm_queue_rq detected!\n");
 
 	blk_mq_end_io(rq, error);
@@ -134,10 +134,10 @@ EXPORT_SYMBOL_GPL(nvm_end_io);
 
 void nvm_complete_request(struct nvm_dev *nvm_dev, struct request *rq)
 {
-	if (rq->cmd_flags & (REQ_VSL|REQ_VSL_MAPPED))
+	if (rq->cmd_flags & (REQ_NVM|REQ_NVM_MAPPED))
 		nvm_endio(nvm_dev, rq, 0);
 
-	if (!(rq->cmd_flags & REQ_VSL))
+	if (!(rq->cmd_flags & REQ_NVM))
 		pr_info("Request submitted outside nvm_queue_rq detected!\n");
 	blk_mq_complete_request(rq);
 }
@@ -286,9 +286,9 @@ static int nvm_stor_init(struct nvm_dev *dev, struct nvm_stor *s)
 	s->sector_size = EXPOSED_PAGE_SIZE;
 
 	/* inflight maintenance */
-	percpu_ida_init(&s->free_inflight, VSL_INFLIGHT_TAGS);
+	percpu_ida_init(&s->free_inflight, NVM_INFLIGHT_TAGS);
 
-	for (i = 0; i < VSL_INFLIGHT_PARTITIONS; i++) {
+	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
 		spin_lock_init(&s->inflight_map[i].lock);
 		INIT_LIST_HEAD(&s->inflight_map[i].reqs);
 	}
@@ -321,10 +321,10 @@ err_rev_trans_map:
 	return -ENOMEM;
 }
 
-#define VSL_TARGET_TYPE "rrpc"
-#define VSL_NUM_POOLS 8
-#define VSL_NUM_BLOCKS 256
-#define VSL_NUM_PAGES 256
+#define NVM_TARGET_TYPE "rrpc"
+#define NVM_NUM_POOLS 8
+#define NVM_NUM_BLOCKS 256
+#define NVM_NUM_PAGES 256
 
 struct nvm_dev *nvm_alloc()
 {
@@ -379,7 +379,7 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 	/* hardcode initialization values until user-space util is avail. */
 	s->type = &nvm_target_rrpc;
 	if (!s->type) {
-		pr_err("nvm: %s doesn't exist.", VSL_TARGET_TYPE);
+		pr_err("nvm: %s doesn't exist.", NVM_TARGET_TYPE);
 		goto err_target;
 	}
 
@@ -403,7 +403,7 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 	s->nr_pages_per_blk = s->gran_blk / s->gran_read * (s->gran_read / EXPOSED_PAGE_SIZE);
 
 	s->nr_aps_per_pool = APS_PER_POOL;
-	/* s->config.flags = VSL_OPT_* */
+	/* s->config.flags = NVM_OPT_* */
 	s->config.gc_time = GC_TIME;
 	s->config.t_read = nvm_id_chnl.t_r / 1000;
 	s->config.t_write = nvm_id_chnl.t_w / 1000;

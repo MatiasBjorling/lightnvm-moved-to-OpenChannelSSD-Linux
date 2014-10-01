@@ -4,8 +4,8 @@
  * This file is released under the GPL.
  */
 
-#ifndef VSL_H_
-#define VSL_H_
+#ifndef NVM_H_
+#define NVM_H_
 
 #include <linux/blkdev.h>
 #include <linux/list.h>
@@ -27,20 +27,20 @@
 #include <linux/blk-mq.h>
 #include <linux/slab.h>
 
-#ifdef VSL_DEBUG
+#ifdef NVM_DEBUG
 /*Wrap BUG_ON to allow additional checks in debug mode without
  impacting production performance*/
-#define VSL_ASSERT(c) BUG_ON( (c) == 0 )
+#define NVM_ASSERT(c) BUG_ON( (c) == 0 )
 #else
-#define VSL_ASSERT(c)
-#endif //VSL_DEBUG
+#define NVM_ASSERT(c)
+#endif //NVM_DEBUG
 
-#define VSL_MSG_PREFIX "vsl"
+#define NVM_MSG_PREFIX "nvm"
 #define LTOP_EMPTY -1
 #define LTOP_POISON 0xD3ADB33F
 
 /*
- * For now we hardcode some of the configuration for the OpenVSL device that we
+ * For now we hardcode some of the configuration for the LightNVM device that we
  * have. In the future this should be made configurable.
  *
  * Configuration:
@@ -58,10 +58,10 @@
 
 /* We partition the namespace of translation map into these pieces for tracking
  * in-flight addresses. */
-#define VSL_INFLIGHT_PARTITIONS 8
-#define VSL_INFLIGHT_TAGS 256
+#define NVM_INFLIGHT_PARTITIONS 8
+#define NVM_INFLIGHT_TAGS 256
 
-#define VSL_OPT_MISC_OFFSET 15
+#define NVM_OPT_MISC_OFFSET 15
 
 enum ltop_flags {
 	/* Update primary mapping (and init secondary mapping as a result) */
@@ -74,28 +74,28 @@ enum ltop_flags {
 
 enum target_flags {
 	/* No hints applied */
-	VSL_OPT_ENGINE_NONE		= 0 <<  0,
+	NVM_OPT_ENGINE_NONE		= 0 <<  0,
 	/* Swap aware hints. Detected from block request type */
-	VSL_OPT_ENGINE_SWAP		= 1 <<  0,
+	NVM_OPT_ENGINE_SWAP		= 1 <<  0,
 	/* IOCTL aware hints. Applications may submit direct hints */
-	VSL_OPT_ENGINE_IOCTL	= 1 <<  1,
+	NVM_OPT_ENGINE_IOCTL	= 1 <<  1,
 	/* Latency aware hints. Detected from file type or directly from app */
-	VSL_OPT_ENGINE_LATENCY	= 1 <<  2,
+	NVM_OPT_ENGINE_LATENCY	= 1 <<  2,
 	/* Pack aware hints. Detected from file type or directly from app */
-	VSL_OPT_ENGINE_PACK	= 1 <<  3,
+	NVM_OPT_ENGINE_PACK	= 1 <<  3,
 
 	/* Control accesses to append points in the host. Enable this for
 	 * devices that doesn't have an internal queue that only lets one
 	 * command run at a time within an append point */
-	VSL_OPT_POOL_SERIALIZE	= 1 << VSL_OPT_MISC_OFFSET,
+	NVM_OPT_POOL_SERIALIZE	= 1 << NVM_OPT_MISC_OFFSET,
 	/* Use fast/slow page access pattern */
-	VSL_OPT_FAST_SLOW_PAGES	= 1 << (VSL_OPT_MISC_OFFSET+1),
+	NVM_OPT_FAST_SLOW_PAGES	= 1 << (NVM_OPT_MISC_OFFSET+1),
 	/* Disable dev waits */
-	VSL_OPT_NO_WAITS	= 1 << (VSL_OPT_MISC_OFFSET+2),
+	NVM_OPT_NO_WAITS	= 1 << (NVM_OPT_MISC_OFFSET+2),
 };
 
 /* Pool descriptions */
-struct vsl_block {
+struct nvm_block {
 	struct {
 		spinlock_t lock;
 		/* points to the next writable page within a block */
@@ -108,8 +108,8 @@ struct vsl_block {
 	} ____cacheline_aligned_in_smp;
 
 	unsigned int id;
-	struct vsl_pool *pool;
-	struct vsl_ap *ap;
+	struct nvm_pool *pool;
+	struct nvm_ap *ap;
 
 	/* Management and GC structures */
 	struct list_head list;
@@ -126,17 +126,17 @@ struct vsl_block {
 };
 
 /* Logical to physical mapping */
-struct vsl_addr {
+struct nvm_addr {
 	sector_t addr;
-	struct vsl_block *block;
+	struct nvm_block *block;
 };
 
 /* Physical to logical mapping */
-struct vsl_rev_addr {
+struct nvm_rev_addr {
 	sector_t addr;
 };
 
-struct vsl_pool {
+struct nvm_pool {
 	/* Pool block lists */
 	struct {
 		spinlock_t lock;
@@ -156,8 +156,8 @@ struct vsl_pool {
 	unsigned int nr_blocks;		/* end_block - start_block. */
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
 
-	struct vsl_block *blocks;
-	struct vsl_stor *s;
+	struct nvm_block *blocks;
+	struct nvm_stor *s;
 
 	/* Postpone issuing I/O if append point is active */
 	atomic_t is_active;
@@ -176,19 +176,19 @@ struct vsl_pool {
 };
 
 /*
- * vsl_ap. ap is an append point. A pool can have 1..X append points attached.
+ * nvm_ap. ap is an append point. A pool can have 1..X append points attached.
  * An append point has a current block, that it writes to, and when its full,
  * it requests a new block, of which it continues its writes.
  *
  * one ap per pool may be reserved for pack-hints related writes.
  * In those that are not not, private is NULL.
  */
-struct vsl_ap {
+struct nvm_ap {
 	spinlock_t lock;
-	struct vsl_stor *parent;
-	struct vsl_pool *pool;
-	struct vsl_block *cur;
-	struct vsl_block *gc_cur;
+	struct nvm_stor *parent;
+	struct nvm_pool *pool;
+	struct nvm_block *cur;
+	struct nvm_block *gc_cur;
 
 	/* Timings used for end_io waiting */
 	unsigned long t_read;
@@ -201,7 +201,7 @@ struct vsl_ap {
 	void *private;
 };
 
-struct vsl_config {
+struct nvm_config {
 	unsigned long flags;
 
 	unsigned int gc_time; /* GC every X microseconds */
@@ -211,66 +211,66 @@ struct vsl_config {
 	unsigned int t_erase;
 };
 
-struct vsl_inflight_request {
+struct nvm_inflight_request {
 	struct list_head list;
 	sector_t l_start;
 	sector_t l_end;
 	int tag;
 };
 
-struct vsl_inflight {
+struct nvm_inflight {
 	spinlock_t lock;
 	struct list_head reqs;
 };
 
-struct vsl_stor;
+struct nvm_stor;
 struct per_rq_data;
-struct vsl_block;
-struct vsl_pool;
+struct nvm_block;
+struct nvm_pool;
 
 /* overridable functionality */
-typedef struct vsl_addr *(*vsl_lookup_ltop_fn)(struct vsl_stor *, sector_t);
-typedef struct vsl_addr *(*vsl_map_ltop_page_fn)(struct vsl_stor *, sector_t,
+typedef struct nvm_addr *(*nvm_lookup_ltop_fn)(struct nvm_stor *, sector_t);
+typedef struct nvm_addr *(*nvm_map_ltop_page_fn)(struct nvm_stor *, sector_t,
 						int);
-typedef struct vsl_block *(*vsl_map_ltop_block_fn)(struct vsl_stor *, sector_t,
+typedef struct nvm_block *(*nvm_map_ltop_block_fn)(struct nvm_stor *, sector_t,
 						int);
-typedef int (*vsl_write_rq_fn)(struct vsl_stor *, struct request *);
-typedef int (*vsl_read_rq_fn)(struct vsl_stor *, struct request *);
-typedef void (*vsl_alloc_phys_addr_fn)(struct vsl_stor *, struct vsl_block *);
-typedef struct vsl_block *(*vsl_pool_get_blk_fn)(struct vsl_pool *pool,
+typedef int (*nvm_write_rq_fn)(struct nvm_stor *, struct request *);
+typedef int (*nvm_read_rq_fn)(struct nvm_stor *, struct request *);
+typedef void (*nvm_alloc_phys_addr_fn)(struct nvm_stor *, struct nvm_block *);
+typedef struct nvm_block *(*nvm_pool_get_blk_fn)(struct nvm_pool *pool,
 						int is_gc);
-typedef void (*vsl_pool_put_blk_fn)(struct vsl_block *block);
-typedef int (*vsl_ioctl_fn)(struct vsl_stor *,
+typedef void (*nvm_pool_put_blk_fn)(struct nvm_block *block);
+typedef int (*nvm_ioctl_fn)(struct nvm_stor *,
 					unsigned int cmd, unsigned long arg);
-typedef int (*vsl_init_fn)(struct vsl_stor *);
-typedef void (*vsl_exit_fn)(struct vsl_stor *);
-typedef void (*vsl_endio_fn)(struct vsl_stor *, struct request *,
+typedef int (*nvm_init_fn)(struct nvm_stor *);
+typedef void (*nvm_exit_fn)(struct nvm_stor *);
+typedef void (*nvm_endio_fn)(struct nvm_stor *, struct request *,
 				struct per_rq_data *, unsigned long *delay);
 
-struct vsl_target_type {
+struct nvm_target_type {
 	const char *name;
 	unsigned int version[3];
 	unsigned int per_rq_size;
 
 	/* lookup functions */
-	vsl_lookup_ltop_fn lookup_ltop;
+	nvm_lookup_ltop_fn lookup_ltop;
 
 	/* handling of rqs */
-	vsl_write_rq_fn write_rq;
-	vsl_read_rq_fn read_rq;
-	vsl_ioctl_fn ioctl;
-	vsl_endio_fn end_rq;
+	nvm_write_rq_fn write_rq;
+	nvm_read_rq_fn read_rq;
+	nvm_ioctl_fn ioctl;
+	nvm_endio_fn end_rq;
 
 	/* engine-specific overrides */
-	vsl_alloc_phys_addr_fn alloc_phys_addr;
-	vsl_pool_get_blk_fn pool_get_blk;
-	vsl_pool_put_blk_fn pool_put_blk;
-	vsl_map_ltop_page_fn map_page;
-	vsl_map_ltop_block_fn map_block;
+	nvm_alloc_phys_addr_fn alloc_phys_addr;
+	nvm_pool_get_blk_fn pool_get_blk;
+	nvm_pool_put_blk_fn pool_put_blk;
+	nvm_map_ltop_page_fn map_page;
+	nvm_map_ltop_block_fn map_block;
 
 	/* module specific init/teardown */
-	vsl_init_fn init;
-	vsl_exit_fn exit;
+	nvm_init_fn init;
+	nvm_exit_fn exit;
 
 	/* For lightnvm internal use */
 	struct list_head list;
@@ -278,37 +278,37 @@ struct vsl_target_type {
 
 struct kv_entry;
 
-struct vslkv_tbl {
+struct nvmkv_tbl {
 	u8 bucket_len;
 	u64 tbl_len;
 	struct kv_entry *entries;
 	spinlock_t lock;
 };
 
-struct vslkv_inflight {
+struct nvmkv_inflight {
 	struct kmem_cache *entry_pool;
 	spinlock_t lock;
 	struct list_head list;
 };
 
-struct vslkv {
-	struct vslkv_tbl tbl;
-	struct vslkv_inflight inflight;
+struct nvmkv {
+	struct nvmkv_tbl tbl;
+	struct nvmkv_inflight inflight;
 };
 
 /* Main structure */
-struct vsl_stor {
-	struct vsl_dev *dev;
+struct nvm_stor {
+	struct nvm_dev *dev;
 	uint32_t sector_size;
 
-	struct vsl_target_type *type;
+	struct nvm_target_type *type;
 
 	/* Simple translation map of logical addresses to physical addresses.
 	 * The logical addresses is known by the host system, while the physical
 	 * addresses are used when writing to the disk block device. */
-	struct vsl_addr *trans_map;
+	struct nvm_addr *trans_map;
 	/* also store a reverse map for garbage collection */
-	struct vsl_rev_addr *rev_trans_map;
+	struct nvm_rev_addr *rev_trans_map;
 	spinlock_t rev_lock;
 	/* Usually instantiated to the number of available parallel channels
 	 * within the hardware device. i.e. a controller with 4 flash channels,
@@ -320,10 +320,10 @@ struct vsl_stor {
 	 * lightnvm (or any other device) expose its read/write/erase interface
 	 * and be administrated by the host system.
 	 */
-	struct vsl_pool *pools;
+	struct nvm_pool *pools;
 
 	/* Append points */
-	struct vsl_ap *aps;
+	struct nvm_ap *aps;
 
 	mempool_t *addr_pool;
 	mempool_t *page_pool;
@@ -356,96 +356,96 @@ struct vsl_stor {
 	 * overhead of cachelines being used. Keep it low for better cache
 	 * utilization. */
 	struct percpu_ida free_inflight;
-	struct vsl_inflight inflight_map[VSL_INFLIGHT_PARTITIONS];
-	struct vsl_inflight_request inflight_addrs[VSL_INFLIGHT_TAGS];
+	struct nvm_inflight inflight_map[NVM_INFLIGHT_PARTITIONS];
+	struct nvm_inflight_request inflight_addrs[NVM_INFLIGHT_TAGS];
 
 	/* nvm module specific data */
 	void *private;
 
 	/* User configuration */
-	struct vsl_config config;
+	struct nvm_config config;
 
 	unsigned int per_rq_offset;
 
-	struct vslkv kv;
+	struct nvmkv kv;
 };
 
-struct per_rq_data_vsl {
-	struct vsl_dev *dev;
+struct per_rq_data_nvm {
+	struct nvm_dev *dev;
 };
 
 enum {
-	VSL_RQ_NONE = 0,
-	VSL_RQ_GC = 1,
+	NVM_RQ_NONE = 0,
+	NVM_RQ_GC = 1,
 };
 
 struct per_rq_data {
-	struct vsl_ap *ap;
-	struct vsl_addr *addr;
+	struct nvm_ap *ap;
+	struct nvm_addr *addr;
 	sector_t l_addr;
 	unsigned int flags;
 };
 
 /* reg.c */
-int vsl_register_target(struct vsl_target_type *t);
-void vsl_unregister_target(struct vsl_target_type *t);
-struct vsl_target_type *find_vsl_target_type(const char *name);
+int nvm_register_target(struct nvm_target_type *t);
+void nvm_unregister_target(struct nvm_target_type *t);
+struct nvm_target_type *find_nvm_target_type(const char *name);
 
 /* core.c */
 /*   Helpers */
-void __invalidate_block_page(struct vsl_stor *, struct vsl_addr *);
-void invalidate_block_page(struct vsl_stor *, struct vsl_addr *);
-void vsl_set_ap_cur(struct vsl_ap *, struct vsl_block *);
-sector_t vsl_alloc_phys_addr(struct vsl_block *);
+void __invalidate_block_page(struct nvm_stor *, struct nvm_addr *);
+void invalidate_block_page(struct nvm_stor *, struct nvm_addr *);
+void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
+sector_t nvm_alloc_phys_addr(struct nvm_block *);
 
 /*   Naive implementations */
-void vsl_delayed_bio_submit(struct work_struct *);
-void vsl_deferred_bio_submit(struct work_struct *);
-void vsl_gc_block(struct work_struct *);
-void vsl_gc_recycle_block(struct work_struct *);
+void nvm_delayed_bio_submit(struct work_struct *);
+void nvm_deferred_bio_submit(struct work_struct *);
+void nvm_gc_block(struct work_struct *);
+void nvm_gc_recycle_block(struct work_struct *);
 
 /* Allocation of physical addresses from block
  * when increasing responsibility. */
-struct vsl_addr *vsl_alloc_addr_from_ap(struct vsl_ap *, int is_gc);
+struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *, int is_gc);
 
 /*   I/O request related */
 /* FIXME: Shorten */
-int vsl_write_rq(struct vsl_stor *, struct request *);
-int __vsl_write_rq(struct vsl_stor *, struct request *, int);
-int vsl_read_rq(struct vsl_stor *, struct request *rq);
+int nvm_write_rq(struct nvm_stor *, struct request *);
+int __nvm_write_rq(struct nvm_stor *, struct request *, int);
+int nvm_read_rq(struct nvm_stor *, struct request *rq);
 
-void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p, int is_gc);
-void vsl_setup_rq(struct vsl_stor *, struct request *, struct vsl_addr *, sector_t, unsigned int flags);
+void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p, int is_gc);
+void nvm_setup_rq(struct nvm_stor *, struct request *, struct nvm_addr *, sector_t, unsigned int flags);
 
-/*   VSL device related */
-void vsl_block_release(struct kref *);
+/*   NVM device related */
+void nvm_block_release(struct kref *);
 
 /*   Block maintanence */
-void vsl_reset_block(struct vsl_block *);
+void nvm_reset_block(struct nvm_block *);
 
-void vsl_endio(struct vsl_dev *, struct request *, int);
+void nvm_endio(struct nvm_dev *, struct request *, int);
 
 /* gc.c */
-void vsl_block_erase(struct kref *);
-void vsl_gc_cb(unsigned long data);
-void vsl_gc_collect(struct work_struct *work);
-void vsl_gc_kick(struct vsl_stor *s);
+void nvm_block_erase(struct kref *);
+void nvm_gc_cb(unsigned long data);
+void nvm_gc_collect(struct work_struct *work);
+void nvm_gc_kick(struct nvm_stor *s);
 
-/* vsltgt.c */
-struct vsl_block *vsl_pool_get_block(struct vsl_pool *, int is_gc);
+/* nvmtgt.c */
+struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
 
-/* vslkv.c */
-int vslkv_init(struct vsl_stor *s, unsigned long size);
-void vslkv_exit(struct vsl_stor *s);
-int vslkv_unpack(struct vsl_dev *dev, struct openvsl_cmd_kv __user *ucmd);
-void vsl_pool_put_block(struct vsl_block *);
+/* nvmkv.c */
+int nvmkv_init(struct nvm_stor *s, unsigned long size);
+void nvmkv_exit(struct nvm_stor *s);
+int nvmkv_unpack(struct nvm_dev *dev, struct lightnvm_cmd_kv __user *ucmd);
+void nvm_pool_put_block(struct nvm_block *);
 
 
-#define vsl_for_each_pool(n, pool, i) \
+#define nvm_for_each_pool(n, pool, i) \
 		for ((i) = 0, pool = &(n)->pools[0]; \
 			(i) < (n)->nr_pools; (i)++, pool = &(n)->pools[(i)])
 
-#define vsl_for_each_ap(n, ap, i) \
+#define nvm_for_each_ap(n, ap, i) \
 		for ((i) = 0, ap = &(n)->aps[0]; \
 			(i) < (n)->nr_aps; (i)++, ap = &(n)->aps[(i)])
 
@@ -459,33 +459,33 @@ void vsl_pool_put_block(struct vsl_block *);
 			+ (b)->pool->s->nr_pages_per_blk; \
 		(p)->addr++)
 
-static inline struct vsl_ap *get_next_ap(struct vsl_stor *s)
+static inline struct nvm_ap *get_next_ap(struct nvm_stor *s)
 {
 	return &s->aps[atomic_inc_return(&s->next_write_ap) % s->nr_aps];
 }
 
-static inline int block_is_full(struct vsl_block *block)
+static inline int block_is_full(struct nvm_block *block)
 {
-	struct vsl_stor *s = block->pool->s;
+	struct nvm_stor *s = block->pool->s;
 
 	return block->next_page == s->nr_pages_per_blk;
 }
 
-static inline sector_t block_to_addr(struct vsl_block *block)
+static inline sector_t block_to_addr(struct nvm_block *block)
 {
-	struct vsl_stor *s = block->pool->s;
+	struct nvm_stor *s = block->pool->s;
 
 	return block->id * s->nr_pages_per_blk;
 }
 
-static inline struct vsl_pool *paddr_to_pool(struct vsl_stor *s,
+static inline struct nvm_pool *paddr_to_pool(struct nvm_stor *s,
 							sector_t p_addr)
 {
 	return &s->pools[p_addr / (s->nr_pages / s->nr_pools)];
 }
 
-static inline struct vsl_ap *block_to_ap(struct vsl_stor *s,
-							struct vsl_block *b)
+static inline struct nvm_ap *block_to_ap(struct nvm_stor *s,
+							struct nvm_block *b)
 {
 	unsigned int ap_idx, div, mod;
 
@@ -496,30 +496,30 @@ static inline struct vsl_ap *block_to_ap(struct vsl_stor *s,
 	return &s->aps[ap_idx];
 }
 
-static inline int physical_to_slot(struct vsl_stor *s, sector_t phys)
+static inline int physical_to_slot(struct nvm_stor *s, sector_t phys)
 {
 	return phys % s->nr_pages_per_blk;
 }
 
-static inline void *get_per_rq_data(struct vsl_dev *dev, struct request *rq)
+static inline void *get_per_rq_data(struct nvm_dev *dev, struct request *rq)
 {
 	BUG_ON(!dev);
 	return blk_mq_rq_to_pdu(rq) + dev->drv_cmd_size;
 }
 
-static inline struct vsl_inflight *vsl_laddr_to_inflight(struct vsl_stor *s,
+static inline struct nvm_inflight *nvm_laddr_to_inflight(struct nvm_stor *s,
 							sector_t l_addr)
 {
-	return &s->inflight_map[l_addr % VSL_INFLIGHT_PARTITIONS ];
+	return &s->inflight_map[l_addr % NVM_INFLIGHT_PARTITIONS ];
 }
 
-static inline int request_equals(struct vsl_inflight_request *r,
+static inline int request_equals(struct nvm_inflight_request *r,
 			sector_t laddr_start, sector_t laddr_end)
 {
 	return (r->l_end == laddr_end && r->l_start == laddr_start);
 }
 
-static inline int request_intersects(struct vsl_inflight_request *r,
+static inline int request_intersects(struct nvm_inflight_request *r,
 				sector_t laddr_start, sector_t laddr_end)
 {
 	return (laddr_end >= r->l_start && laddr_end <= r->l_end) &&
@@ -527,20 +527,20 @@ static inline int request_intersects(struct vsl_inflight_request *r,
 }
 
 /*TODO: make compatible with multi-block requests*/
-static inline void __vsl_lock_laddr_range(struct vsl_stor *s, int spin,
+static inline void __nvm_lock_laddr_range(struct nvm_stor *s, int spin,
 				sector_t laddr_start, unsigned nsectors)
 {
-	struct vsl_inflight *inflight;
-	struct vsl_inflight_request *r;
+	struct nvm_inflight *inflight;
+	struct nvm_inflight_request *r;
 	sector_t laddr_end = laddr_start + nsectors - 1;
 	int tag;
 	unsigned long flags;
 
-	VSL_ASSERT(nsectors >= 1);
+	NVM_ASSERT(nsectors >= 1);
 	BUG_ON(laddr_end >= s->nr_pages);
 	BUG_ON(nsectors > s->nr_pages_per_blk); /*FIXME Not yet supported*/
 
-	inflight = vsl_laddr_to_inflight(s, laddr_start);
+	inflight = nvm_laddr_to_inflight(s, laddr_start);
 	tag = percpu_ida_alloc(&s->free_inflight, __GFP_WAIT);
 
 retry:
@@ -566,23 +566,23 @@ retry:
 	spin_unlock_irqrestore(&inflight->lock, flags);
 }
 
-static inline void vsl_lock_laddr_range(struct vsl_stor *s, sector_t laddr_start,
+static inline void nvm_lock_laddr_range(struct nvm_stor *s, sector_t laddr_start,
 					unsigned int nsectors)
 {
-	return __vsl_lock_laddr_range(s, 0, laddr_start, nsectors);
+	return __nvm_lock_laddr_range(s, 0, laddr_start, nsectors);
 }
 
-static inline void vsl_unlock_laddr_range(struct vsl_stor *s,
+static inline void nvm_unlock_laddr_range(struct nvm_stor *s,
 					sector_t laddr_start,
 					unsigned int nsectors)
 {
-	struct vsl_inflight *inflight = vsl_laddr_to_inflight(s, laddr_start);
-	struct vsl_inflight_request *r = NULL;
+	struct nvm_inflight *inflight = nvm_laddr_to_inflight(s, laddr_start);
+	struct nvm_inflight_request *r = NULL;
 	sector_t laddr_end = laddr_start + nsectors - 1;
 	unsigned long flags;
 
-	VSL_ASSERT(nsectors >= 1);
-	VSL_ASSERT(laddr_end >= laddr_start);
+	NVM_ASSERT(nsectors >= 1);
+	NVM_ASSERT(laddr_end >= laddr_start);
 
 	spin_lock_irqsave(&inflight->lock, flags);
 	BUG_ON(list_empty(&inflight->reqs));
@@ -600,12 +600,12 @@ static inline void vsl_unlock_laddr_range(struct vsl_stor *s,
 	percpu_ida_free(&s->free_inflight, r->tag);
 }
 
-static inline void __show_pool(struct vsl_pool *pool)
+static inline void __show_pool(struct nvm_pool *pool)
 {
 	struct list_head *head, *cur;
 	unsigned int free_cnt = 0, used_cnt = 0, prio_cnt = 0;
 
-	VSL_ASSERT(spin_is_locked(&pool->lock));
+	NVM_ASSERT(spin_is_locked(&pool->lock));
 
 	list_for_each_safe(head, cur, &pool->free_list)
 		free_cnt++;
@@ -618,21 +618,21 @@ static inline void __show_pool(struct vsl_pool *pool)
 					pool->id, free_cnt, used_cnt, prio_cnt);
 }
 
-static inline void show_pool(struct vsl_pool *pool)
+static inline void show_pool(struct nvm_pool *pool)
 {
 	spin_lock(&pool->lock);
 	__show_pool(pool);
 	spin_unlock(&pool->lock);
 }
 
-static inline void show_all_pools(struct vsl_stor *s)
+static inline void show_all_pools(struct nvm_stor *s)
 {
-	struct vsl_pool *pool;
+	struct nvm_pool *pool;
 	unsigned int i;
 
-	vsl_for_each_pool(s, pool, i)
+	nvm_for_each_pool(s, pool, i)
 		show_pool(pool);
 }
 
-#endif /* VSL_H_ */
+#endif /* NVM_H_ */
 

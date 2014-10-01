@@ -20,7 +20,7 @@
 #include <linux/miscdevice.h>
 #include <linux/kref.h>
 #include <linux/blk-mq.h>
-#include <linux/openvsl.h>
+#include <linux/lightnvm.h>
 
 struct nvme_bar {
 	__u64			cap;	/* Controller Capabilities */
@@ -123,7 +123,7 @@ struct nvme_ns {
 	u64 mode_select_num_blocks;
 	u32 mode_select_block_len;
 
-	struct vsl_dev *vsl_dev;
+	struct nvm_dev *nvm_dev;
 };
 
 /*

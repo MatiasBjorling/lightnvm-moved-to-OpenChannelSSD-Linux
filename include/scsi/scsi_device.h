@@ -193,7 +193,7 @@ struct scsi_device {
 	struct device		sdev_gendev,
 				sdev_dev;
 
-	struct vsl_dev		*vsl_dev;
+	struct nvm_dev		*nvm_dev;
 
 	struct execute_work	ew; /* used to get process context on put */
 	struct work_struct	requeue_work;

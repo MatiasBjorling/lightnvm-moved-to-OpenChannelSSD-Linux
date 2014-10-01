@@ -12,24 +12,24 @@
  * more details.
  */
 
-#ifndef _UAPI_LINUX_OPENVSL_H
-#define _UAPI_LINUX_OPENVSL_H
+#ifndef _UAPI_LINUX_LIGHTNVM_H
+#define _UAPI_LINUX_LIGHTNVM_H
 
 #include <linux/types.h>
 
 enum {
-	OPENVSL_KV_GET		= 0x00,
-	OPENVSL_KV_PUT		= 0x01,
-	OPENVSL_KV_UPDATE	= 0x02,
-	OPENVSL_KV_DEL		= 0x03,
+	LIGHTNVM_KV_GET		= 0x00,
+	LIGHTNVM_KV_PUT		= 0x01,
+	LIGHTNVM_KV_UPDATE	= 0x02,
+	LIGHTNVM_KV_DEL		= 0x03,
 };
 
 enum {
-	OPENVSL_KV_ERR_NONE	= 0,
-	OPENVSL_KV_ERR_NOKEY	= 1,
+	LIGHTNVM_KV_ERR_NONE	= 0,
+	LIGHTNVM_KV_ERR_NOKEY	= 1,
 };
 
-struct openvsl_cmd_kv {
+struct lightnvm_cmd_kv {
 	__u8		opcode;
 	__u8		errcode;
 	__u8		res[6];
@@ -39,7 +39,7 @@ struct openvsl_cmd_kv {
 	__u64		val_addr;
 };
 
-#define OPENVSL_IOCTL_ID	_IO('O', 0x40)
-#define OPENVSL_IOCTL_KV	_IOWR('O', 0x50, struct openvsl_cmd_kv)
+#define LIGHTNVM_IOCTL_ID	_IO('O', 0x40)
+#define LIGHTNVM_IOCTL_KV	_IOWR('O', 0x50, struct lightnvm_cmd_kv)
 
-#endif /* _UAPI_LINUX_OPENVSL_H */
+#endif /* _UAPI_LINUX_LIGHTNVM_H */

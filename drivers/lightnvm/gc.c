@@ -1,4 +1,4 @@
-#include <linux/openvsl.h>
+#include <linux/lightnvm.h>
 #include "vsl.h"
 
 /* Run only GC if less than 1/X blocks are free */

@@ -23,7 +23,7 @@
 #include <linux/completion.h>
 #include <linux/hashtable.h>
 #include <linux/percpu_ida.h>
-#include <linux/openvsl.h>
+#include <linux/lightnvm.h>
 #include <linux/blk-mq.h>
 #include <linux/slab.h>
 

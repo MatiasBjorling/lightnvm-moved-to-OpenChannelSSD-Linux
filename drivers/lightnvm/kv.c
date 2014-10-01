@@ -3,7 +3,7 @@
 #include <linux/scatterlist.h>
 #include <linux/jhash.h>
 #include <linux/slab.h>
-#include "vsl.h"
+#include "nvm.h"
 
 /*inflight only uses jenkins hash - less to compare, collisions only result
  *  in unecessary serialisation.
@@ -23,15 +23,15 @@ struct kv_inflight {
 
 struct kv_entry {
 	u64 hash[2];
-	struct vsl_block *blk;
+	struct nvm_block *blk;
 };
 
-struct vslkv_io {
+struct nvmkv_io {
 	int offset;
 	unsigned npages;
 	unsigned length;
 	struct page **pages;
-	struct vsl_block *block;
+	struct nvm_block *block;
 	int write;
 };
 
@@ -46,13 +46,13 @@ enum {
 	NEW_ENTRY	= 1,
 };
 
-static inline unsigned bucket_idx(struct vslkv_tbl *tbl, u32 hash)
+static inline unsigned bucket_idx(struct nvmkv_tbl *tbl, u32 hash)
 {
 	return hash % (tbl->tbl_len / BUCKET_LEN);
 }
 
 /*TODO FIXME - no locks can be held while executing this*/
-static void inflight_lock(struct vslkv_inflight *ilist,
+static void inflight_lock(struct nvmkv_inflight *ilist,
                           struct kv_inflight *ientry)
 {
 	struct kv_inflight *lentry;
@@ -73,7 +73,7 @@ retry:
 	spin_unlock_irqrestore(&ilist->lock, flags);
 }
 
-static void inflight_unlock(struct vslkv_inflight *ilist, u32 h1)
+static void inflight_unlock(struct nvmkv_inflight *ilist, u32 h1)
 {
 	struct kv_inflight *lentry;
 	unsigned long flags;
@@ -95,7 +95,7 @@ out:
 
 /*TODO reserving '0' for empty entries is technically a no-go as it could be
   a hash value.*/
-static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, const u64 *h2,
+static int __tbl_get_idx(struct nvmkv_tbl *tbl, u32 h1, const u64 *h2,
                          unsigned int type)
 {
 	unsigned b_idx = bucket_idx(tbl, h1);
@@ -118,7 +118,7 @@ static int __tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, const u64 *h2,
 	return idx;
 }
 
-static int tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, const u64 *h2,
+static int tbl_get_idx(struct nvmkv_tbl *tbl, u32 h1, const u64 *h2,
                        unsigned int type)
 {
 	int idx;
@@ -130,7 +130,7 @@ static int tbl_get_idx(struct vslkv_tbl *tbl, u32 h1, const u64 *h2,
 }
 
 
-static int tbl_new_entry(struct vslkv_tbl *tbl, u32 h1)
+static int tbl_new_entry(struct nvmkv_tbl *tbl, u32 h1)
 {
 	const u64 empty[2] = { 0, 0 };
 	return tbl_get_idx(tbl, h1, empty, NEW_ENTRY);
@@ -184,10 +184,10 @@ static void *cpy_val(u64 addr, size_t len)
 	return buf;
 }
 
-static int do_io(struct vsl_stor *s, int rw, u64 blk_addr, void __user *ubuf,
+static int do_io(struct nvm_stor *s, int rw, u64 blk_addr, void __user *ubuf,
                  unsigned long len)
 {
-	struct vsl_dev *dev = s->dev;
+	struct nvm_dev *dev = s->dev;
 	struct request_queue *q = dev->q;
 	struct request *rq;
 	struct bio *orig_bio;
@@ -228,16 +228,16 @@ out:
 
 /**
  *	get	-	get value from KV store
- *	@s: vsl stor
+ *	@s: nvm stor
  *	@cmd: VSL KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
  *
  *	Fetch value identified by the supplied key.
  */
-static int get(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
+static int get(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h1)
 {
-	struct vslkv_tbl *tbl = &s->kv.tbl;
+	struct nvmkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
 	u64 h2[2];
 	int idx;
@@ -246,7 +246,7 @@ static int get(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 
 	idx = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY);
 	if (idx < 0)
-		return OPENVSL_KV_ERR_NOKEY;
+		return LIGHTNVM_KV_ERR_NOKEY;
 
 	entry = &tbl->entries[idx];
 
@@ -254,11 +254,11 @@ static int get(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 			(void __user *)cmd->val_addr, cmd->val_len);
 }
 
-static struct vsl_block *acquire_block(struct vsl_stor *s)
+static struct nvm_block *acquire_block(struct nvm_stor *s)
 {
-	struct vsl_ap *ap;
-	struct vsl_pool *pool;
-	struct vsl_block *block = NULL;
+	struct nvm_ap *ap;
+	struct nvm_pool *pool;
+	struct nvm_block *block = NULL;
 	int i;
 
 	for(i = 0; i < s->nr_aps; i++) {
@@ -272,10 +272,10 @@ static struct vsl_block *acquire_block(struct vsl_stor *s)
 	return block;
 }
 
-static int update_entry(struct vsl_stor *s, struct openvsl_cmd_kv *cmd,
+static int update_entry(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd,
 			struct kv_entry *entry)
 {
-	struct vsl_block *block;
+	struct nvm_block *block;
 	int ret;
 
 	BUG_ON(!s);
@@ -312,7 +312,7 @@ no_block:
 
 /**
  *	put	-	put/update value in KV store
- *	@s: vsl stor
+ *	@s: nvm stor
  *	@cmd: VSL KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
@@ -320,9 +320,9 @@ no_block:
  *	Store the supplied value in an entry identified by the
  *	supplied key. Will overwrite existing entry if necessary.
  */
-static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
+static int put(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h1)
 {
-	struct vslkv_tbl *tbl = &s->kv.tbl;
+	struct nvmkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
 	u64 h2[2];
 	int idx, ret;
@@ -352,7 +352,7 @@ static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 
 /**
  *	update	-	 update existing entry
- *	@s: vsl stor
+ *	@s: nvm stor
  *	@cmd: VSL KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
@@ -360,9 +360,9 @@ static int put(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
  *	Updates existing value identified by 'k' to the new value.
  *	Operation only succeeds if k points to an existing value.
  */
-static int update(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
+static int update(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h1)
 {
-	struct vslkv_tbl *tbl = &s->kv.tbl;
+	struct nvmkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
 	u64 h2[2];
 	int ret;
@@ -385,16 +385,16 @@ static int update(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32
 
 /**
  *	del	 -	 delete entry.
- *	@s: vsl stor
+ *	@s: nvm stor
  *	@cmd: VSL KV command
  *	@key: copy of key supplied from userspace.
  *	@h1: hash of key value using hash function 1
  *
  *	Removes the value associated the supplied key.
  */
-static int del(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1)
+static int del(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h1)
 {
-	struct vslkv_tbl *tbl = &s->kv.tbl;
+	struct nvmkv_tbl *tbl = &s->kv.tbl;
 	struct kv_entry *entry;
 	u64 h2[2];
 	int idx = 0;
@@ -413,11 +413,11 @@ static int del(struct vsl_stor *s, struct openvsl_cmd_kv *cmd, void *key, u32 h1
 	return 0;
 }
 
-int vslkv_unpack(struct vsl_dev *dev, struct openvsl_cmd_kv __user *ucmd)
+int nvmkv_unpack(struct nvm_dev *dev, struct lightnvm_cmd_kv __user *ucmd)
 {
-	struct openvsl_cmd_kv cmd;
-	struct vsl_stor *s = dev->stor;
-	struct vslkv_inflight *inflight = &s->kv.inflight;
+	struct lightnvm_cmd_kv cmd;
+	struct nvm_stor *s = dev->stor;
+	struct nvmkv_inflight *inflight = &s->kv.inflight;
 
 	struct kv_inflight *ientry;
 	u32 h1;
@@ -443,16 +443,16 @@ int vslkv_unpack(struct vsl_dev *dev, struct openvsl_cmd_kv __user *ucmd)
 	inflight_lock(inflight, ientry);
 
 	switch(cmd.opcode) {
-	case OPENVSL_KV_GET:
+	case LIGHTNVM_KV_GET:
 		ret = get(s, &cmd, key, h1);
 		break;
-	case OPENVSL_KV_PUT:
+	case LIGHTNVM_KV_PUT:
 		ret = put(s, &cmd, key, h1);
 		break;
-	case OPENVSL_KV_UPDATE:
+	case LIGHTNVM_KV_UPDATE:
 		ret = update(s, &cmd, key, h1);
 		break;
-	case OPENVSL_KV_DEL:
+	case LIGHTNVM_KV_DEL:
 		ret = del(s, &cmd, key, h1);
 		break;
 	default:
@@ -472,15 +472,15 @@ out:
 	return ret;
 }
 
-static inline unsigned long num_entries(struct vsl_stor *s, unsigned long size)
+static inline unsigned long num_entries(struct nvm_stor *s, unsigned long size)
 {
 	return size / s->gran_blk;
 }
 
-int vslkv_init(struct vsl_stor *s, unsigned long size)
+int nvmkv_init(struct nvm_stor *s, unsigned long size)
 {
-	struct vslkv_tbl *tbl = &s->kv.tbl;
-	struct vslkv_inflight *inflight = &s->kv.inflight;
+	struct nvmkv_tbl *tbl = &s->kv.tbl;
+	struct nvmkv_inflight *inflight = &s->kv.inflight;
 	int ret = 0;
 
 	unsigned long buckets = num_entries(s, size)
@@ -498,7 +498,7 @@ int vslkv_init(struct vsl_stor *s, unsigned long size)
 		goto err_tbl_entries;
 	}
 
-	inflight->entry_pool = kmem_cache_create("vslkv_inflight_pool",
+	inflight->entry_pool = kmem_cache_create("nvmkv_inflight_pool",
 	                       sizeof(struct kv_inflight), 0,
 	                       SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD,
 	                       NULL);
@@ -519,10 +519,10 @@ err_tbl_entries:
 	return ret;
 }
 
-void vslkv_exit(struct vsl_stor *s)
+void nvmkv_exit(struct nvm_stor *s)
 {
-	struct vslkv_tbl *tbl = &s->kv.tbl;
-	struct vslkv_inflight *inflight = &s->kv.inflight;
+	struct nvmkv_tbl *tbl = &s->kv.tbl;
+	struct nvmkv_inflight *inflight = &s->kv.inflight;
 
 	vfree(tbl->entries);
 	kmem_cache_destroy(inflight->entry_pool);

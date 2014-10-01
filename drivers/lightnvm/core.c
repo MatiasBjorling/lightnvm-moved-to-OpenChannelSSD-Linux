@@ -1,35 +1,35 @@
-#include <linux/openvsl.h>
+#include <linux/lightnvm.h>
 #include <trace/events/block.h>
-#include "vsl.h"
+#include "nvm.h"
 
-inline void __invalidate_block_page(struct vsl_stor *s,
-				struct vsl_addr *p)
+inline void __invalidate_block_page(struct nvm_stor *s,
+				struct nvm_addr *p)
 {
 	unsigned int page_offset;
-	struct vsl_block *block = p->block;
+	struct nvm_block *block = p->block;
 
-	VSL_ASSERT(spin_is_locked(&s->rev_lock));
-	VSL_ASSERT(spin_is_locked(&block->lock));
+	NVM_ASSERT(spin_is_locked(&s->rev_lock));
+	NVM_ASSERT(spin_is_locked(&block->lock));
 
 	page_offset = p->addr % s->nr_pages_per_blk;
 	WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 	block->nr_invalid_pages++;
 }
 
-void invalidate_block_page(struct vsl_stor *s, struct vsl_addr *p)
+void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 {
-	struct vsl_block *block = p->block;
+	struct nvm_block *block = p->block;
 
 	spin_lock(&block->lock);
 	__invalidate_block_page(s, p);
 	spin_unlock(&block->lock);
 }
 
-void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
+void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p,
 					int is_gc)
 {
-	struct vsl_addr *gp;
-	struct vsl_rev_addr *rev;
+	struct nvm_addr *gp;
+	struct nvm_rev_addr *rev;
 
 	BUG_ON(l_addr >= s->nr_pages);
 	if (p->addr >= s->nr_pages)
@@ -52,9 +52,9 @@ void vsl_update_map(struct vsl_stor *s, sector_t l_addr, struct vsl_addr *p,
 }
 
 /* requires pool->lock taken */
-inline void vsl_reset_block(struct vsl_block *block)
+inline void nvm_reset_block(struct nvm_block *block)
 {
-	struct vsl_stor *s;
+	struct nvm_stor *s;
 
 	BUG_ON(!block);
 
@@ -71,9 +71,9 @@ inline void vsl_reset_block(struct vsl_block *block)
 }
 
 
-static sector_t __vsl_alloc_phys_addr(struct vsl_block *block)
+static sector_t __nvm_alloc_phys_addr(struct nvm_block *block)
 {
-	struct vsl_stor *s;
+	struct nvm_stor *s;
 	sector_t addr = LTOP_EMPTY;
 
 	BUG_ON(!block);
@@ -98,13 +98,13 @@ out:
 	return addr;
 }
 
-sector_t vsl_alloc_phys_addr(struct vsl_block *block)
+sector_t nvm_alloc_phys_addr(struct nvm_block *block)
 {
-	return __vsl_alloc_phys_addr(block);
+	return __nvm_alloc_phys_addr(block);
 }
 
 /* requires ap->lock taken */
-void vsl_set_ap_cur(struct vsl_ap *ap, struct vsl_block *block)
+void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
 	BUG_ON(!ap);
 	BUG_ON(!block);
@@ -119,21 +119,21 @@ void vsl_set_ap_cur(struct vsl_ap *ap, struct vsl_block *block)
 	ap->cur->ap = ap;
 }
 
-void vsl_erase_block(struct vsl_block *block)
+void nvm_erase_block(struct nvm_block *block)
 {
 	/* Send erase command to device. */
 }
 
-void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
+void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 {
-	struct vsl_stor *s = vsl_dev->stor;
-	struct per_rq_data *pb = get_per_rq_data(vsl_dev, rq);
-	struct vsl_addr *p = pb->addr;
-	struct vsl_block *block = p->block;
+	struct nvm_stor *s = nvm_dev->stor;
+	struct per_rq_data *pb = get_per_rq_data(nvm_dev, rq);
+	struct nvm_addr *p = pb->addr;
+	struct nvm_block *block = p->block;
 	unsigned int data_cnt;
 
 	//printk("p: %p s: %llu l: %u pp:%p e:%u (%u)\n", p, p->addr, pb->l_addr, p, err, rq_data_dir(rq));
-	vsl_unlock_laddr_range(s, pb->l_addr, 1);
+	nvm_unlock_laddr_range(s, pb->l_addr, 1);
 
 	if (rq_data_dir(rq) == WRITE) {
 		/* maintain data in buffer until block is full */
@@ -146,18 +146,18 @@ void vsl_endio(struct vsl_dev *vsl_dev, struct request *rq, int err)
 
 	/* all submitted requests allocate their own addr,
 	 * except GC reads */
-	if (pb->flags & VSL_RQ_GC)
+	if (pb->flags & NVM_RQ_GC)
 		return;
 
 	mempool_free(pb->addr, s->addr_pool);
 }
 
-/* remember to lock l_add before calling vsl_submit_rq */
-void vsl_setup_rq(struct vsl_stor *s, struct request *rq, struct vsl_addr *p,
+/* remember to lock l_add before calling nvm_submit_rq */
+void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p,
 		  sector_t l_addr, unsigned int flags)
 {
-	struct vsl_block *block = p->block;
-	struct vsl_ap *ap;
+	struct nvm_block *block = p->block;
+	struct nvm_ap *ap;
 	struct per_rq_data *pb;
 
 	if (block)
@@ -173,19 +173,19 @@ void vsl_setup_rq(struct vsl_stor *s, struct request *rq, struct vsl_addr *p,
 	pb->flags = flags;
 }
 
-int vsl_read_rq(struct vsl_stor *s, struct request *rq)
+int nvm_read_rq(struct nvm_stor *s, struct request *rq)
 {
-	struct vsl_addr *p;
+	struct nvm_addr *p;
 	sector_t l_addr;
 
 	l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
-	vsl_lock_laddr_range(s, l_addr, 1);
+	nvm_lock_laddr_range(s, l_addr, 1);
 
 	p = s->type->lookup_ltop(s, l_addr);
 	if (!p) {
-		vsl_unlock_laddr_range(s, l_addr, 1);
-		vsl_gc_kick(s);
+		nvm_unlock_laddr_range(s, l_addr, 1);
+		nvm_gc_kick(s);
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
@@ -195,22 +195,22 @@ int vsl_read_rq(struct vsl_stor *s, struct request *rq)
 	if (!p->block)
 		rq->__sector = 0;
 
-	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
+	nvm_setup_rq(s, rq, p, l_addr, NVM_RQ_NONE);
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
 
-int __vsl_write_rq(struct vsl_stor *s, struct request *rq, int is_gc)
+int __nvm_write_rq(struct nvm_stor *s, struct request *rq, int is_gc)
 {
-	struct vsl_addr *p;
+	struct nvm_addr *p;
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
-	vsl_lock_laddr_range(s, l_addr, 1);
+	nvm_lock_laddr_range(s, l_addr, 1);
 	p = s->type->map_page(s, l_addr, is_gc);
 	if (!p) {
 		BUG_ON(is_gc);
-		vsl_unlock_laddr_range(s, l_addr, 1);
-		vsl_gc_kick(s);
+		nvm_unlock_laddr_range(s, l_addr, 1);
+		nvm_gc_kick(s);
 
 		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
@@ -220,15 +220,15 @@ int __vsl_write_rq(struct vsl_stor *s, struct request *rq, int is_gc)
 	 * driver
 	 */
 	rq->__sector = p->addr * NR_PHY_IN_LOG;
-	/*printk("vsl: W %llu(%llu) B: %u\n", p->addr, p->addr * NR_PHY_IN_LOG,
+	/*printk("nvm: W %llu(%llu) B: %u\n", p->addr, p->addr * NR_PHY_IN_LOG,
 			p->block->id);*/
 
-	vsl_setup_rq(s, rq, p, l_addr, VSL_RQ_NONE);
+	nvm_setup_rq(s, rq, p, l_addr, NVM_RQ_NONE);
 
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-int vsl_write_rq(struct vsl_stor *s, struct request *rq)
+int nvm_write_rq(struct nvm_stor *s, struct request *rq)
 {
-	return __vsl_write_rq(s, rq, 0);
+	return __nvm_write_rq(s, rq, 0);
 }

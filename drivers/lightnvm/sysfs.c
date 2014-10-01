@@ -1,4 +1,4 @@
-#include <linux/openvsl.h>
+#include <linux/lightnvm.h>
 #include <linux/sysfs.h>
 
 #include "vsl.h"

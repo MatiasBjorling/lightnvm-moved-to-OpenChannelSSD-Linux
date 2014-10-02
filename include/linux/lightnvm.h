@@ -83,7 +83,7 @@ typedef int (nvm_set_rsp_fn)(struct nvm_dev *dev, u8 rsp, u8 val);
 typedef int (nvm_queue_rq_fn)(struct nvm_dev *, struct request *);
 typedef int (nvm_erase_blk_fn)(struct nvm_dev *, sector_t);
 
-struct nvm_dev_ops {
+struct lightnvm_dev_ops {
 	nvm_id_fn		*identify;
 	nvm_id_chnl_fn		*identify_channel;
 	nvm_get_features_fn 	*get_features;
@@ -93,11 +93,11 @@ struct nvm_dev_ops {
 	nvm_queue_rq_fn		*nvm_queue_rq;
 
 	/* LightNVM commands */
-	nvm_erase_blk_fn	*nvm_erase_blk;
+	nvm_erase_blk_fn	*nvm_erase_block;
 };
 
 struct nvm_dev {
-	struct nvm_dev_ops *ops;
+	struct lightnvm_dev_ops *ops;
 
 	struct request_queue *q;
 	struct gendisk *disk;

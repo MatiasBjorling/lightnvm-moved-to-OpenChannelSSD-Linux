@@ -409,7 +409,7 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 	return 0;
 }
 
-static struct nvm_dev_ops null_nvm_dev_ops = {
+static struct lightnvm_dev_ops null_nvm_dev_ops = {
 	.identify		= null_nvm_id,
 	.identify_channel	= null_nvm_id_chnl,
 	.get_features		= null_nvm_get_features,

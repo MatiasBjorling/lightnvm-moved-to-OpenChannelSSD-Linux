@@ -1328,7 +1328,7 @@ static int sd_ioctl(struct block_device *bdev, fmode_t mode,
 		goto out;
 
 	if (sdp->nvm_dev) {
-		error = nvm_ioctl(bdev, mode, cmd, arg);
+		error = nvm_ioctl(sdp->nvm_dev, mode, cmd, arg);
 		if (error != -ENOTTY)
 			goto out;
 	}
@@ -2931,7 +2931,7 @@ static int scsi_nvm_set_rsp(struct nvm_dev *dev, u8 rsp, u8 val)
 	return NVM_RID_NOT_CHANGEABLE | NVM_DNR;
 }
 
-static struct nvm_dev_ops scsi_nvm_dev_ops = {
+static struct lightnvm_dev_ops scsi_nvm_dev_ops = {
 	.identify		= scsi_nvm_id,
 	.identify_channel	= scsi_nvm_id_chnl,
 	.get_features		= scsi_nvm_get_features,

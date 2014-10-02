@@ -97,43 +97,12 @@ void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 int nvm_erase_block(struct nvm_stor *s, struct nvm_block *block)
 {
 	struct nvm_dev *dev = s->dev;
-	struct request_queue *q = dev->q;
-	struct request *rq;
-	struct bio *bio;
-	struct page *page;
-	unsigned int ret;
 
-	printk("erase block %u\n", block->id);
-
-	rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
-	if (!rq)
-		printk("could not send erase\n");
-
-	bio = bio_alloc(GFP_KERNEL, 1);
-	if (!bio)
-		printk("No mem\n");
-
-	bio->bi_iter.bi_sector = block->id;
-	bio->bi_rw = REQ_WRITE;
-	page = mempool_alloc(s->page_pool, GFP_KERNEL);
-
-	bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
-
-	blk_init_request_from_bio(rq, bio);
-
-	rq->cmd_flags |= (REQ_NVM);
-	rq->errors = 0;
-
-	ret = blk_execute_rq(q, dev->disk, rq, 0);
-	if (ret)
-		pr_err("Could not execute erase request\n");
-
-	blk_put_request(rq);
-	mempool_free(page, s->page_pool);
+	if (dev->ops->nvm_erase_block)
+		return dev->ops->nvm_erase_block(dev, block->id);
 
 	return 0;
 }
-
 
 void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 {

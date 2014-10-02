@@ -71,7 +71,7 @@ inline void nvm_reset_block(struct nvm_block *block)
 }
 
 
-static sector_t __nvm_alloc_phys_addr(struct nvm_block *block)
+sector_t nvm_alloc_phys_addr(struct nvm_block *block)
 {
 	struct nvm_stor *s;
 	sector_t addr = LTOP_EMPTY;
@@ -98,15 +98,9 @@ out:
 	return addr;
 }
 
-sector_t nvm_alloc_phys_addr(struct nvm_block *block)
-{
-	return __nvm_alloc_phys_addr(block);
-}
-
 /* requires ap->lock taken */
 void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 {
-	BUG_ON(!ap);
 	BUG_ON(!block);
 
 	if (ap->cur) {
@@ -132,7 +126,8 @@ void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 	struct nvm_block *block = p->block;
 	unsigned int data_cnt;
 
-	//printk("p: %p s: %llu l: %u pp:%p e:%u (%u)\n", p, p->addr, pb->l_addr, p, err, rq_data_dir(rq));
+	/* pr_debug("p: %p s: %llu l: %u pp:%p e:%u (%u)\n",
+			p, p->addr, pb->l_addr, p, err, rq_data_dir(rq)); */
 	nvm_unlock_laddr_range(s, pb->l_addr, 1);
 
 	if (rq_data_dir(rq) == WRITE) {

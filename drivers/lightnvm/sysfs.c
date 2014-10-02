@@ -25,7 +25,7 @@ static ssize_t nvm_attr_show(struct device *dev, char *page,
 	return fn(nvm, page);
 }
 
-#define VSL_ATTR_RO(_name)						\
+#define NVM_ATTR_RO(_name)						\
 static ssize_t nvm_attr_##_name##_show(struct nvm_dev *, char *);	\
 static ssize_t nvm_attr_do_show_##_name(struct device *d,		\
 				struct device_attribute *attr, char *b)	\
@@ -35,7 +35,7 @@ static ssize_t nvm_attr_do_show_##_name(struct device *d,		\
 static struct device_attribute nvm_attr_##_name =			\
 	__ATTR(_name, S_IRUGO, nvm_attr_do_show_##_name, NULL);
 
-VSL_ATTR_RO(free_blocks);
+NVM_ATTR_RO(free_blocks);
 
 static struct attribute *nvm_attrs[] = {
 	&nvm_attr_free_blocks.attr,

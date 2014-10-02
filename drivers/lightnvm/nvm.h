@@ -28,12 +28,10 @@
 #include <linux/slab.h>
 
 #ifdef NVM_DEBUG
-/*Wrap BUG_ON to allow additional checks in debug mode without
- impacting production performance*/
 #define NVM_ASSERT(c) BUG_ON( (c) == 0 )
 #else
 #define NVM_ASSERT(c)
-#endif //NVM_DEBUG
+#endif
 
 #define NVM_MSG_PREFIX "nvm"
 #define LTOP_EMPTY -1
@@ -255,14 +253,13 @@ struct nvm_target_type {
 	/* lookup functions */
 	nvm_lookup_ltop_fn lookup_ltop;
 
-	/* handling of rqs */
+	/* handling of request */
 	nvm_write_rq_fn write_rq;
 	nvm_read_rq_fn read_rq;
 	nvm_ioctl_fn ioctl;
 	nvm_endio_fn end_rq;
 
 	/* engine-specific overrides */
-	nvm_alloc_phys_addr_fn alloc_phys_addr;
 	nvm_pool_get_blk_fn pool_get_blk;
 	nvm_pool_put_blk_fn pool_put_blk;
 	nvm_map_ltop_page_fn map_page;
@@ -393,8 +390,6 @@ struct nvm_target_type *find_nvm_target_type(const char *name);
 
 /* core.c */
 /*   Helpers */
-void __invalidate_block_page(struct nvm_stor *, struct nvm_addr *);
-void invalidate_block_page(struct nvm_stor *, struct nvm_addr *);
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 sector_t nvm_alloc_phys_addr(struct nvm_block *);
 
@@ -409,16 +404,12 @@ void nvm_gc_recycle_block(struct work_struct *);
 struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *, int is_gc);
 
 /*   I/O request related */
-/* FIXME: Shorten */
 int nvm_write_rq(struct nvm_stor *, struct request *);
 int __nvm_write_rq(struct nvm_stor *, struct request *, int);
 int nvm_read_rq(struct nvm_stor *, struct request *rq);
-
-void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p, int is_gc);
+int nvm_erase_block(struct nvm_stor *, struct nvm_block *);
+void nvm_update_map(struct nvm_stor *, sector_t, struct nvm_addr *, int);
 void nvm_setup_rq(struct nvm_stor *, struct request *, struct nvm_addr *, sector_t, unsigned int flags);
-
-/*   NVM device related */
-void nvm_block_release(struct kref *);
 
 /*   Block maintanence */
 void nvm_reset_block(struct nvm_block *);
@@ -431,7 +422,7 @@ void nvm_gc_cb(unsigned long data);
 void nvm_gc_collect(struct work_struct *work);
 void nvm_gc_kick(struct nvm_stor *s);
 
-/* nvmtgt.c */
+/* targets.c */
 struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
 
 /* nvmkv.c */
@@ -526,7 +517,7 @@ static inline int request_intersects(struct nvm_inflight_request *r,
 		(laddr_start >= r->l_start && laddr_start <= r->l_end);
 }
 
-/*TODO: make compatible with multi-block requests*/
+/* TODO: make compatible with multi-block requests */
 static inline void __nvm_lock_laddr_range(struct nvm_stor *s, int spin,
 				sector_t laddr_start, unsigned nsectors)
 {
@@ -538,7 +529,8 @@ static inline void __nvm_lock_laddr_range(struct nvm_stor *s, int spin,
 
 	NVM_ASSERT(nsectors >= 1);
 	BUG_ON(laddr_end >= s->nr_pages);
-	BUG_ON(nsectors > s->nr_pages_per_blk); /*FIXME Not yet supported*/
+	/* FIXME Not yet supported */
+	BUG_ON(nsectors > s->nr_pages_per_blk); 
 
 	inflight = nvm_laddr_to_inflight(s, laddr_start);
 	tag = percpu_ida_alloc(&s->free_inflight, __GFP_WAIT);
@@ -548,7 +540,7 @@ retry:
 
 	list_for_each_entry(r, &inflight->reqs, list) {
 		if (request_intersects(r, laddr_start, laddr_end)) {
-			/*existing, overlapping request, come back later*/
+			/* existing, overlapping request, come back later */
 			spin_unlock_irqrestore(&inflight->lock, flags);
 			if (!spin)
 				schedule();

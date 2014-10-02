@@ -2,26 +2,19 @@
 #include <trace/events/block.h>
 #include "nvm.h"
 
-inline void __invalidate_block_page(struct nvm_stor *s,
-				struct nvm_addr *p)
+static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 {
-	unsigned int page_offset;
 	struct nvm_block *block = p->block;
+	unsigned int page_offset;
 
 	NVM_ASSERT(spin_is_locked(&s->rev_lock));
-	NVM_ASSERT(spin_is_locked(&block->lock));
+
+	spin_lock(&block->lock);
 
 	page_offset = p->addr % s->nr_pages_per_blk;
 	WARN_ON(test_and_set_bit(page_offset, block->invalid_pages));
 	block->nr_invalid_pages++;
-}
 
-void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
-{
-	struct nvm_block *block = p->block;
-
-	spin_lock(&block->lock);
-	__invalidate_block_page(s, p);
 	spin_unlock(&block->lock);
 }
 
@@ -51,14 +44,11 @@ void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p,
 	spin_unlock(&s->rev_lock);
 }
 
-/* requires pool->lock taken */
-inline void nvm_reset_block(struct nvm_block *block)
+/* requires pool->lock lock */
+void nvm_reset_block(struct nvm_block *block)
 {
-	struct nvm_stor *s;
+	struct nvm_stor *s = block->pool->s;
 
-	BUG_ON(!block);
-
-	s = block->pool->s;
 	spin_lock(&block->lock);
 	bitmap_zero(block->invalid_pages, s->nr_pages_per_blk);
 	block->ap = NULL;
@@ -70,28 +60,18 @@ inline void nvm_reset_block(struct nvm_block *block)
 	spin_unlock(&block->lock);
 }
 
-
 sector_t nvm_alloc_phys_addr(struct nvm_block *block)
 {
-	struct nvm_stor *s;
 	sector_t addr = LTOP_EMPTY;
-
-	BUG_ON(!block);
-
-	s = block->pool->s;
 
 	spin_lock(&block->lock);
 
 	if (block_is_full(block))
 		goto out;
 
-
 	addr = block_to_addr(block) + block->next_page;
 
 	block->next_page++;
-
-	if (s->type->alloc_phys_addr)
-		s->type->alloc_phys_addr(s, block);
 
 out:
 	spin_unlock(&block->lock);
@@ -113,10 +93,47 @@ void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 	ap->cur->ap = ap;
 }
 
-void nvm_erase_block(struct nvm_block *block)
+/* Send erase command to device */
+int nvm_erase_block(struct nvm_stor *s, struct nvm_block *block)
 {
-	/* Send erase command to device. */
+	struct nvm_dev *dev = s->dev;
+	struct request_queue *q = dev->q;
+	struct request *rq;
+	struct bio *bio;
+	struct page *page;
+	unsigned int ret;
+
+	printk("erase block %u\n", block->id);
+
+	rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
+	if (!rq)
+		printk("could not send erase\n");
+
+	bio = bio_alloc(GFP_KERNEL, 1);
+	if (!bio)
+		printk("No mem\n");
+
+	bio->bi_iter.bi_sector = block->id;
+	bio->bi_rw = REQ_WRITE;
+	page = mempool_alloc(s->page_pool, GFP_KERNEL);
+
+	bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
+
+	blk_init_request_from_bio(rq, bio);
+
+	rq->cmd_flags |= (REQ_NVM);
+	rq->errors = 0;
+
+	ret = blk_execute_rq(q, dev->disk, rq, 0);
+	if (ret)
+		pr_err("Could not execute erase request\n");
+
+	blk_put_request(rq);
+	mempool_free(page, s->page_pool);
+
+	return 0;
 }
+
 
 void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 {
@@ -163,7 +180,6 @@ void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p,
 	pb = get_per_rq_data(s->dev, rq);
 	pb->ap = ap;
 	pb->addr = p;
-
 	pb->l_addr = l_addr;
 	pb->flags = flags;
 }
@@ -211,7 +227,7 @@ int __nvm_write_rq(struct nvm_stor *s, struct request *rq, int is_gc)
 	}
 
 	/*
-	 * MB: Should be revised. We might need a different hook into device
+	 * MB: Should be revised. We need a different hook into device
 	 * driver
 	 */
 	rq->__sector = p->addr * NR_PHY_IN_LOG;

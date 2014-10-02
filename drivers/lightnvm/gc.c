@@ -24,44 +24,6 @@ void nvm_gc_cb(unsigned long data)
 			jiffies + msecs_to_jiffies(s->config.gc_time));
 }
 
-static void __erase_block(struct nvm_stor *s, struct nvm_block *block)
-{
-	struct nvm_dev *dev = s->dev;
-	struct request_queue *q = dev->q;
-	struct request *rq;
-	struct bio *bio;
-	struct page *page;
-	unsigned int ret;
-
-	printk("erase block %u\n", block->id);
-
-	rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
-	if (!rq)
-		printk("could not send erase\n");
-
-	bio = bio_alloc(GFP_KERNEL, 1);
-	if (!bio)
-		printk("No mem\n");
-
-	bio->bi_iter.bi_sector = block->id;
-	bio->bi_rw = REQ_WRITE;
-	page = mempool_alloc(s->page_pool, GFP_KERNEL);
-
-	bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
-
-	blk_init_request_from_bio(rq, bio);
-
-	rq->cmd_flags |= (REQ_NVM);
-	rq->errors = 0;
-
-	ret = blk_execute_rq(q, dev->disk, rq, 0);
-	if (ret)
-		pr_err("Could not execute erase request\n");
-
-	blk_put_request(rq);
-	mempool_free(page, s->page_pool);
-}
-
 /* the block with highest number of invalid pages, will be in the beginning
  * of the list */
 static struct nvm_block *block_max_invalid(struct nvm_block *a,
@@ -245,7 +207,7 @@ void nvm_gc_block(struct work_struct *work)
 	/* TODO: move outside lock to allow multiple pages
 	 * in parallel to be erased. */
 	nvm_move_valid_pages(s, block);
-	__erase_block(s, block);
+	nvm_erase_block(s, block);
 	s->type->pool_put_blk(block);
 }
 
@@ -258,7 +220,6 @@ void nvm_gc_recycle_block(struct work_struct *work)
 	list_add_tail(&block->prio, &pool->prio_list);
 	spin_unlock(&pool->lock);
 }
-
 
 void nvm_gc_kick(struct nvm_stor *s)
 {

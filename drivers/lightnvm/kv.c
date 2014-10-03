@@ -5,12 +5,12 @@
 #include <linux/slab.h>
 #include "nvm.h"
 
-/*inflight only uses jenkins hash - less to compare, collisions only result
- *  in unecessary serialisation.
+/* inflight uses jenkins hash - less to compare, collisions only result
+ * in unecessary serialisation.
  *
- *could restrict oneself to only grabbing table lock whenever you specifically
- *  want a new entry -- otherwise no concurrent threads will ever be interested
- *  in the same entry
+ * could restrict oneself to only grabbing table lock whenever you specifically
+ * want a new entry -- otherwise no concurrent threads will ever be interested
+ * in the same entry
  */
 
 #define BUCKET_LEN 16
@@ -36,12 +36,6 @@ struct nvmkv_io {
 };
 
 enum {
-	KVIO_READ	= 0,
-	KVIO_WRITE	= 1,
-};
-
-
-enum {
 	EXISTING_ENTRY	= 0,
 	NEW_ENTRY	= 1,
 };
@@ -51,7 +45,6 @@ static inline unsigned bucket_idx(struct nvmkv_tbl *tbl, u32 hash)
 	return hash % (tbl->tbl_len / BUCKET_LEN);
 }
 
-/*TODO FIXME - no locks can be held while executing this*/
 static void inflight_lock(struct nvmkv_inflight *ilist,
                           struct kv_inflight *ientry)
 {
@@ -170,14 +163,12 @@ static void *cpy_val(u64 addr, size_t len)
 
 	buf = kmalloc(len, GFP_KERNEL);
 	if (!buf) {
-		pr_err("<%s>%d: failed to copy userspace memory (-ENOMEM)\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to copy userspace memory (-ENOMEM)\n");
 		return ERR_PTR(-ENOMEM);
 	}
 
 	if (copy_from_user(buf, (void*)addr, len)) {
-		pr_err("<%s>%d: failed to copy userspace memory (-EFAULT)\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to copy userspace memory (-EFAULT)\n");
 		kfree(buf);
 		return ERR_PTR(-EFAULT);
 	}
@@ -195,16 +186,14 @@ static int do_io(struct nvm_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 
 	rq = blk_mq_alloc_request(q, rw, GFP_KERNEL, false);
 	if (!rq) {
-		pr_err("<%s>%d: failed to allocate request\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to allocate request\n");
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	ret = blk_rq_map_user(q, rq, NULL, ubuf, len, GFP_KERNEL);
 	if (ret) {
-		pr_err("<%s>%d: failed to map userspace memory into request\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to map userspace memory into request\n");
 		goto err_umap;
 	}
 	orig_bio = rq->bio;
@@ -215,8 +204,7 @@ static int do_io(struct nvm_stor *s, int rw, u64 blk_addr, void __user *ubuf,
 
 	ret = blk_execute_rq(q, dev->disk, rq, 0);
 	if (ret)
-		pr_err("<%s>%d: failed to execute request..\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to execute request..\n");
 
 	blk_rq_unmap_user(orig_bio);
 
@@ -284,16 +272,14 @@ static int update_entry(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd,
 
 	block = acquire_block(s);
 	if (!block) {
-		pr_err("<%s>%d: failed to acquire a block\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to acquire a block\n");
 		ret = -ENOSPC;
 		goto no_block;
 	}
 	ret = do_io(s, WRITE, block_to_addr(block),
 	            (void __user *)cmd->val_addr, cmd->val_len);
 	if (ret) {
-		pr_err("<%s>%d: failed to write entry\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to write entry\n");
 		ret = -EIO;
 		goto io_err;
 	}
@@ -311,14 +297,14 @@ no_block:
 }
 
 /**
- *	put	-	put/update value in KV store
- *	@s: nvm stor
- *	@cmd: LightNVM KV command
- *	@key: copy of key supplied from userspace.
- *	@h1: hash of key value using hash function 1
+ * put - put/update value in KV store
+ * @s: nvm stor
+ * @cmd: LightNVM KV command
+ * @key: copy of key supplied from userspace.
+ * @h1: hash of key value using hash function 1
  *
- *	Store the supplied value in an entry identified by the
- *	supplied key. Will overwrite existing entry if necessary.
+ * Store the supplied value in an entry identified by the
+ * supplied key. Will overwrite existing entry if necessary.
  */
 static int put(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h1)
 {
@@ -335,8 +321,7 @@ static int put(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h
 		entry = &tbl->entries[idx];
 		memcpy(entry->hash, &h2, sizeof(entry->hash));
 	} else {
-		printk("<%s>%d: no empty entries and bucket is full!!\n",
-			__func__, __LINE__);
+		pr_err("lightnvm: no empty entries and bucket is full\n");
 		BUG();
 	}
 
@@ -371,7 +356,7 @@ static int update(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u3
 
 	ret = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY);
 	if (ret < 0) {
-		pr_debug("<%s>%d: no entry, skipping\n", __func__, __LINE__);
+		pr_debug("lightnvm: no entry, skipping\n");
 		return 0;
 	}
 
@@ -406,8 +391,7 @@ static int del(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h
 		s->type->pool_put_blk(entry->blk);
 		memset(entry, 0, sizeof(struct kv_entry));
 	} else {
-		pr_debug("<%s>%d: could not find entry!\n",
-		         __func__, __LINE__);
+		pr_debug("lightnvm: could not find entry!\n");
 	}
 
 	return 0;
@@ -415,11 +399,10 @@ static int del(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key, u32 h
 
 int nvmkv_unpack(struct nvm_dev *dev, struct lightnvm_cmd_kv __user *ucmd)
 {
-	struct lightnvm_cmd_kv cmd;
 	struct nvm_stor *s = dev->stor;
 	struct nvmkv_inflight *inflight = &s->kv.inflight;
-
 	struct kv_inflight *ientry;
+	struct lightnvm_cmd_kv cmd;
 	u32 h1;
 	void *key;
 	int ret = 0;
@@ -440,6 +423,7 @@ int nvmkv_unpack(struct nvm_dev *dev, struct lightnvm_cmd_kv __user *ucmd)
 		goto err_ientry;
 	}
 	ientry->h1 = h1;
+
 	inflight_lock(inflight, ientry);
 
 	switch(cmd.opcode) {
@@ -472,36 +456,29 @@ out:
 	return ret;
 }
 
-static inline unsigned long num_entries(struct nvm_stor *s, unsigned long size)
-{
-	return size / s->gran_blk;
-}
-
 int nvmkv_init(struct nvm_stor *s, unsigned long size)
 {
 	struct nvmkv_tbl *tbl = &s->kv.tbl;
 	struct nvmkv_inflight *inflight = &s->kv.inflight;
 	int ret = 0;
 
-	unsigned long buckets = num_entries(s, size)
-	                        / (BUCKET_LEN / BUCKET_OCCUPANCY_AVG);
+	unsigned long buckets = s->total_blocks
+					/ (BUCKET_LEN / BUCKET_OCCUPANCY_AVG);
 
 	tbl->bucket_len = BUCKET_LEN;
 	tbl->tbl_len = buckets * tbl->bucket_len;
 
-	tbl->entries = vzalloc(
-	                       tbl->tbl_len * sizeof(struct kv_entry));
+	tbl->entries = vzalloc(tbl->tbl_len * sizeof(struct kv_entry));
 	if (!tbl->entries) {
-		pr_err("<%s>%d: failed to allocate KV-table\n",
-		       __func__, __LINE__);
+		pr_err("lightnvm: failed to allocate KV-table\n");
 		ret = -ENOMEM;
 		goto err_tbl_entries;
 	}
 
 	inflight->entry_pool = kmem_cache_create("nvmkv_inflight_pool",
-	                       sizeof(struct kv_inflight), 0,
-	                       SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD,
-	                       NULL);
+				sizeof(struct kv_inflight), 0,
+				SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD,
+				NULL);
 	if (!inflight->entry_pool) {
 		ret = -ENOMEM;
 		goto err_inflight_pool;

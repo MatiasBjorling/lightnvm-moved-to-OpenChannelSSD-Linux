@@ -335,8 +335,10 @@ struct nvm_stor {
 	unsigned gran_read;
 	unsigned gran_write;
 
-	/* Calculated values */
+	/* Calculated/Cached values. These do not reflect the actual usuable
+	 * blocks at run-time. */
 	unsigned long nr_pages;
+	unsigned long total_blocks;
 
 	unsigned int next_collect_pool;
 

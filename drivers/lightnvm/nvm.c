@@ -9,8 +9,6 @@
  *   and bv_len spans entire page)
  *
  * Optimization possibilities
- * - Move ap_next_write into a conconcurrency friendly data structure. Could be
- *   handled by more intelligent map_ltop function.
  * - Implement per-cpu nvm_block data structure ownership. Removes need
  *   for taking lock on block next_write_id function. I.e. page allocation
  *   becomes nearly lockless, with occasionally movement of blocks on
@@ -34,9 +32,6 @@
  */
 #define APS_PER_POOL 1
 
-/* If enabled, we delay requests on each ap to run serialized. */
-#define SERIALIZE_POOL_ACCESS 0
-
 /* Run GC every X seconds */
 #define GC_TIME 10
 
@@ -50,47 +45,38 @@ static struct kmem_cache *_addr_cache;
 static LIST_HEAD(_targets);
 static DECLARE_RWSEM(_lock);
 
-inline struct nvm_target_type *find_nvm_target_type(const char *name)
+struct nvm_target_type *find_nvm_target_type(const char *name)
 {
-	struct nvm_target_type *t;
+	struct nvm_target_type *tt;
 
-	list_for_each_entry(t, &_targets, list)
-		if (!strcmp(name, t->name))
-			return t;
+	list_for_each_entry(tt, &_targets, list)
+		if (!strcmp(name, tt->name))
+			return tt;
 
 	return NULL;
 }
 
-int nvm_register_target(struct nvm_target_type *t)
+int nvm_register_target(struct nvm_target_type *tt)
 {
 	int ret = 0;
 
 	down_write(&_lock);
-	if (find_nvm_target_type(t->name))
+	if (find_nvm_target_type(tt->name))
 		ret = -EEXIST;
 	else
-		list_add(&t->list, &_targets);
+		list_add(&tt->list, &_targets);
 	up_write(&_lock);
 	return ret;
 }
 
-void nvm_unregister_target(struct nvm_target_type *t)
+void nvm_unregister_target(struct nvm_target_type *tt)
 {
-	if (!t)
+	if (!tt)
 		return;
 
 	down_write(&_lock);
-	list_del(&t->list);
+	list_del(&tt->list);
 	up_write(&_lock);
-}
-
-static inline unsigned long time_taken(struct timespec end,
-				       struct timespec start)
-{
-	struct timespec ts;
-	ts = timespec_sub(end, start);
-	BUG_ON(ts.tv_sec); /*processing time should never exceed 999us*/
-	return ts.tv_nsec;
 }
 
 int nvm_queue_rq(struct nvm_dev *dev, struct request *rq)
@@ -139,6 +125,7 @@ void nvm_complete_request(struct nvm_dev *nvm_dev, struct request *rq)
 
 	if (!(rq->cmd_flags & REQ_NVM))
 		pr_info("Request submitted outside nvm_queue_rq detected!\n");
+
 	blk_mq_complete_request(rq);
 }
 EXPORT_SYMBOL_GPL(nvm_complete_request);
@@ -149,7 +136,27 @@ unsigned int nvm_cmd_size(void)
 }
 EXPORT_SYMBOL_GPL(nvm_cmd_size);
 
-static int nvm_pool_init(struct nvm_stor *s, struct nvm_dev *dev)
+static void nvm_pools_free(struct nvm_stor *s)
+{
+	struct nvm_pool *pool;
+	int i;
+
+	if (s->krqd_wq)
+		destroy_workqueue(s->krqd_wq);
+
+	if (s->kgc_wq)
+		destroy_workqueue(s->kgc_wq);
+
+	nvm_for_each_pool(s, pool, i) {
+		if (!pool->blocks)
+			break;
+		kfree(pool->blocks);
+	}
+	kfree(s->pools);
+	kfree(s->aps);
+}
+
+static int nvm_pools_init(struct nvm_stor *s)
 {
 	struct nvm_pool *pool;
 	struct nvm_block *block;
@@ -229,26 +236,19 @@ static int nvm_pool_init(struct nvm_stor *s, struct nvm_dev *dev)
 	s->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
 						s->nr_pools);
 	if (!s->krqd_wq) {
-		pr_err("Couldn't start knvm-work");
+		pr_err("Couldn't alloc knvm-work");
 		goto err_blocks;
 	}
 
 	s->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
 	if (!s->kgc_wq) {
-		pr_err("Couldn't start knvm-gc");
-		goto err_wq;
+		pr_err("Couldn't alloc knvm-gc");
+		goto err_blocks;
 	}
 
 	return 0;
-err_wq:
-	destroy_workqueue(s->krqd_wq);
 err_blocks:
-	nvm_for_each_pool(s, pool, i) {
-		if (!pool->blocks)
-			break;
-		kfree(pool->blocks);
-	}
-	kfree(s->pools);
+	nvm_pools_free(s);
 err_pool:
 	pr_err("lightnvm: cannot allocate lightnvm data structures");
 	return -ENOMEM;
@@ -300,7 +300,7 @@ static int nvm_stor_init(struct nvm_dev *dev, struct nvm_stor *s)
 	dev->stor = s;
 
 	/* Initialize pools. */
-	nvm_pool_init(s, dev);
+	nvm_pools_init(s);
 
 	if (s->type->init && s->type->init(s))
 		goto err_addr_pool;
@@ -311,6 +311,7 @@ static int nvm_stor_init(struct nvm_dev *dev, struct nvm_stor *s)
 
 	return 0;
 err_addr_pool:
+	nvm_pools_free(s);
 	mempool_destroy(s->addr_pool);
 err_page_pool:
 	mempool_destroy(s->page_pool);
@@ -398,8 +399,9 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 	s->gran_read = nvm_id_chnl.gran_read;
 	s->gran_write = nvm_id_chnl.gran_write;
 
-	s->nr_blks_per_pool = size / s->gran_blk / nvm_id.nchannels;
-	/*FIXME: gran_{read,write} may differ */
+	s->total_blocks = size / s->gran_blk;
+	s->nr_blks_per_pool = s->total_blocks / nvm_id.nchannels;
+	/* FIXME: gran_{read,write} may differ */
 	s->nr_pages_per_blk = s->gran_blk / s->gran_read * (s->gran_read / EXPOSED_PAGE_SIZE);
 
 	s->nr_aps_per_pool = APS_PER_POOL;
@@ -417,30 +419,29 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 		goto err_target;
 	}
 
-	if (s->nr_pages_per_blk >
-				MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
+	if (s->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
 		pr_err("lightnvm: Num. pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
 		return -EINVAL;
 	}
 
 	if (nvm_stor_init(dev, s) < 0) {
-		pr_err("nvm: cannot initialize nvm structure");
+		pr_err("lightnvm: cannot initialize nvm structure");
 		goto err_map;
 	}
 
-	pr_info("nvm: pls: %u blks: %u pgs: %u aps: %u ppa: %u\n",
+	pr_info("lightnvm: pls: %u blks: %u pgs: %u aps: %u ppa: %u\n",
 		s->nr_pools,
 		s->nr_blks_per_pool,
 		s->nr_pages_per_blk,
 		s->nr_aps,
 		s->nr_aps_per_pool);
-	pr_info("nvm: timings: %u/%u/%u\n",
+	pr_info("lightnvm: timings: %u/%u/%u\n",
 			s->config.t_read,
 			s->config.t_write,
 			s->config.t_erase);
-	pr_info("nvm: target sector size=%d\n", s->sector_size);
-	pr_info("nvm: disk flash size=%d map size=%d\n", s->gran_read, EXPOSED_PAGE_SIZE);
-	pr_info("nvm: allocated %lu physical pages (%lu KB)\n",
+	pr_info("lightnvm: target sector size=%d\n", s->sector_size);
+	pr_info("lightnvm: disk flash size=%d map size=%d\n", s->gran_read, EXPOSED_PAGE_SIZE);
+	pr_info("lightnvm: allocated %lu physical pages (%lu KB)\n",
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
 
 	dev->stor = s;
@@ -452,7 +453,7 @@ err_target:
 	kfree(s);
 err:
 	kmem_cache_destroy(_addr_cache);
-	pr_err("Failed to initialize nvm\n");
+	pr_err("lightnvm: failed to initialize nvm\n");
 	return -ENOMEM;
 }
 EXPORT_SYMBOL_GPL(nvm_init);
@@ -460,8 +461,6 @@ EXPORT_SYMBOL_GPL(nvm_init);
 void nvm_exit(struct nvm_dev *dev)
 {
 	struct nvm_stor *s = dev->stor;
-	struct nvm_pool *pool;
-	int i;
 
 	if (!s)
 		return;
@@ -472,17 +471,10 @@ void nvm_exit(struct nvm_dev *dev)
 	del_timer(&s->gc_timer);
 
 	/* TODO: remember outstanding block refs, waiting to be erased... */
-	nvm_for_each_pool(s, pool, i)
-		kfree(pool->blocks);
-
-	kfree(s->pools);
-	kfree(s->aps);
+	nvm_pools_free(s);
 
 	vfree(s->trans_map);
 	vfree(s->rev_trans_map);
-
-	destroy_workqueue(s->krqd_wq);
-	destroy_workqueue(s->kgc_wq);
 
 	mempool_destroy(s->page_pool);
 	mempool_destroy(s->addr_pool);
@@ -493,7 +485,7 @@ void nvm_exit(struct nvm_dev *dev)
 
 	kmem_cache_destroy(_addr_cache);
 
-	pr_info("nvm: successfully unloaded");
+	pr_info("lightnvm: successfully unloaded");
 }
 
 int nvm_ioctl(struct nvm_dev *dev, fmode_t mode, unsigned int cmd,

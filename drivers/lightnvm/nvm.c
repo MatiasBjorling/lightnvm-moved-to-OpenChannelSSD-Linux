@@ -355,7 +355,8 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 {
 	struct nvm_stor *s;
 	struct nvm_id nvm_id;
-	struct nvm_id_chnl nvm_id_chnl;
+	struct nvm_id_chnl *nvm_id_chnl;
+	int ret = 0;
 
 	unsigned long size;
 
@@ -365,39 +366,53 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 	if (!nvm_queue_init(dev))
 		return -EINVAL;
 
+	nvm_id_chnl = kmalloc(sizeof(struct nvm_id_chnl), GFP_KERNEL);
+	if (!nvm_id_chnl) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
 	_addr_cache = kmem_cache_create("nvm_addr_cache",
 				sizeof(struct nvm_addr), 0, 0, NULL);
-	if (!_addr_cache)
-		return -ENOMEM;
+	if (!_addr_cache) {
+		ret = -ENOMEM;
+		goto err_memcache;
+	}
 
 	nvm_register_target(&nvm_target_rrpc);
 
 	s = kzalloc(sizeof(struct nvm_stor), GFP_KERNEL);
 	if (!s) {
-		goto err;
+		ret = -ENOMEM;
+		goto err_stor;
 	}
 
 	/* hardcode initialization values until user-space util is avail. */
 	s->type = &nvm_target_rrpc;
 	if (!s->type) {
 		pr_err("nvm: %s doesn't exist.", NVM_TARGET_TYPE);
+		ret = -EINVAL;
 		goto err_target;
 	}
 
-	if (dev->ops->identify(dev, &nvm_id))
+	if (dev->ops->identify(dev, &nvm_id)) {
+		ret = -EINVAL;
 		goto err_target;
+	}
 
 	s->nr_pools = nvm_id.nchannels;
 
 	/* TODO: We're limited to the same setup for each channel */
-	if (dev->ops->identify_channel(dev, 0, &nvm_id_chnl))
+	if (dev->ops->identify_channel(dev, 0, nvm_id_chnl)) {
+		ret = -EINVAL;
 		goto err_target;
+	}
 
-	size = nvm_id_chnl.laddr_end - nvm_id_chnl.laddr_begin + 1;
+	size = nvm_id_chnl->laddr_end - nvm_id_chnl->laddr_begin + 1;
 
-	s->gran_blk = nvm_id_chnl.gran_erase;
-	s->gran_read = nvm_id_chnl.gran_read;
-	s->gran_write = nvm_id_chnl.gran_write;
+	s->gran_blk = nvm_id_chnl->gran_erase;
+	s->gran_read = nvm_id_chnl->gran_read;
+	s->gran_write = nvm_id_chnl->gran_write;
 
 	s->total_blocks = size / s->gran_blk;
 	s->nr_blks_per_pool = s->total_blocks / nvm_id.nchannels;
@@ -407,24 +422,25 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 	s->nr_aps_per_pool = APS_PER_POOL;
 	/* s->config.flags = NVM_OPT_* */
 	s->config.gc_time = GC_TIME;
-	s->config.t_read = nvm_id_chnl.t_r / 1000;
-	s->config.t_write = nvm_id_chnl.t_w / 1000;
-	s->config.t_erase = nvm_id_chnl.t_e / 1000;
+	s->config.t_read = nvm_id_chnl->t_r / 1000;
+	s->config.t_write = nvm_id_chnl->t_w / 1000;
+	s->config.t_erase = nvm_id_chnl->t_e / 1000;
 
 	/* Constants */
 	s->nr_pages = s->nr_pools * s->nr_blks_per_pool * s->nr_pages_per_blk;
 
-	if (nvmkv_init(s, size)) {
+	if ((ret = nvmkv_init(s, size))) {
 		printk("nvmkv_init failed\n");
 		goto err_target;
 	}
 
 	if (s->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
 		pr_err("lightnvm: Num. pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto err_target;
 	}
 
-	if (nvm_stor_init(dev, s) < 0) {
+	if ((ret = nvm_stor_init(dev, s)) < 0) {
 		pr_err("lightnvm: cannot initialize nvm structure");
 		goto err_map;
 	}
@@ -445,16 +461,20 @@ int nvm_init(struct gendisk *disk, struct nvm_dev *dev)
 		s->nr_pages, s->nr_pages * s->sector_size / 1024);
 
 	dev->stor = s;
+	kfree(nvm_id_chnl);
 	return 0;
 
 err_map:
 	nvmkv_exit(s);
 err_target:
 	kfree(s);
-err:
+err_stor:
 	kmem_cache_destroy(_addr_cache);
+err_memcache:
+	kfree(nvm_id_chnl);
+err:
 	pr_err("lightnvm: failed to initialize nvm\n");
-	return -ENOMEM;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(nvm_init);
 

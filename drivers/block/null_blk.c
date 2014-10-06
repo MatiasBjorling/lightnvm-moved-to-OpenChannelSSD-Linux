@@ -115,7 +115,7 @@ MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware contex
 
 static int lightnvm_num_channels = 1;
 module_param(nvm_num_channels, int, S_IRUGO);
-MODULE_PARM_DESC(nvm_num_channels, "Number of channels to be exposed through NVM. Default: 1");
+MODULE_PARM_DESC(nvm_num_channels, "Number of channels to be exposed to LightNVM. Default: 1");
 
 static void put_tag(struct nullb_queue *nq, unsigned int tag)
 {

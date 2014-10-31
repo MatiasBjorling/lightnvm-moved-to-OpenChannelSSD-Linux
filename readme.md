@@ -1,4 +1,10 @@
+# Moved to 
+
+https://github.com/OpenChannelSSD
+
 # LightNVM: An Open-Channel FTL for LightNVM compatible Solid State Drives
+
+This branch is kept for historical reasons.
 
 **Branches**
  - master: Current *stable* version of the open-channel FTL lightnvm code.
